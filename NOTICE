@@ -1,0 +1,8 @@
+Amythest
+Copyright (c) 2026 Justin Thomas
+
+The visual design and stylesheet structure are derived from Quartz v4
+(https://github.com/jackyzha0/quartz), Copyright (c) Jacky Zhao, released
+under the MIT License. Client-side behaviors (graph view, search modal,
+popovers, SPA navigation) are independent implementations that use Quartz's
+behavior as their specification.

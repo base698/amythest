@@ -1,0 +1,199 @@
+package server
+
+import (
+	"encoding/base64"
+	"html/template"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
+
+	"github.com/base698/amythest/internal/tasks"
+)
+
+var tasksBlockRe = regexp.MustCompile(`<div class="tasks-block" data-tasks-query="([A-Za-z0-9+/=]*)"></div>`)
+
+// expandDynamicBlocks replaces cached placeholders (tasks queries, base
+// views) with freshly computed HTML at serve time.
+func (s *Server) expandDynamicBlocks(html template.HTML) template.HTML {
+	out := string(html)
+	if strings.Contains(out, `class="tasks-block"`) {
+		all, err := s.db.AllTasks()
+		if err != nil {
+			return html
+		}
+		out = tasksBlockRe.ReplaceAllStringFunc(out, func(m string) string {
+			sub := tasksBlockRe.FindStringSubmatch(m)
+			raw, err := base64.StdEncoding.DecodeString(sub[1])
+			if err != nil {
+				return m
+			}
+			q := tasks.ParseQuery(string(raw))
+			if q.Err() != nil {
+				return `<div class="callout" data-callout="warning"><div class="callout-title">Tasks query error</div><div class="callout-content"><p>` +
+					template.HTMLEscapeString(q.Err().Error()) + `</p></div></div>`
+			}
+			return tasks.RenderHTML(q.Run(all), s.base())
+		})
+	}
+	out = s.expandBaseBlocks(out)
+	return template.HTML(out)
+}
+
+// handleTasksPage renders the /tasks board: the sectioned dashboard by
+// default, or a flat filtered/sorted list when board controls are used.
+// Everything is plain links (GET params), so it works in any browser and
+// the underlying tasks stay ordinary markdown any other app can read.
+func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
+	all, err := s.db.AllTasks()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	statusFilter := r.URL.Query().Get("status") // "", open, done, all
+	sortKey := r.URL.Query().Get("sort")        // "", due, priority, path, description, done
+	groupKey := r.URL.Query().Get("group")      // "", due, path, priority, status
+
+	var b strings.Builder
+	b.WriteString(s.tasksToolbar(statusFilter, sortKey, groupKey))
+
+	if statusFilter == "" && sortKey == "" && groupKey == "" {
+		section := func(title, query string) {
+			q := tasks.ParseQuery(query)
+			groups := q.Run(all)
+			n := 0
+			for _, g := range groups {
+				n += len(g.Tasks)
+			}
+			if n == 0 {
+				return
+			}
+			b.WriteString(`<h2>` + template.HTMLEscapeString(title) + `</h2>`)
+			b.WriteString(tasks.RenderHTML(groups, s.base()))
+		}
+		section("Overdue", "not done\ndue before today\nsort by due, priority")
+		section("Today", "not done\ndue on today\nsort by priority")
+		section("Upcoming", "not done\ndue after today\nsort by due, priority\nlimit 30")
+		section("No due date", "not done\nno due date\nsort by path\nlimit 100")
+		section("Recently completed", "done\nsort by done\nlimit 15")
+	} else {
+		var lines []string
+		switch statusFilter {
+		case "done":
+			lines = append(lines, "done")
+		case "all", "":
+		default:
+			lines = append(lines, "not done")
+		}
+		if statusFilter == "open" {
+			lines = append(lines, "not done")
+		}
+		switch sortKey {
+		case "due", "priority", "path", "description", "done", "scheduled":
+			lines = append(lines, "sort by "+sortKey)
+		}
+		switch groupKey {
+		case "due", "path", "priority", "status", "folder":
+			lines = append(lines, "group by "+groupKey)
+		}
+		q := tasks.ParseQuery(strings.Join(lines, "\n"))
+		if q.Err() != nil {
+			http.Error(w, q.Err().Error(), http.StatusBadRequest)
+			return
+		}
+		groups := q.Run(all)
+		total := 0
+		for _, g := range groups {
+			total += len(g.Tasks)
+		}
+		b.WriteString(`<p class="muted">` + itoa(total) + ` tasks</p>`)
+		b.WriteString(tasks.RenderHTML(groups, s.base()))
+	}
+
+	s.renderPage(w, pageData{
+		SiteName:    s.cfg.SiteName,
+		Base:        s.base(),
+		Title:       "Tasks",
+		HTML:        template.HTML(b.String()),
+		Breadcrumbs: []crumb{{Name: "Home", URL: s.base()}},
+		Tree:        s.tree.Load(),
+		Slug:        "tasks",
+	})
+}
+
+// tasksToolbar renders the status/sort/group controls as plain links.
+func (s *Server) tasksToolbar(status, sortKey, group string) string {
+	var b strings.Builder
+	link := func(label, st, so, gr, current string, active bool) {
+		cls := "chip"
+		if active {
+			cls = "chip active"
+		}
+		params := []string{}
+		if st != "" {
+			params = append(params, "status="+st)
+		}
+		if so != "" {
+			params = append(params, "sort="+so)
+		}
+		if gr != "" {
+			params = append(params, "group="+gr)
+		}
+		href := s.base() + "tasks"
+		if len(params) > 0 {
+			href += "?" + strings.Join(params, "&")
+		}
+		b.WriteString(`<a class="` + cls + `" href="` + template.HTMLEscapeString(href) + `">` +
+			template.HTMLEscapeString(label) + `</a>`)
+		_ = current
+	}
+	b.WriteString(`<div class="tasks-toolbar"><span class="eyebrow">Show</span>`)
+	link("Dashboard", "", "", "", status, status == "" && sortKey == "" && group == "")
+	link("Open", "open", sortKey, group, status, status == "open")
+	link("Done", "done", sortKey, group, status, status == "done")
+	link("All", "all", sortKey, group, status, status == "all")
+	b.WriteString(`<span class="eyebrow">Sort</span>`)
+	for _, k := range []string{"due", "priority", "path", "description"} {
+		st := status
+		if st == "" {
+			st = "open"
+		}
+		link(k, st, k, group, sortKey, sortKey == k)
+	}
+	b.WriteString(`<span class="eyebrow">Group</span>`)
+	for _, k := range []string{"folder", "priority", "status"} {
+		st := status
+		if st == "" {
+			st = "open"
+		}
+		link(k, st, sortKey, k, group, group == k)
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// handleTasksAPI executes a tasks query (newline- or semicolon-separated
+// instructions) and returns grouped JSON.
+func (s *Server) handleTasksAPI(w http.ResponseWriter, r *http.Request) {
+	// Go's query parser drops parameters containing raw semicolons, which
+	// are natural in "a;b;c" instruction lists — parse around that.
+	rawQuery := strings.ReplaceAll(r.URL.RawQuery, ";", "%3B")
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	queryText := strings.ReplaceAll(values.Get("query"), ";", "\n")
+	q := tasks.ParseQuery(queryText)
+	if q.Err() != nil {
+		http.Error(w, q.Err().Error(), http.StatusBadRequest)
+		return
+	}
+	all, err := s.db.AllTasks()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.writeJSON(w, q.Run(all))
+}

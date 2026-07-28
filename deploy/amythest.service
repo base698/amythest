@@ -1,0 +1,25 @@
+# Amythest systemd user unit. Install:
+#   mkdir -p ~/.config/systemd/user && cp amythest.service ~/.config/systemd/user/
+#   cp amythest.env.example ~/.config/amythest/env   # then edit secrets
+#   systemctl --user daemon-reload && systemctl --user enable --now amythest
+[Unit]
+Description=Amythest notes + kanban + tasks server
+After=network.target
+
+[Service]
+ExecStart=%h/bin/amythest -vault %h/notes-work -data %h/.local/state/amythest -listen 127.0.0.1:8639
+EnvironmentFile=%h/.config/amythest/env
+Environment=GOMEMLIMIT=150MiB
+Restart=on-failure
+RestartSec=3
+
+# Sandbox: the vault is the only writable application path (kanban writes),
+# plus the derived-data dir.
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/notes-work %h/.local/state/amythest
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
