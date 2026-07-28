@@ -18,6 +18,20 @@ Amythest line takes over at roughly 50 MB](docs/memory-before-after.png)
 *Same vault, same Raspberry Pi, same day: Quartz (teal) vs Amythest
 (green) resident memory across the cutover.*
 
+![The notes UI: explorer sidebar with section nav, a rendered wiki index
+note with callout, and the spring graph, table of contents, and backlinks
+in the right rail — dark theme](docs/notes-ui.png)
+
+*Notes: explorer + section nav, rendered note, spring graph, table of
+contents, and backlinks.*
+
+![The kanban board: five status columns with cards carrying labels,
+comments, a blocked toggle, and a prominent New card button — dark
+theme](docs/kanban-ui.png)
+
+*Kanban: markdown-backed boards with labels, comments, blocked flags, and
+per-card status moves.*
+
 ## What's inside
 
 - **Live server, not a build step.** Pages render from an mmap'd SQLite
@@ -48,7 +62,7 @@ Amythest line takes over at roughly 50 MB](docs/memory-before-after.png)
   ```` ```base ```` blocks. Unsupported expressions degrade to per-cell
   errors, never broken pages.
 - **Data catalog**: import CSVs into a separate SQLite database
-  (`amythest import csv flights.csv`), browse and query them read-only at
+  (`amythest import csv data.csv`), browse and query them read-only at
   `/db` or `POST /api/db/query`.
 - **Share to notes** (`/share`): record a voice memo in the browser or drop
   any file; it lands in `Assets/Share/` with a wrapping note in `_Inbox/`.
