@@ -43,6 +43,54 @@ func TestCreateBoardCreatesNoteBackedBoardAndRejectsDuplicateOrInvalidNames(t *t
 	}
 }
 
+func TestCardDueDatePersistsInStructuredAndReadableBoardAndCanBeCleared(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root, fixedClock)
+	if err := store.EnsureBoard("personal"); err != nil {
+		t.Fatal(err)
+	}
+
+	card, err := store.CreateCard("personal", CardInput{
+		Title:   "Draft LinkedIn post",
+		Status:  Backlog,
+		DueDate: "2026-08-04",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if card.DueDate != "2026-08-04" {
+		t.Fatalf("created due date = %q", card.DueDate)
+	}
+	loaded, err := store.Load("personal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Cards[0].DueDate; got != "2026-08-04" {
+		t.Fatalf("loaded due date = %q", got)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "personal", "board.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "- **Due:** 2026-08-04") {
+		t.Fatalf("readable board missing due date:\n%s", raw)
+	}
+
+	cleared := ""
+	updated, err := store.UpdateCard("personal", card.ID, CardPatch{DueDate: &cleared})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.DueDate != "" {
+		t.Fatalf("cleared due date = %q", updated.DueDate)
+	}
+	for _, invalid := range []string{"2026-8-4", "2026-02-30", "next Tuesday"} {
+		if _, err := store.CreateCard("personal", CardInput{Title: "Invalid due date", Status: Backlog, DueDate: invalid}); err == nil {
+			t.Fatalf("invalid due date %q was accepted", invalid)
+		}
+	}
+}
+
 func TestDispatchSettingDefaultsFalseAndSurvivesCardAndArchiveWrites(t *testing.T) {
 	root := t.TempDir()
 	store := NewStore(root, fixedClock)

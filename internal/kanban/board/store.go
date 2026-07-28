@@ -18,12 +18,12 @@ import (
 )
 
 const (
-	dataStart                   = "<!-- AMYTHEST_KANBAN_DATA_START -->\n```json\n"
-	dataEnd                     = "\n```\n<!-- AMYTHEST_KANBAN_DATA_END -->"
+	dataStart = "<!-- AMYTHEST_KANBAN_DATA_START -->\n```json\n"
+	dataEnd   = "\n```\n<!-- AMYTHEST_KANBAN_DATA_END -->"
 	// Read-only compatibility with boards written by the predecessor
 	// server; rewritten to the current markers on the next mutation.
-	legacyDataStart = "<!-- NETEXPLORE_KANBAN_DATA_START -->\n```json\n"
-	legacyDataEnd   = "\n```\n<!-- NETEXPLORE_KANBAN_DATA_END -->"
+	legacyDataStart             = "<!-- NETEXPLORE_KANBAN_DATA_START -->\n```json\n"
+	legacyDataEnd               = "\n```\n<!-- NETEXPLORE_KANBAN_DATA_END -->"
 	MaxAttachmentsPerCard       = 10
 	MaxAttachmentSize     int64 = 10 << 20
 )
@@ -151,7 +151,8 @@ func (s *Store) CreateCard(name string, input CardInput) (Card, error) {
 		now := s.now().UTC()
 		created = Card{
 			ID: newID(now), Title: strings.TrimSpace(input.Title), Description: strings.TrimSpace(input.Description),
-			Status: input.Status, Assignee: strings.TrimSpace(input.Assignee), Agent: strings.TrimSpace(input.Agent), Blocked: input.Blocked, Labels: normalizeLabels(input.Labels),
+			DueDate: strings.TrimSpace(input.DueDate),
+			Status:  input.Status, Assignee: strings.TrimSpace(input.Assignee), Agent: strings.TrimSpace(input.Agent), Blocked: input.Blocked, Labels: normalizeLabels(input.Labels),
 			Comments: []Comment{}, Attachments: []Attachment{}, CreatedAt: now, UpdatedAt: now,
 		}
 		if created.Status == "" {
@@ -180,6 +181,9 @@ func (s *Store) UpdateCard(name, id string, patch CardPatch) (Card, error) {
 		}
 		if patch.Description != nil {
 			updated.Description = strings.TrimSpace(*patch.Description)
+		}
+		if patch.DueDate != nil {
+			updated.DueDate = strings.TrimSpace(*patch.DueDate)
 		}
 		if patch.Status != nil {
 			updated.Status = *patch.Status
@@ -985,6 +989,9 @@ func renderBoard(board Board, doneOnly bool, updated time.Time) []byte {
 			if card.Blocked {
 				b.WriteString("- **Blocked:** yes\n")
 			}
+			if card.DueDate != "" {
+				fmt.Fprintf(&b, "- **Due:** %s\n", card.DueDate)
+			}
 			if len(card.Labels) > 0 {
 				b.WriteString("- **Labels:**")
 				for _, label := range card.Labels {
@@ -1056,7 +1063,7 @@ func validateInput(input CardInput) error {
 	if input.Status == "" {
 		input.Status = Triage
 	}
-	return validateCard(Card{Title: strings.TrimSpace(input.Title), Description: input.Description, Status: input.Status, Assignee: input.Assignee, Agent: input.Agent, Blocked: input.Blocked, Labels: input.Labels})
+	return validateCard(Card{Title: strings.TrimSpace(input.Title), Description: input.Description, DueDate: strings.TrimSpace(input.DueDate), Status: input.Status, Assignee: input.Assignee, Agent: input.Agent, Blocked: input.Blocked, Labels: input.Labels})
 }
 func validateCard(card Card) error {
 	if card.Title == "" || len(card.Title) > 200 || strings.ContainsAny(card.Title, "\r\n") {
@@ -1064,6 +1071,12 @@ func validateCard(card Card) error {
 	}
 	if len(card.Description) > 10000 {
 		return errors.New("description exceeds 10000 characters")
+	}
+	if card.DueDate != "" {
+		parsed, err := time.Parse("2006-01-02", card.DueDate)
+		if err != nil || parsed.Format("2006-01-02") != card.DueDate {
+			return errors.New("due date must be a valid YYYY-MM-DD date")
+		}
 	}
 	if !ValidStatus(card.Status) {
 		return errors.New("invalid card status")

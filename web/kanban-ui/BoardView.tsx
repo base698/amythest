@@ -1,4 +1,5 @@
 import type { DragEvent } from 'react'
+import { formatDueDate } from './dates'
 
 export type Status = 'triage' | 'backlog' | 'ready' | 'in_progress' | 'verify' | 'done'
 
@@ -18,10 +19,11 @@ export interface Attachment {
 }
 
 export interface Card {
-  id: string
-  title: string
-  description: string
-  status: Status
+	id: string
+	title: string
+	description: string
+	dueDate?: string
+	status: Status
   assignee: string
   agent?: string
   blocked?: boolean
@@ -104,6 +106,7 @@ export function BoardView({ cards, onMove, onOpen, onBlockedChange }: BoardViewP
                   <button className="card-open" aria-label={`Open ${card.title}`} onClick={() => onOpen(card)} type="button">
                     <span className="card-title">{card.blocked && <span className="blocked-flag">Blocked</span>}{card.title}</span>
                     {card.description && <span className="card-description">{card.description}</span>}
+                    {card.dueDate && <span className="card-due">Due {formatDueDate(card.dueDate)}</span>}
                     {card.labels.length > 0 && (
                       <span className="labels">
                         {card.labels.map((label) => <span className="label" key={label}>{label}</span>)}
