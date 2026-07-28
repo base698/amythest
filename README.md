@@ -11,6 +11,13 @@ on a Raspberry Pi. Amythest serves the same 1,700-note vault in **~50 MB**,
 cold-indexes it in about a second, and never serves a stale build because
 there is no build.
 
+![Resident memory before and after replacing Quartz with Amythest: the
+Quartz process idles around 600 MB with spikes past 1.1 GB, then the
+Amythest line takes over at roughly 50 MB](docs/memory-before-after.png)
+
+*Same vault, same Raspberry Pi, same day: Quartz (teal) vs Amythest
+(green) resident memory across the cutover.*
+
 ## What's inside
 
 - **Live server, not a build step.** Pages render from an mmap'd SQLite
