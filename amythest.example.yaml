@@ -1,0 +1,29 @@
+# Amythest configuration. Copy to amythest.yaml and adjust.
+# Secrets are never read from this file — set them via environment:
+#   KANBAN_USERNAME, KANBAN_PASSWORD, KANBAN_SESSION_SECRET  (kanban auth)
+#   AMYTHEST_MCP_TOKEN                                       (MCP bearer token)
+
+# Root of your Obsidian-style vault (may be a symlink).
+vault: ~/notes
+
+# Listen address. Keep loopback and put Tailscale Serve / a reverse proxy
+# in front for TLS.
+listen: 127.0.0.1:8639
+
+# Public path prefix the site is served under ("/" or e.g. "/notes").
+base_url: /
+
+# Derived data (SQLite indexes, render cache). Safe to delete.
+data_dir: ./data
+
+site_name: Amythest
+
+# Full vault rescan interval; fsnotify handles changes sooner when it can.
+rescan_interval: 5m
+
+# Share-upload processor plugins (see internal/share/share.go for the
+# contract). Each is probed at startup and activates only when its own
+# configuration is present — e.g. the OpenAI transcriber needs
+# OPENAI_API_KEY in the environment.
+# share_plugins:
+#   - /opt/amythest/plugins/openai-transcribe

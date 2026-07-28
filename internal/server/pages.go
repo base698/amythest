@@ -1,0 +1,345 @@
+package server
+
+import (
+	"bytes"
+	"errors"
+	"html/template"
+	"net/http"
+	"net/url"
+	"os"
+	"path"
+	"sort"
+	"strings"
+
+	"github.com/base698/amythest/internal/index"
+	"github.com/base698/amythest/internal/markdown"
+	"github.com/base698/amythest/internal/vault"
+)
+
+type crumb struct {
+	Name string
+	URL  string
+}
+
+type pageData struct {
+	SiteName    string
+	Base        string
+	Title       string
+	HTML        template.HTML
+	TOC         []markdown.Heading
+	Tags        []string
+	Breadcrumbs []crumb
+	Tree        *treeNode
+	Slug        string
+	Backlinks   []index.NoteRef
+	HasKanban   bool
+}
+
+// handleNote serves a rendered note, or a folder/tag listing fallback.
+func (s *Server) handleNote(w http.ResponseWriter, r *http.Request) {
+	v := s.vault.Load()
+	slug := strings.Trim(r.URL.Path, "/")
+	if dec, err := url.PathUnescape(slug); err == nil {
+		slug = dec
+	}
+
+	n, ok := v.BySlug(slug)
+	if !ok && slug == "" {
+		n, ok = v.Resolve("Home")
+	}
+	if !ok {
+		if s.tryFolderPage(w, v, slug) {
+			return
+		}
+		// Alias / renamed-note fallback: resolve like a wikilink target and
+		// redirect to the canonical slug.
+		if n, found := v.Resolve(strings.ReplaceAll(slug, "-", " ")); found {
+			http.Redirect(w, r, s.base()+n.Slug, http.StatusFound)
+			return
+		}
+		if n, found := v.Resolve(slug); found {
+			http.Redirect(w, r, s.base()+n.Slug, http.StatusFound)
+			return
+		}
+		s.notFound(w, r)
+		return
+	}
+
+	page, err := s.db.Page(n.Slug)
+	if err != nil {
+		if !errors.Is(err, index.ErrNotFound) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// Cache miss (e.g. file changed mid-rescan): render live.
+		res, rerr := s.engine.Render(v, n)
+		if rerr != nil {
+			http.Error(w, rerr.Error(), http.StatusInternalServerError)
+			return
+		}
+		page = &index.Page{Slug: n.Slug, Title: n.Title, HTML: res.HTML, TOC: res.TOC}
+	}
+
+	backlinks, err := s.db.Backlinks(n.Slug)
+	if err != nil {
+		backlinks = nil
+	}
+
+	s.renderPage(w, pageData{
+		SiteName:    s.cfg.SiteName,
+		Base:        s.base(),
+		Title:       page.Title,
+		HTML:        s.expandDynamicBlocks(page.HTML),
+		TOC:         page.TOC,
+		Tags:        page.Tags,
+		Breadcrumbs: breadcrumbs(s.base(), n.Slug),
+		Tree:        s.tree.Load(),
+		Slug:        n.Slug,
+		Backlinks:   backlinks,
+	})
+}
+
+// tryFolderPage renders a listing when the slug names a folder.
+func (s *Server) tryFolderPage(w http.ResponseWriter, v *vault.Vault, slug string) bool {
+	if slug == "" {
+		return false
+	}
+	prefix := slug + "/"
+	type entry struct {
+		Name   string
+		URL    string
+		Folder bool
+	}
+	var notes []entry
+	folders := map[string]bool{}
+	for _, n := range v.Notes {
+		if !strings.HasPrefix(n.Slug, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(n.Slug, prefix)
+		if i := strings.Index(rest, "/"); i >= 0 {
+			folders[rest[:i]] = true
+		} else {
+			notes = append(notes, entry{Name: n.Title, URL: s.base() + n.Slug})
+		}
+	}
+	if len(notes) == 0 && len(folders) == 0 {
+		return false
+	}
+
+	var b bytes.Buffer
+	b.WriteString("<ul class=\"listing\">")
+	folderNames := make([]string, 0, len(folders))
+	for f := range folders {
+		folderNames = append(folderNames, f)
+	}
+	sort.Strings(folderNames)
+	for _, f := range folderNames {
+		b.WriteString(`<li class="listing-folder"><a href="` +
+			template.HTMLEscapeString(s.base()+slug+"/"+f) + `">` + template.HTMLEscapeString(f) + `/</a></li>`)
+	}
+	sort.Slice(notes, func(i, j int) bool { return strings.ToLower(notes[i].Name) < strings.ToLower(notes[j].Name) })
+	for _, n := range notes {
+		b.WriteString(`<li><a class="internal" href="` + template.HTMLEscapeString(n.URL) + `">` +
+			template.HTMLEscapeString(n.Name) + `</a></li>`)
+	}
+	b.WriteString("</ul>")
+
+	s.renderPage(w, pageData{
+		SiteName:    s.cfg.SiteName,
+		Base:        s.base(),
+		Title:       path.Base(slug),
+		HTML:        template.HTML(b.String()),
+		Breadcrumbs: breadcrumbs(s.base(), slug+"/x"),
+		Tree:        s.tree.Load(),
+		Slug:        slug,
+	})
+	return true
+}
+
+// handleTags serves /tags/ (all tags) and /tags/{tag} (notes with tag).
+func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
+	tag := strings.Trim(strings.TrimPrefix(r.URL.Path, "/tags"), "/")
+	if dec, err := url.PathUnescape(tag); err == nil {
+		tag = dec
+	}
+	var b bytes.Buffer
+	title := "Tags"
+	if tag == "" {
+		tags, err := s.db.Tags()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		names := make([]string, 0, len(tags))
+		for t := range tags {
+			names = append(names, t)
+		}
+		sort.Strings(names)
+		b.WriteString(`<ul class="listing tag-listing">`)
+		for _, t := range names {
+			b.WriteString(`<li><a class="tag-link" href="` + template.HTMLEscapeString(s.base()+"tags/"+t) + `">#` +
+				template.HTMLEscapeString(t) + `</a> <span class="count">` +
+				template.HTMLEscapeString(itoa(tags[t])) + `</span></li>`)
+		}
+		b.WriteString("</ul>")
+	} else {
+		title = "#" + tag
+		refs, err := s.db.TagNotes(tag)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		b.WriteString(`<ul class="listing">`)
+		for _, ref := range refs {
+			b.WriteString(`<li><a class="internal" href="` + template.HTMLEscapeString(s.base()+ref.Slug) + `">` +
+				template.HTMLEscapeString(ref.Title) + `</a></li>`)
+		}
+		b.WriteString("</ul>")
+	}
+
+	s.renderPage(w, pageData{
+		SiteName:    s.cfg.SiteName,
+		Base:        s.base(),
+		Title:       title,
+		HTML:        template.HTML(b.String()),
+		Breadcrumbs: []crumb{{Name: "Home", URL: s.base()}, {Name: "Tags", URL: s.base() + "tags/"}},
+		Tree:        s.tree.Load(),
+	})
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var digits []byte
+	for n > 0 {
+		digits = append([]byte{byte('0' + n%10)}, digits...)
+		n /= 10
+	}
+	return string(digits)
+}
+
+func (s *Server) notFound(w http.ResponseWriter, _ *http.Request) {
+	s.renderPageStatus(w, http.StatusNotFound, pageData{
+		SiteName: s.cfg.SiteName,
+		Base:     s.base(),
+		Title:    "Not found",
+		HTML:     "<p>That page doesn't exist (or hasn't been synced yet).</p>",
+		Tree:     s.tree.Load(),
+	})
+}
+
+func (s *Server) renderPage(w http.ResponseWriter, data pageData) {
+	s.renderPageStatus(w, http.StatusOK, data)
+}
+
+func (s *Server) renderPageStatus(w http.ResponseWriter, status int, data pageData) {
+	data.HasKanban = s.kanban != nil
+	var buf bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&buf, "base.html", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = w.Write(buf.Bytes())
+}
+
+// handleAsset serves non-markdown vault files under /assets/.
+func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
+	v := s.vault.Load()
+	rel := strings.TrimPrefix(r.URL.Path, "/assets/")
+	if dec, err := url.PathUnescape(rel); err == nil {
+		rel = dec
+	}
+	abs, ok := v.AssetPath(rel)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if st, err := os.Stat(abs); err != nil || st.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, abs)
+}
+
+func (s *Server) base() string {
+	b := s.cfg.BaseURL
+	if !strings.HasSuffix(b, "/") {
+		b += "/"
+	}
+	return b
+}
+
+func breadcrumbs(base string, slug string) []crumb {
+	crumbs := []crumb{{Name: "Home", URL: base}}
+	segs := strings.Split(slug, "/")
+	for i, seg := range segs[:len(segs)-1] {
+		crumbs = append(crumbs, crumb{
+			Name: seg,
+			URL:  base + strings.Join(segs[:i+1], "/"),
+		})
+	}
+	return crumbs
+}
+
+// ---- explorer tree ----
+
+type treeNode struct {
+	Name     string
+	URL      string // base-prefixed link; empty for folders without an index note
+	IsDir    bool
+	Children []*treeNode
+}
+
+func buildTree(v *vault.Vault, base string) *treeNode {
+	root := &treeNode{IsDir: true}
+	dirs := map[string]*treeNode{"": root}
+
+	var mkdir func(p string) *treeNode
+	mkdir = func(p string) *treeNode {
+		if n, ok := dirs[p]; ok {
+			return n
+		}
+		parent := mkdir(parentPath(p))
+		n := &treeNode{Name: path.Base(p), IsDir: true}
+		parent.Children = append(parent.Children, n)
+		dirs[p] = n
+		return n
+	}
+
+	for _, n := range v.Notes {
+		node := mkdir(parentPath(n.Path))
+		name := strings.TrimSuffix(path.Base(n.Path), ".md")
+		if name == "index" {
+			node.URL = base + n.Slug
+			continue
+		}
+		node.Children = append(node.Children, &treeNode{Name: n.Title, URL: base + n.Slug})
+	}
+	sortTree(root)
+	return root
+}
+
+func parentPath(p string) string {
+	d := path.Dir(p)
+	if d == "." || d == "/" {
+		return ""
+	}
+	return d
+}
+
+func sortTree(n *treeNode) {
+	sort.SliceStable(n.Children, func(i, j int) bool {
+		a, b := n.Children[i], n.Children[j]
+		if a.IsDir != b.IsDir {
+			return a.IsDir
+		}
+		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+	})
+	for _, c := range n.Children {
+		sortTree(c)
+	}
+}

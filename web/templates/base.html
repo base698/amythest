@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{if .Title}}{{.Title}} — {{end}}{{.SiteName}}</title>
+  <link rel="stylesheet" href="{{.Base}}static/styles/main.css">
+  <link rel="stylesheet" href="{{.Base}}gen/chroma.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔮</text></svg>">
+  <script>
+    // Set theme before first paint to avoid a flash.
+    (function () {
+      var t = localStorage.getItem("theme");
+      if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      document.documentElement.dataset.theme = t;
+    })();
+  </script>
+  <script type="module" src="{{.Base}}static/src/main.js" defer></script>
+</head>
+<body data-base="{{.Base}}">
+  <div class="page">
+    <aside class="sidebar sidebar-left">
+      <div class="site-header">
+        <a class="site-title" href="{{.Base}}">{{.SiteName}}</a>
+        <button id="darkmode-toggle" type="button" aria-label="Toggle dark mode">◐</button>
+      </div>
+      <button id="search-open" type="button" class="search-button">
+        <span>Search</span><kbd>⌘K</kbd>
+      </button>
+      <nav class="site-nav" aria-label="Sections">
+        <a href="{{.Base}}tasks">Tasks</a>
+        <a href="{{.Base}}bases/">Bases</a>
+        <a href="{{.Base}}db">Data</a>
+        <a href="{{.Base}}share">Share</a>
+        {{if .HasKanban}}<a href="/kanban/">Kanban</a>{{end}}
+      </nav>
+      <nav class="explorer" aria-label="Explorer">
+        <h2 class="panel-title">Explorer</h2>
+        {{template "tree" .Tree}}
+      </nav>
+    </aside>
+
+    <main class="center">
+      {{if .Breadcrumbs}}
+      <nav class="breadcrumbs" aria-label="Breadcrumbs">
+        {{range $i, $c := .Breadcrumbs}}{{if $i}}<span class="crumb-sep">❯</span>{{end}}<a href="{{$c.URL}}">{{$c.Name}}</a>{{end}}
+      </nav>
+      {{end}}
+      <article class="note">
+        <h1 class="article-title">{{.Title}}</h1>
+        {{if .Tags}}
+        <ul class="tag-row">
+          {{range .Tags}}<li><a class="tag-link" href="{{$.Base}}tags/{{.}}">#{{.}}</a></li>{{end}}
+        </ul>
+        {{end}}
+        <div class="note-content">{{.HTML}}</div>
+      </article>
+    </main>
+
+    <aside class="sidebar sidebar-right">
+      <div class="graph-panel">
+        <h2 class="panel-title">Graph <button id="graph-global-open" type="button" title="Global graph" aria-label="Open global graph">⛶</button></h2>
+        <canvas id="graph-canvas" data-slug="{{.Slug}}"></canvas>
+      </div>
+      {{if .TOC}}
+      <nav class="toc" aria-label="Table of contents">
+        <h2 class="panel-title">On this page</h2>
+        <ul>
+          {{range .TOC}}<li class="toc-h{{.Level}}"><a href="#{{.ID}}">{{.Text}}</a></li>{{end}}
+        </ul>
+      </nav>
+      {{end}}
+      {{if .Backlinks}}
+      <nav class="backlinks" aria-label="Backlinks">
+        <h2 class="panel-title">Backlinks</h2>
+        <ul>
+          {{range .Backlinks}}<li><a class="internal" href="{{$.Base}}{{.Slug}}">{{.Title}}</a></li>{{end}}
+        </ul>
+      </nav>
+      {{end}}
+    </aside>
+  </div>
+
+  <div id="search-modal" hidden>
+    <div class="search-box">
+      <input id="search-input" type="text" placeholder="Search notes…" autocomplete="off" spellcheck="false">
+      <ul id="search-results"></ul>
+    </div>
+  </div>
+
+  <div id="global-graph-modal" hidden>
+    <canvas id="global-graph-canvas"></canvas>
+  </div>
+</body>
+</html>
+
+{{define "tree"}}
+{{if .Children}}
+<ul class="tree">
+  {{range .Children}}
+  <li>
+    {{if .IsDir}}
+    <details>
+      <summary>{{if .URL}}<a href="{{.URL}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</summary>
+      {{template "tree" .}}
+    </details>
+    {{else}}
+    <a href="{{.URL}}">{{.Name}}</a>
+    {{end}}
+  </li>
+  {{end}}
+</ul>
+{{end}}
+{{end}}

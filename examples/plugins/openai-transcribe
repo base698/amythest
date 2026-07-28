@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Amythest share plugin: transcribe audio uploads with the OpenAI API.
+
+Contract (see internal/share/share.go):
+  openai-transcribe probe    -> exit 0 when OPENAI_API_KEY is set (active)
+  openai-transcribe process  -> JSON event on stdin, markdown on stdout
+
+Enable it in amythest.yaml:
+  share_plugins:
+    - /path/to/examples/plugins/openai-transcribe
+
+Environment:
+  OPENAI_API_KEY           required; plugin stays inactive without it
+  OPENAI_TRANSCRIBE_MODEL  optional, default whisper-1
+"""
+
+import json
+import mimetypes
+import os
+import sys
+import urllib.request
+import uuid
+
+AUDIO_EXTS = {".m4a", ".mp3", ".mp4", ".wav", ".webm", ".ogg", ".flac", ".mpga", ".mpeg"}
+
+
+def probe() -> int:
+    return 0 if os.environ.get("OPENAI_API_KEY") else 1
+
+
+def process() -> int:
+    event = json.load(sys.stdin)
+    path = event["asset"]
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in AUDIO_EXTS and not str(event.get("mime", "")).startswith("audio/"):
+        return 0  # not audio: nothing to do, append nothing
+
+    boundary = uuid.uuid4().hex
+    model = os.environ.get("OPENAI_TRANSCRIBE_MODEL", "whisper-1")
+    with open(path, "rb") as f:
+        audio = f.read()
+
+    content_type = event.get("mime") or mimetypes.guess_type(path)[0] or "application/octet-stream"
+    parts = []
+    parts.append(
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{model}\r\n".encode()
+    )
+    parts.append(
+        (
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+            f"filename=\"{os.path.basename(path)}\"\r\nContent-Type: {content_type}\r\n\r\n"
+        ).encode()
+    )
+    parts.append(audio)
+    parts.append(f"\r\n--{boundary}--\r\n".encode())
+    body = b"".join(parts)
+
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/audio/transcriptions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=240) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode(errors="replace")[:300]
+        print(f"OpenAI transcription failed ({error.code}): {detail}", file=sys.stderr)
+        return 1
+
+    text = (result.get("text") or "").strip()
+    if not text:
+        return 0
+    print("## Transcript\n")
+    print(text)
+    return 0
+
+
+if __name__ == "__main__":
+    command = sys.argv[1] if len(sys.argv) > 1 else ""
+    if command == "probe":
+        sys.exit(probe())
+    if command == "process":
+        sys.exit(process())
+    print(__doc__, file=sys.stderr)
+    sys.exit(2)
