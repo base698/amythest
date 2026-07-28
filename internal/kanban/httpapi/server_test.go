@@ -81,7 +81,7 @@ func TestAPIRequiresLoginAndCSRFThenCreatesCard(t *testing.T) {
 		t.Fatalf("missing CSRF status = %d", resp.StatusCode)
 	}
 
-	payload = bytes.NewBufferString(`{"title":"Deploy Proof production with login","status":"ready","assignee":"Justin","labels":["proof","1.0"]}`)
+	payload = bytes.NewBufferString(`{"title":"Deploy Proof production with login","status":"ready","assignee":"Justin","dueDate":"2026-08-04","labels":["proof","1.0"]}`)
 	req, _ = http.NewRequest(http.MethodPost, srv.URL+"/api/boards/proof/cards", payload)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-CSRF-Token", login.CSRF)
@@ -92,6 +92,13 @@ func TestAPIRequiresLoginAndCSRFThenCreatesCard(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create status = %d", resp.StatusCode)
+	}
+	var created board.Card
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.DueDate != "2026-08-04" {
+		t.Fatalf("created due date = %q", created.DueDate)
 	}
 }
 
@@ -546,4 +553,3 @@ func TestLoginFailureMapPrunesExpiredEntriesAndStaysBounded(t *testing.T) {
 }
 
 var _ fs.FS
-

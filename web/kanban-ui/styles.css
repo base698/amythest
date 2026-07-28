@@ -5,6 +5,7 @@
 
 .card-editor { width: min(720px, 100%); }
 .card-editor .card-meta { margin: 6px 0 0; font-size: 11px; color: var(--muted); }
+.card-due { align-self: flex-start; border: 1px solid rgba(167, 139, 250, .35); border-radius: 999px; color: #c4b5fd; font-size: 10px; font-weight: 700; padding: 3px 7px; }
 .card-editor .title-field { margin-top: 20px; }
 .card-editor .title-input { font-size: 17px; font-weight: 650; padding: 12px 13px; }
 .card-editor textarea { line-height: 1.55; resize: vertical; }

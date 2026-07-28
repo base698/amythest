@@ -74,11 +74,11 @@ type getNoteIn struct {
 	Slug string `json:"slug" jsonschema:"note slug, e.g. Food/Cooking; wikilink names also resolve"`
 }
 type getNoteOut struct {
-	Slug        string         `json:"slug"`
-	Path        string         `json:"path"`
-	Title       string         `json:"title"`
-	Frontmatter map[string]any `json:"frontmatter,omitempty"`
-	Markdown    string         `json:"markdown"`
+	Slug        string          `json:"slug"`
+	Path        string          `json:"path"`
+	Title       string          `json:"title"`
+	Frontmatter map[string]any  `json:"frontmatter,omitempty"`
+	Markdown    string          `json:"markdown"`
 	Backlinks   []index.NoteRef `json:"backlinks,omitempty"`
 }
 
@@ -375,6 +375,7 @@ type createCardIn struct {
 	Board       string   `json:"board"`
 	Title       string   `json:"title"`
 	Description string   `json:"description,omitempty"`
+	DueDate     string   `json:"dueDate,omitempty" jsonschema:"optional due date in YYYY-MM-DD format"`
 	Status      string   `json:"status,omitempty" jsonschema:"triage|backlog|ready|in_progress|verify (default triage)"`
 	Assignee    string   `json:"assignee,omitempty"`
 	Labels      []string `json:"labels,omitempty"`
@@ -384,6 +385,7 @@ type updateCardIn struct {
 	Card        string    `json:"card"`
 	Title       *string   `json:"title,omitempty"`
 	Description *string   `json:"description,omitempty"`
+	DueDate     *string   `json:"dueDate,omitempty" jsonschema:"due date in YYYY-MM-DD format; empty string clears it"`
 	Assignee    *string   `json:"assignee,omitempty"`
 	Blocked     *bool     `json:"blocked,omitempty"`
 	Labels      *[]string `json:"labels,omitempty"`
@@ -443,7 +445,7 @@ func registerKanbanTools(server *sdk.Server, deps Deps) {
 				status = board.Triage
 			}
 			card, err := deps.Kanban.CreateCard(in.Board, board.CardInput{
-				Title: in.Title, Description: in.Description, Status: status,
+				Title: in.Title, Description: in.Description, DueDate: in.DueDate, Status: status,
 				Assignee: in.Assignee, Labels: in.Labels,
 			})
 			return nil, card, err
@@ -453,7 +455,7 @@ func registerKanbanTools(server *sdk.Server, deps Deps) {
 		Description: "Patch card fields (only the ones provided)."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in updateCardIn) (*sdk.CallToolResult, board.Card, error) {
 			card, err := deps.Kanban.UpdateCard(in.Board, in.Card, board.CardPatch{
-				Title: in.Title, Description: in.Description,
+				Title: in.Title, Description: in.Description, DueDate: in.DueDate,
 				Assignee: in.Assignee, Blocked: in.Blocked, Labels: in.Labels,
 			})
 			return nil, card, err

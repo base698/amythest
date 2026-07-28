@@ -404,12 +404,13 @@ function Login({ onLogin }: { onLogin: (session: Session) => Promise<void> }) {
   )
 }
 
-interface EditorInput { title: string; description: string; status: Status; assignee: string; agent: string; blocked: boolean; labels: string[] }
+interface EditorInput { title: string; description: string; dueDate: string; status: Status; assignee: string; agent: string; blocked: boolean; labels: string[] }
 function CardEditor({ card, board, busy, agents, onClose, onSave, onDelete, onComment, onUpload, onDeleteAttachment, moveBoards, onMoveBoard }: {
   card?: Card; board: string; busy: boolean; agents: AgentCatalog; onClose: () => void; onSave: (input: EditorInput) => Promise<void>; onDelete?: () => Promise<void>; onComment?: (body: string) => Promise<void>; onUpload?: (file: File) => Promise<Attachment>; onDeleteAttachment?: (attachment: Attachment) => Promise<void>; moveBoards: BoardSummary[]; onMoveBoard?: (destinationBoard: string) => Promise<void>
 }) {
   const [title, setTitle] = useState(card?.title || '')
   const [description, setDescription] = useState(card?.description || '')
+  const [dueDate, setDueDate] = useState(card?.dueDate || '')
   const [status, setStatus] = useState<Status>(card?.status || 'triage')
   const initialAssignee = card?.assignee || 'Hermes'
   const [assigneeChoice, setAssigneeChoice] = useState<'Justin' | 'Hermes' | 'custom'>(initialAssignee === 'Justin' || initialAssignee === 'Hermes' ? initialAssignee : 'custom')
@@ -435,11 +436,12 @@ function CardEditor({ card, board, busy, agents, onClose, onSave, onDelete, onCo
           </div>
           <button className="icon-button" onClick={onClose} aria-label="Close" type="button">×</button>
         </header>
-        <form onSubmit={(event) => { event.preventDefault(); void onSave({ title, description, status, assignee, agent, blocked, labels: labels.split(',').map((value) => value.trim()).filter(Boolean) }) }}>
+        <form onSubmit={(event) => { event.preventDefault(); void onSave({ title, description, dueDate, status, assignee, agent, blocked, labels: labels.split(',').map((value) => value.trim()).filter(Boolean) }) }}>
           <label className="title-field">Title<input autoFocus={!card} className="title-input" maxLength={200} placeholder="What needs doing?" required value={title} onChange={(event) => setTitle(event.target.value)} /></label>
           <label>Description<textarea maxLength={10000} placeholder="Details, links, acceptance criteria… markdown welcome" rows={6} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
           <div className="form-grid">
             <label>Status<select value={status} onChange={(event) => setStatus(event.target.value as Status)}>{statusOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+            <label>Due date<input aria-label="Due date" type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></label>
             <label>Labels <span className="hint">comma separated</span><input placeholder="ops, media" value={labels} onChange={(event) => setLabels(event.target.value)} /></label>
           </div>
           <fieldset className="assignee-fieldset">
