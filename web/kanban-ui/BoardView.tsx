@@ -23,6 +23,7 @@ export interface Card {
 	title: string
 	description: string
 	dueDate?: string
+	milestone?: string
 	status: Status
   assignee: string
   agent?: string
@@ -106,6 +107,7 @@ export function BoardView({ cards, onMove, onOpen, onBlockedChange }: BoardViewP
                   <button className="card-open" aria-label={`Open ${card.title}`} onClick={() => onOpen(card)} type="button">
                     <span className="card-title">{card.blocked && <span className="blocked-flag">Blocked</span>}{card.title}</span>
                     {card.description && <span className="card-description">{card.description}</span>}
+                    {card.milestone && <span className="card-milestone">Milestone {card.milestone}</span>}
                     {card.dueDate && <span className="card-due">Due {formatDueDate(card.dueDate)}</span>}
                     {card.labels.length > 0 && (
                       <span className="labels">

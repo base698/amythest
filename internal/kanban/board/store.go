@@ -151,8 +151,8 @@ func (s *Store) CreateCard(name string, input CardInput) (Card, error) {
 		now := s.now().UTC()
 		created = Card{
 			ID: newID(now), Title: strings.TrimSpace(input.Title), Description: strings.TrimSpace(input.Description),
-			DueDate: strings.TrimSpace(input.DueDate),
-			Status:  input.Status, Assignee: strings.TrimSpace(input.Assignee), Agent: strings.TrimSpace(input.Agent), Blocked: input.Blocked, Labels: normalizeLabels(input.Labels),
+			DueDate: strings.TrimSpace(input.DueDate), Milestone: strings.ToLower(strings.TrimSpace(input.Milestone)),
+			Status: input.Status, Assignee: strings.TrimSpace(input.Assignee), Agent: strings.TrimSpace(input.Agent), Blocked: input.Blocked, Labels: normalizeLabels(input.Labels),
 			Comments: []Comment{}, Attachments: []Attachment{}, CreatedAt: now, UpdatedAt: now,
 		}
 		if created.Status == "" {
@@ -184,6 +184,9 @@ func (s *Store) UpdateCard(name, id string, patch CardPatch) (Card, error) {
 		}
 		if patch.DueDate != nil {
 			updated.DueDate = strings.TrimSpace(*patch.DueDate)
+		}
+		if patch.Milestone != nil {
+			updated.Milestone = strings.ToLower(strings.TrimSpace(*patch.Milestone))
 		}
 		if patch.Status != nil {
 			updated.Status = *patch.Status
@@ -992,6 +995,9 @@ func renderBoard(board Board, doneOnly bool, updated time.Time) []byte {
 			if card.DueDate != "" {
 				fmt.Fprintf(&b, "- **Due:** %s\n", card.DueDate)
 			}
+			if card.Milestone != "" {
+				fmt.Fprintf(&b, "- **Milestone:** %s\n", card.Milestone)
+			}
 			if len(card.Labels) > 0 {
 				b.WriteString("- **Labels:**")
 				for _, label := range card.Labels {
@@ -1063,7 +1069,7 @@ func validateInput(input CardInput) error {
 	if input.Status == "" {
 		input.Status = Triage
 	}
-	return validateCard(Card{Title: strings.TrimSpace(input.Title), Description: input.Description, DueDate: strings.TrimSpace(input.DueDate), Status: input.Status, Assignee: input.Assignee, Agent: input.Agent, Blocked: input.Blocked, Labels: input.Labels})
+	return validateCard(Card{Title: strings.TrimSpace(input.Title), Description: input.Description, DueDate: strings.TrimSpace(input.DueDate), Milestone: strings.ToLower(strings.TrimSpace(input.Milestone)), Status: input.Status, Assignee: input.Assignee, Agent: input.Agent, Blocked: input.Blocked, Labels: input.Labels})
 }
 func validateCard(card Card) error {
 	if card.Title == "" || len(card.Title) > 200 || strings.ContainsAny(card.Title, "\r\n") {
@@ -1077,6 +1083,9 @@ func validateCard(card Card) error {
 		if err != nil || parsed.Format("2006-01-02") != card.DueDate {
 			return errors.New("due date must be a valid YYYY-MM-DD date")
 		}
+	}
+	if len(card.Milestone) > 32 || strings.ContainsAny(card.Milestone, "\r\n`") {
+		return errors.New("milestone must be at most 32 safe characters")
 	}
 	if !ValidStatus(card.Status) {
 		return errors.New("invalid card status")

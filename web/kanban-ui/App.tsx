@@ -1,5 +1,13 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { BoardView, type Attachment, type Card, type Status } from './BoardView'
+import {
+  allLabelOptions,
+  boardFilterURL,
+  buildLabelOptions,
+  filterCardsByLabels,
+  filterSettingsFromSearch,
+  type FilterMode,
+} from './labels'
 import './styles.css'
 
 interface Session { user: string; csrf: string }
@@ -44,6 +52,8 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
   const [boards, setBoards] = useState<BoardSummary[]>([])
   const [activeBoard, setActiveBoard] = useState(() => boardNameFromPath(window.location.pathname) || 'proof')
   const [activeLabels, setActiveLabels] = useState<string[]>(() => labelsFromPath(window.location.pathname))
+  const [filterMode, setFilterMode] = useState<FilterMode>(() => filterSettingsFromSearch(window.location.search).mode)
+  const [excludedLabels, setExcludedLabels] = useState<string[]>(() => filterSettingsFromSearch(window.location.search).excluded)
   const [board, setBoard] = useState<BoardData | null>(null)
   const [editor, setEditor] = useState<Card | 'new' | null>(null)
   const [error, setError] = useState('')
@@ -73,7 +83,10 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
       if (!name || !boards.some((item) => item.name === name)) return
       // Back/forward must restore the label filter as well as the board.
       setActiveLabels(labelsFromPath(window.location.pathname))
-      if (name !== activeBoard) void selectBoard(name, 'none')
+      const settings = filterSettingsFromSearch(window.location.search)
+      setFilterMode(settings.mode)
+      setExcludedLabels(settings.excluded)
+      if (name !== activeBoard) void selectBoard(name, 'none', labelsFromPath(window.location.pathname), settings)
     }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
@@ -89,31 +102,55 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
       ? (requested as string)
       : values.some((item) => item.name === activeBoard) ? activeBoard : values[0]?.name
     // Only honour a label filter that came in on a URL naming a real board.
-    if (name) await selectBoard(name, 'replace', matched ? labelsFromPath(window.location.pathname) : [])
+    if (name) await selectBoard(
+      name,
+      'replace',
+      matched ? labelsFromPath(window.location.pathname) : [],
+      matched ? filterSettingsFromSearch(window.location.search) : { mode: 'or', excluded: [] },
+    )
   }
 
-  async function selectBoard(name: string, historyMode: HistoryMode = 'push', labels: string[] = activeLabels) {
+  async function selectBoard(
+    name: string,
+    historyMode: HistoryMode = 'push',
+    labels: string[] = activeLabels,
+    settings: { mode: FilterMode; excluded: string[] } = { mode: filterMode, excluded: excludedLabels },
+  ) {
     setError('')
     const value = await api<BoardData>(`${API_BASE}/boards/${name}`)
     setActiveBoard(name)
     setActiveLabels(labels)
+    setFilterMode(settings.mode)
+    setExcludedLabels(settings.excluded)
     setBoard(value)
-    const path = boardPath(name, labels)
-    if (historyMode !== 'none' && window.location.pathname !== path) {
+    const path = boardFilterURL(name, labels, settings.mode, settings.excluded)
+    if (historyMode !== 'none' && `${window.location.pathname}${window.location.search}` !== path) {
       window.history[historyMode === 'replace' ? 'replaceState' : 'pushState']({}, '', path)
     }
   }
 
   // Label filters live in the URL so a filtered board is linkable and survives
   // reload, back, and forward.
-  function applyLabelFilter(labels: string[]) {
+  function applyLabelFilter(labels: string[], mode = filterMode, excluded = excludedLabels) {
     setActiveLabels(labels)
-    const path = boardPath(activeBoard, labels)
-    if (window.location.pathname !== path) window.history.pushState({}, '', path)
+    setFilterMode(mode)
+    setExcludedLabels(excluded)
+    const path = boardFilterURL(activeBoard, labels, mode, excluded)
+    if (`${window.location.pathname}${window.location.search}` !== path) window.history.pushState({}, '', path)
   }
 
-  function toggleLabel(label: string) {
-    applyLabelFilter(activeLabels.includes(label) ? activeLabels.filter((item) => item !== label) : [...activeLabels, label])
+  function toggleIncludedLabel(label: string) {
+    const labels = activeLabels.includes(label)
+      ? activeLabels.filter((item) => item !== label)
+      : [...activeLabels, label]
+    applyLabelFilter(labels, filterMode, excludedLabels.filter((item) => item !== label))
+  }
+
+  function toggleExcludedLabel(label: string) {
+    const excluded = excludedLabels.includes(label)
+      ? excludedLabels.filter((item) => item !== label)
+      : [...excludedLabels, label]
+    applyLabelFilter(activeLabels.filter((item) => item !== label), filterMode, excluded)
   }
 
   async function mutate<T>(url: string, method: string, body?: unknown): Promise<T> {
@@ -125,7 +162,10 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
     })
   }
 
-  async function refresh() { await selectBoard(activeBoard); await loadBoardCounts() }
+  async function refresh() {
+    await selectBoard(activeBoard, 'none', activeLabels, { mode: filterMode, excluded: excludedLabels })
+    await loadBoardCounts()
+  }
   async function loadBoardCounts() { setBoards(await api<BoardSummary[]>(`${API_BASE}/boards`)) }
 
   // Toggled straight from the card so blocking something is a single click,
@@ -166,7 +206,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
         <div className="brand"><span className="brand-mark">A</span><span>Amythest Kanban</span></div>
         <nav className="board-tabs" aria-label="Boards">
           {boards.map((item) => (
-            <button className={item.name === activeBoard ? 'active' : ''} key={item.name} onClick={() => selectBoard(item.name, 'push', [])} type="button">
+            <button className={item.name === activeBoard ? 'active' : ''} key={item.name} onClick={() => selectBoard(item.name, 'push', [], { mode: 'or', excluded: [] })} type="button">
               {displayName(item.name)} <span>{Object.values(item.counts).reduce((sum, count) => sum + (count || 0), 0)}</span>
             </button>
           ))}
@@ -188,9 +228,18 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
             <button className="primary new-card-button" onClick={() => setEditor('new')} type="button"><span aria-hidden="true">＋</span> New card</button>
           </div>
         </div>
-        {board && <LabelFilter board={board} active={activeLabels} onToggle={toggleLabel} onClear={() => applyLabelFilter([])} />}
+        {board && <LabelFilter
+          board={board}
+          active={activeLabels}
+          excluded={excludedLabels}
+          mode={filterMode}
+          onToggleInclude={toggleIncludedLabel}
+          onToggleExclude={toggleExcludedLabel}
+          onModeChange={(next) => applyLabelFilter(activeLabels, next, excludedLabels)}
+          onClear={() => applyLabelFilter([], 'or', [])}
+        />}
         {error && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} type="button">Dismiss</button></div>}
-        {board ? <BoardView cards={filterCardsByLabels(board.cards, activeLabels)} onMove={moveCard} onOpen={setEditor} onBlockedChange={setCardBlocked} /> : <div className="center-screen"><div className="spinner" /></div>}
+        {board ? <BoardView cards={filterCardsByLabels(board.cards, activeLabels, filterMode, excludedLabels)} onMove={moveCard} onOpen={setEditor} onBlockedChange={setCardBlocked} /> : <div className="center-screen"><div className="spinner" /></div>}
       </main>
       <button aria-label="New card" className="fab-new-card" onClick={() => setEditor('new')} type="button">＋</button>
       {archiveOpen && <ArchivePanel board={activeBoard} onClose={() => setArchiveOpen(false)} onRestore={async (card) => {
@@ -267,24 +316,67 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
   )
 }
 
-function LabelFilter({ board, active, onToggle, onClear }: { board: BoardData; active: string[]; onToggle: (label: string) => void; onClear: () => void }) {
-  // Offer every label on the board, plus any URL-supplied label that matches
-  // nothing, so a filter showing an empty board is still visible and clearable.
-  const present = [...new Set(board.cards.flatMap((card) => card.labels))].sort()
-  const options = [...new Set([...present, ...active])].sort()
-  if (options.length === 0) return null
-  const matches = filterCardsByLabels(board.cards, active).length
-  return <div className="label-filter">
-    <span className="eyebrow">Labels</span>
-    {options.map((label) => {
-      const selected = active.includes(label)
-      return <button aria-pressed={selected} className={selected ? 'label selected' : 'label'} key={label} onClick={() => onToggle(label)} type="button">{label}</button>
-    })}
-    {active.length > 0 && <>
-      <span className="muted filter-count">{matches} of {board.cards.length} cards</span>
-      <button className="quiet" onClick={onClear} type="button">Clear filter</button>
-    </>}
-  </div>
+function LabelFilter({ board, active, excluded, mode, onToggleInclude, onToggleExclude, onModeChange, onClear }: {
+  board: BoardData
+  active: string[]
+  excluded: string[]
+  mode: FilterMode
+  onToggleInclude: (label: string) => void
+  onToggleExclude: (label: string) => void
+  onModeChange: (mode: FilterMode) => void
+  onClear: () => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [query, setQuery] = useState('')
+  const allOptions = allLabelOptions(board.cards)
+  const totalLabels = allOptions.length
+  const visible = expanded || query
+    ? buildLabelOptions(board.cards, active, excluded, Number.MAX_SAFE_INTEGER)
+    : buildLabelOptions(board.cards, active, excluded, 12)
+  const needle = query.trim().toLowerCase()
+  const options = needle ? visible.filter((option) => option.label.includes(needle)) : visible
+  if (totalLabels === 0 && active.length === 0 && excluded.length === 0) return null
+  const matches = filterCardsByLabels(board.cards, active, mode, excluded).length
+  const filtering = active.length > 0 || excluded.length > 0
+  return <section className="label-filter" aria-label="Card label filters">
+    <div className="label-filter-heading">
+      <div>
+        <span className="eyebrow">Labels</span>
+        <span className="muted label-summary">Useful labels first · {totalLabels} total</span>
+      </div>
+      <div className="label-filter-actions">
+        {active.length > 1 && <div className="filter-mode" aria-label="Label match mode" role="group">
+          <button aria-pressed={mode === 'or'} onClick={() => onModeChange('or')} type="button">Any</button>
+          <button aria-pressed={mode === 'and'} onClick={() => onModeChange('and')} type="button">All</button>
+        </div>}
+        {totalLabels > 12 && <button className="quiet" onClick={() => { setExpanded((current) => !current); setQuery('') }} type="button">{expanded ? 'Show top labels' : `More labels (${totalLabels - 12})`}</button>}
+        {filtering && <button className="quiet" onClick={onClear} type="button">Clear filter</button>}
+      </div>
+    </div>
+    {(expanded || query) && <input aria-label="Search labels" className="label-search" maxLength={32} placeholder="Search labels…" type="search" value={query} onChange={(event) => setQuery(event.target.value)} />}
+    <div className="label-options">
+      {options.map(({ label, count }) => {
+        const selected = active.includes(label)
+        const omitted = excluded.includes(label)
+        return <span className={`label-option${selected ? ' included' : ''}${omitted ? ' excluded' : ''}`} key={label}>
+          <button
+            aria-label={`Include ${label} (${count} ${count === 1 ? 'card' : 'cards'})`}
+            aria-pressed={selected}
+            className="label-main"
+            onClick={() => onToggleInclude(label)}
+            type="button"
+          >{label} <strong>{count}</strong></button>
+          <button aria-label={`Exclude ${label}`} aria-pressed={omitted} className="label-exclude" onClick={() => onToggleExclude(label)} title={`Exclude ${label}`} type="button">−</button>
+        </span>
+      })}
+      {options.length === 0 && <span className="muted">No labels match “{query}”.</span>}
+    </div>
+    {filtering && <div className={`filter-result${matches === 0 ? ' empty' : ''}`} role="status">
+      {matches === 0 ? 'No cards match this filter.' : `${matches} of ${board.cards.length} cards`}
+      {active.length > 0 && <span> Included ({mode === 'or' ? 'any' : 'all'}): {active.join(', ')}</span>}
+      {excluded.length > 0 && <span> Excluded: {excluded.join(', ')}</span>}
+    </div>}
+  </section>
 }
 
 function NewBoardDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (name: string) => Promise<void> }) {
@@ -404,13 +496,14 @@ function Login({ onLogin }: { onLogin: (session: Session) => Promise<void> }) {
   )
 }
 
-interface EditorInput { title: string; description: string; dueDate: string; status: Status; assignee: string; agent: string; blocked: boolean; labels: string[] }
+interface EditorInput { title: string; description: string; dueDate: string; milestone: string; status: Status; assignee: string; agent: string; blocked: boolean; labels: string[] }
 function CardEditor({ card, board, busy, agents, onClose, onSave, onDelete, onComment, onUpload, onDeleteAttachment, moveBoards, onMoveBoard }: {
   card?: Card; board: string; busy: boolean; agents: AgentCatalog; onClose: () => void; onSave: (input: EditorInput) => Promise<void>; onDelete?: () => Promise<void>; onComment?: (body: string) => Promise<void>; onUpload?: (file: File) => Promise<Attachment>; onDeleteAttachment?: (attachment: Attachment) => Promise<void>; moveBoards: BoardSummary[]; onMoveBoard?: (destinationBoard: string) => Promise<void>
 }) {
   const [title, setTitle] = useState(card?.title || '')
   const [description, setDescription] = useState(card?.description || '')
   const [dueDate, setDueDate] = useState(card?.dueDate || '')
+  const [milestone, setMilestone] = useState(card?.milestone || '')
   const [status, setStatus] = useState<Status>(card?.status || 'triage')
   const initialAssignee = card?.assignee || 'Hermes'
   const [assigneeChoice, setAssigneeChoice] = useState<'Justin' | 'Hermes' | 'custom'>(initialAssignee === 'Justin' || initialAssignee === 'Hermes' ? initialAssignee : 'custom')
@@ -436,13 +529,14 @@ function CardEditor({ card, board, busy, agents, onClose, onSave, onDelete, onCo
           </div>
           <button className="icon-button" onClick={onClose} aria-label="Close" type="button">×</button>
         </header>
-        <form onSubmit={(event) => { event.preventDefault(); void onSave({ title, description, dueDate, status, assignee, agent, blocked, labels: labels.split(',').map((value) => value.trim()).filter(Boolean) }) }}>
+        <form onSubmit={(event) => { event.preventDefault(); void onSave({ title, description, dueDate, milestone, status, assignee, agent, blocked, labels: labels.split(',').map((value) => value.trim()).filter(Boolean) }) }}>
           <label className="title-field">Title<input autoFocus={!card} className="title-input" maxLength={200} placeholder="What needs doing?" required value={title} onChange={(event) => setTitle(event.target.value)} /></label>
           <label>Description<textarea maxLength={10000} placeholder="Details, links, acceptance criteria… markdown welcome" rows={6} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
           <div className="form-grid">
             <label>Status<select value={status} onChange={(event) => setStatus(event.target.value as Status)}>{statusOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
             <label>Due date<input aria-label="Due date" type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></label>
-            <label>Labels <span className="hint">comma separated</span><input placeholder="ops, media" value={labels} onChange={(event) => setLabels(event.target.value)} /></label>
+            <label>Milestone <span className="hint">separate from labels</span><input maxLength={32} placeholder="1.2" value={milestone} onChange={(event) => setMilestone(event.target.value)} /></label>
+            <label>Labels <span className="hint">controlled topic labels, comma separated</span><input placeholder="amythest, operations" value={labels} onChange={(event) => setLabels(event.target.value)} /></label>
           </div>
           <fieldset className="assignee-fieldset">
             <legend>Assignee</legend>
@@ -540,11 +634,6 @@ export function labelsFromPath(pathname: string): string[] {
 export function boardPath(name: string, labels: string[] = []): string {
   const segments = [encodeURIComponent(name), ...labels.map((label) => encodeURIComponent(label))]
   return `/kanban/${segments.join('/')}`
-}
-
-export function filterCardsByLabels(cards: Card[], labels: string[]): Card[] {
-  if (labels.length === 0) return cards
-  return cards.filter((card) => labels.every((label) => card.labels.includes(label)))
 }
 
 export function safeNextPath(search: string): string | null {

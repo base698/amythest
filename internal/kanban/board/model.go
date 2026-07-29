@@ -43,6 +43,7 @@ type Card struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	DueDate     string `json:"dueDate,omitempty"`
+	Milestone   string `json:"milestone,omitempty"`
 	Status      Status `json:"status"`
 	Assignee    string `json:"assignee,omitempty"`
 	// Agent names the dispatch agent (provider + model) that should run this
@@ -78,6 +79,7 @@ type CardInput struct {
 	Title       string   `json:"title"`
 	Description string   `json:"description"`
 	DueDate     string   `json:"dueDate"`
+	Milestone   string   `json:"milestone"`
 	Status      Status   `json:"status"`
 	Assignee    string   `json:"assignee"`
 	Agent       string   `json:"agent"`
@@ -89,6 +91,7 @@ type CardPatch struct {
 	Title       *string   `json:"title"`
 	Description *string   `json:"description"`
 	DueDate     *string   `json:"dueDate"`
+	Milestone   *string   `json:"milestone"`
 	Status      *Status   `json:"status"`
 	Assignee    *string   `json:"assignee"`
 	Agent       *string   `json:"agent"`
