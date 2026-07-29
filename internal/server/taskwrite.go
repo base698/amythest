@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -68,34 +67,8 @@ func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, map[string]any{"ok": true, "recurred": recurred})
 }
 
-// toggleInFile applies the toggle to the note's file with an atomic
-// write (temp + rename), preserving the frontmatter block untouched.
+// toggleInFile delegates to the shared task writer so this path and the MCP
+// toggle_task tool apply identical recurrence and file-safety semantics.
 func toggleInFile(v *vault.Vault, n *vault.Note, line int, done bool) (bool, error) {
-	abs := filepath.Join(v.Root, filepath.FromSlash(n.Path))
-	src, err := os.ReadFile(abs)
-	if err != nil {
-		return false, err
-	}
-	_, body := vault.ParseFrontmatter(src)
-	prefix := src[:len(src)-len(body)]
-
-	newBody, recurred, err := tasks.ToggleLine(body, line, done, time.Now())
-	if err != nil {
-		return false, err
-	}
-
-	info, err := os.Stat(abs)
-	if err != nil {
-		return false, err
-	}
-	tmp := abs + ".amythest-tmp"
-	out := append(append([]byte{}, prefix...), newBody...)
-	if err := os.WriteFile(tmp, out, info.Mode().Perm()); err != nil {
-		return false, err
-	}
-	if err := os.Rename(tmp, abs); err != nil {
-		_ = os.Remove(tmp)
-		return false, err
-	}
-	return recurred, nil
+	return tasks.ToggleInFile(v.Root, n.Path, line, done, time.Now())
 }
