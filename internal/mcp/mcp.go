@@ -71,6 +71,22 @@ type searchOut struct {
 	Results []index.SearchResult `json:"results"`
 }
 
+type aggregateFrontmatterIn struct {
+	Folder string   `json:"folder" jsonschema:"vault-relative folder prefix returned by search_notes"`
+	Fields []string `json:"fields" jsonschema:"top-level numeric frontmatter fields to sum (max 20)"`
+}
+
+type numericAggregate struct {
+	Sum   float64 `json:"sum"`
+	Count int     `json:"count" jsonschema:"notes containing a numeric value for this field"`
+}
+
+type aggregateFrontmatterOut struct {
+	Folder       string                      `json:"folder"`
+	NotesScanned int                         `json:"notes_scanned"`
+	Fields       map[string]numericAggregate `json:"fields"`
+}
+
 type getNoteIn struct {
 	Slug string `json:"slug" jsonschema:"note slug, e.g. Food/Cooking; wikilink names also resolve"`
 }
@@ -125,6 +141,13 @@ func registerNoteTools(server *sdk.Server, deps Deps) {
 				return nil, searchOut{}, err
 			}
 			return nil, searchOut{Results: res}, nil
+		})
+
+	sdk.AddTool(server, &sdk.Tool{Name: "aggregate_frontmatter",
+		Description: "Sum explicit numeric frontmatter fields across notes beneath one vault folder. Use search_notes first to locate the canonical folder and field names. Read-only and bounded to 20 fields."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in aggregateFrontmatterIn) (*sdk.CallToolResult, aggregateFrontmatterOut, error) {
+			out, err := aggregateFrontmatter(deps.Vault(), in)
+			return nil, out, err
 		})
 
 	sdk.AddTool(server, &sdk.Tool{Name: "get_note",
