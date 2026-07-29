@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "node web/build.mjs",
-    "test:web": "node --experimental-strip-types --test web/kanban-ui/dates.test.ts",
+    "test:web": "node --experimental-strip-types --test web/kanban-ui/*.test.ts",
     "watch": "node web/build.mjs --watch"
   },
   "devDependencies": {

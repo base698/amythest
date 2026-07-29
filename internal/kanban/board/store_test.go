@@ -91,6 +91,41 @@ func TestCardDueDatePersistsInStructuredAndReadableBoardAndCanBeCleared(t *testi
 	}
 }
 
+func TestCardMilestonePersistsInStructuredAndReadableBoardAndCanBeCleared(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root, fixedClock)
+	if err := store.EnsureBoard("project"); err != nil {
+		t.Fatal(err)
+	}
+	card, err := store.CreateCard("project", CardInput{Title: "Release gate", Status: Backlog, Milestone: "1.2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if card.Milestone != "1.2" {
+		t.Fatalf("created milestone = %q", card.Milestone)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "project", "board.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "- **Milestone:** 1.2") {
+		t.Fatalf("readable board missing milestone:\n%s", raw)
+	}
+	cleared := ""
+	updated, err := store.UpdateCard("project", card.ID, CardPatch{Milestone: &cleared})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Milestone != "" {
+		t.Fatalf("cleared milestone = %q", updated.Milestone)
+	}
+	for _, invalid := range []string{"release `oops`", "line\nbreak", strings.Repeat("x", 33)} {
+		if _, err := store.CreateCard("project", CardInput{Title: "Invalid milestone", Status: Backlog, Milestone: invalid}); err == nil {
+			t.Fatalf("invalid milestone %q was accepted", invalid)
+		}
+	}
+}
+
 func TestDispatchSettingDefaultsFalseAndSurvivesCardAndArchiveWrites(t *testing.T) {
 	root := t.TempDir()
 	store := NewStore(root, fixedClock)
