@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -294,6 +295,42 @@ func registerTaskTools(server *sdk.Server, deps Deps) {
 			}
 			return nil, taskQueryOut{Groups: q.Run(all)}, nil
 		})
+
+	sdk.AddTool(server, &sdk.Tool{Name: "toggle_task",
+		Description: "Complete or reopen a task in a vault note. Use the exact slug and line that query_tasks returned. Completing a recurring task also inserts its next occurrence, unchecked with its dates advanced, matching the Obsidian Tasks plugin. Kanban cards are not vault tasks - use the kanban tools for those."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in toggleTaskIn) (*sdk.CallToolResult, toggleTaskOut, error) {
+			v := deps.Vault()
+			n, ok := v.BySlug(in.Slug)
+			if !ok {
+				return nil, toggleTaskOut{}, fmt.Errorf("note %q not found", in.Slug)
+			}
+			if strings.HasPrefix(n.Path, "kanban/") {
+				return nil, toggleTaskOut{}, fmt.Errorf("kanban boards are managed through the kanban tools")
+			}
+			recurred, err := tasks.ToggleInFile(v.Root, n.Path, in.Line, in.Done, time.Now())
+			if err != nil {
+				return nil, toggleTaskOut{}, err
+			}
+			// Reindex so the next query_tasks reflects the write.
+			if deps.Rescan != nil {
+				if err := deps.Rescan(); err != nil {
+					return nil, toggleTaskOut{}, err
+				}
+			}
+			return nil, toggleTaskOut{OK: true, Recurred: recurred, Path: n.Path}, nil
+		})
+}
+
+type toggleTaskIn struct {
+	Slug string `json:"slug" jsonschema:"slug of the note holding the task, exactly as query_tasks returned it"`
+	Line int    `json:"line" jsonschema:"1-based line number of the task, exactly as query_tasks returned it"`
+	Done bool   `json:"done" jsonschema:"true to complete the task, false to reopen it"`
+}
+
+type toggleTaskOut struct {
+	OK       bool   `json:"ok"`
+	Recurred bool   `json:"recurred" jsonschema:"a recurring task also created its next occurrence"`
+	Path     string `json:"path"`
 }
 
 // ---- bases + catalog ----
