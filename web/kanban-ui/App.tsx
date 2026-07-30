@@ -8,6 +8,7 @@ import {
   filterSettingsFromSearch,
   type FilterMode,
 } from './labels'
+import { searchCards } from './cardSearch'
 import './styles.css'
 
 interface Session { user: string; csrf: string }
@@ -62,6 +63,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [newBoardOpen, setNewBoardOpen] = useState(false)
   const [agents, setAgents] = useState<AgentCatalog>(NO_AGENTS)
+  const [cardQuery, setCardQuery] = useState('')
 
   useEffect(() => {
     api<Session>(`${API_BASE}/session`).then(async (value) => {
@@ -118,6 +120,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
   ) {
     setError('')
     const value = await api<BoardData>(`${API_BASE}/boards/${name}`)
+    if (name !== activeBoard) setCardQuery('')
     setActiveBoard(name)
     setActiveLabels(labels)
     setFilterMode(settings.mode)
@@ -200,6 +203,11 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
 	await loadBoards(value)
   }} />
 
+  const labelFilteredCards = board
+    ? filterCardsByLabels(board.cards, activeLabels, filterMode, excludedLabels)
+    : []
+  const visibleCards = searchCards(labelFilteredCards, cardQuery)
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -228,6 +236,12 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
             <button className="primary new-card-button" onClick={() => setEditor('new')} type="button"><span aria-hidden="true">＋</span> New card</button>
           </div>
         </div>
+        {board && <CardSearch
+          query={cardQuery}
+          visible={visibleCards.length}
+          total={labelFilteredCards.length}
+          onChange={setCardQuery}
+        />}
         {board && <LabelFilter
           board={board}
           active={activeLabels}
@@ -239,7 +253,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
           onClear={() => applyLabelFilter([], 'or', [])}
         />}
         {error && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} type="button">Dismiss</button></div>}
-        {board ? <BoardView cards={filterCardsByLabels(board.cards, activeLabels, filterMode, excludedLabels)} onMove={moveCard} onOpen={setEditor} onBlockedChange={setCardBlocked} /> : <div className="center-screen"><div className="spinner" /></div>}
+        {board ? <BoardView cards={visibleCards} onMove={moveCard} onOpen={setEditor} onBlockedChange={setCardBlocked} /> : <div className="center-screen"><div className="spinner" /></div>}
       </main>
       <button aria-label="New card" className="fab-new-card" onClick={() => setEditor('new')} type="button">＋</button>
       {archiveOpen && <ArchivePanel board={activeBoard} onClose={() => setArchiveOpen(false)} onRestore={async (card) => {
@@ -314,6 +328,32 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
       )}
     </div>
   )
+}
+
+function CardSearch({ query, visible, total, onChange }: {
+  query: string
+  visible: number
+  total: number
+  onChange: (query: string) => void
+}) {
+  const searching = query.trim().length > 0
+  return <div className="card-search">
+    <label>
+      <span className="eyebrow">Search cards</span>
+      <input
+        aria-label="Search cards"
+        maxLength={200}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="Title, description, assignee, label, milestone…"
+        type="search"
+        value={query}
+      />
+    </label>
+    {searching && <span className={`card-search-result${visible === 0 ? ' empty' : ''}`} role="status">
+      {visible} of {total} card{total === 1 ? '' : 's'}
+    </span>}
+    {searching && <button className="quiet" onClick={() => onChange('')} type="button">Clear search</button>}
+  </div>
 }
 
 function LabelFilter({ board, active, excluded, mode, onToggleInclude, onToggleExclude, onModeChange, onClear }: {

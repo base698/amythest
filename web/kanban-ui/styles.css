@@ -163,3 +163,52 @@
   .label-option .label-main { min-height: 34px; }
   .label-option .label-exclude { min-width: 32px; }
 }
+
+.card-search {
+  align-items: end;
+  display: flex;
+  gap: 8px;
+  margin: -6px 0 14px;
+}
+.card-search label {
+  display: flex;
+  flex: 1 1 420px;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 620px;
+}
+.card-search input {
+  background: #0f1116;
+  border: 1px solid #323641;
+  border-radius: 9px;
+  color: var(--text);
+  min-height: 38px;
+  outline: none;
+  padding: 8px 11px;
+  width: 100%;
+}
+.card-search input:focus {
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 3px rgba(124,58,237,.12);
+}
+.card-search-result {
+  color: #c4b5fd;
+  font-size: 11px;
+  padding: 0 4px 10px;
+  white-space: nowrap;
+}
+.card-search-result.empty { color: #fda4af; font-weight: 650; }
+.card-search .quiet { min-height: 38px; white-space: nowrap; }
+.card-footer {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  justify-content: flex-start;
+}
+.card-footer time { margin-left: auto; }
+@media (max-width: 700px) {
+  .card-search { align-items: stretch; flex-wrap: wrap; }
+  .card-search label { flex-basis: 100%; max-width: none; }
+  .card-search input, .card-search .quiet { min-height: 44px; }
+  .card-search-result { align-self: center; padding: 0 4px; }
+}
