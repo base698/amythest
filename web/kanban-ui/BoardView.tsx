@@ -1,5 +1,5 @@
 import type { DragEvent } from 'react'
-import { formatDueDate } from './dates'
+import { formatCreatedDate, formatDueDate } from './dates'
 
 export type Status = 'triage' | 'backlog' | 'ready' | 'in_progress' | 'verify' | 'done'
 
@@ -116,6 +116,7 @@ export function BoardView({ cards, onMove, onOpen, onBlockedChange }: BoardViewP
                     )}
                     <span className="card-footer">
                       <span>{card.assignee || 'Unassigned'}</span>
+                      <time dateTime={card.createdAt}>Created {formatCreatedDate(card.createdAt)}</time>
                       {card.comments.length > 0 && <span>{card.comments.length} comment{card.comments.length === 1 ? '' : 's'}</span>}
                     </span>
                   </button>

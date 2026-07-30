@@ -29,7 +29,7 @@ contents, and backlinks.*
 comments, a blocked toggle, and a prominent New card button — dark
 theme](docs/kanban-ui.png)
 
-*Kanban: markdown-backed boards with labels, comments, due dates, blocked
+*Kanban: markdown-backed boards with card search, creation dates, labels, comments, due dates, blocked
 flags, and per-card status moves.*
 
 ## What's inside
