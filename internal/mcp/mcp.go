@@ -449,6 +449,7 @@ type updateCardIn struct {
 	Description *string   `json:"description,omitempty"`
 	DueDate     *string   `json:"dueDate,omitempty" jsonschema:"due date in YYYY-MM-DD format; empty string clears it"`
 	Milestone   *string   `json:"milestone,omitempty" jsonschema:"release milestone; empty string clears it"`
+	Status      *string   `json:"status,omitempty" jsonschema:"triage|backlog|ready|in_progress|verify|done (done archives)"`
 	Assignee    *string   `json:"assignee,omitempty"`
 	Blocked     *bool     `json:"blocked,omitempty"`
 	Labels      *[]string `json:"labels,omitempty" jsonschema:"topic labels only; use the controlled vocabulary from kanban_create_card; release numbers belong in milestone"`
@@ -517,9 +518,14 @@ func registerKanbanTools(server *sdk.Server, deps Deps) {
 	sdk.AddTool(server, &sdk.Tool{Name: "kanban_update_card",
 		Description: "Patch card fields (only the ones provided)."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in updateCardIn) (*sdk.CallToolResult, board.Card, error) {
+			var status *board.Status
+			if in.Status != nil {
+				value := board.Status(*in.Status)
+				status = &value
+			}
 			card, err := deps.Kanban.UpdateCard(in.Board, in.Card, board.CardPatch{
 				Title: in.Title, Description: in.Description, DueDate: in.DueDate, Milestone: in.Milestone,
-				Assignee: in.Assignee, Blocked: in.Blocked, Labels: in.Labels,
+				Status: status, Assignee: in.Assignee, Blocked: in.Blocked, Labels: in.Labels,
 			})
 			return nil, card, err
 		})
