@@ -64,8 +64,9 @@ func Handler(deps Deps) http.Handler {
 // ---- notes ----
 
 type searchIn struct {
-	Query string `json:"query" jsonschema:"the search text; #tag terms restrict to tags"`
-	Limit int    `json:"limit,omitempty" jsonschema:"max results (default 10)"`
+	Query           string `json:"query" jsonschema:"the search text; #tag terms restrict to tags"`
+	Limit           int    `json:"limit,omitempty" jsonschema:"max results (default 10)"`
+	IncludeArchived bool   `json:"include_archived,omitempty" jsonschema:"include archived notes and kanban done cards (default false)"`
 }
 type searchOut struct {
 	Results []index.SearchResult `json:"results"`
@@ -130,13 +131,13 @@ type graphOut struct {
 
 func registerNoteTools(server *sdk.Server, deps Deps) {
 	sdk.AddTool(server, &sdk.Tool{Name: "search_notes",
-		Description: "Full-text search over the notes vault (FTS5). Returns slugs, titles, and highlighted excerpts."},
+		Description: "Full-text search over the notes vault (FTS5). Returns slugs, titles, and highlighted excerpts. Archived notes (frontmatter status or kanban done cards) are excluded unless include_archived is set."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in searchIn) (*sdk.CallToolResult, searchOut, error) {
 			limit := in.Limit
 			if limit <= 0 {
 				limit = 10
 			}
-			res, err := deps.DB.Search(in.Query, limit)
+			res, err := deps.DB.Search(in.Query, limit, in.IncludeArchived)
 			if err != nil {
 				return nil, searchOut{}, err
 			}

@@ -140,11 +140,13 @@ func upsertNote(tx *sql.Tx, n *vault.Note, res *markdown.Result, noteTasks []tas
 	tagsJSON, _ := json.Marshal(tags)
 	aliasesJSON, _ := json.Marshal(orEmpty(n.FM.MetaStrings("aliases")))
 	tocJSON, _ := json.Marshal(res.TOC)
+	archived, archivedReason := archivedStatus(n, tags)
 
-	if _, err := tx.Exec(`INSERT INTO notes(slug,path,title,frontmatter,tags,aliases,mtime,ctime,hash,wordcount)
-		VALUES(?,?,?,?,?,?,?,?,?,?)`,
+	if _, err := tx.Exec(`INSERT INTO notes(slug,path,title,frontmatter,tags,aliases,mtime,ctime,hash,wordcount,archived,archived_reason)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		n.Slug, n.Path, n.Title, fmJSON, string(tagsJSON), string(aliasesJSON),
-		n.MTime.Unix(), ctimeUnix(n), versionedHash(n), len(strings.Fields(res.Plain))); err != nil {
+		n.MTime.Unix(), ctimeUnix(n), versionedHash(n), len(strings.Fields(res.Plain)),
+		archived, archivedReason); err != nil {
 		return err
 	}
 
@@ -239,6 +241,26 @@ func collectTags(n *vault.Note, res *markdown.Result) []string {
 		add(t)
 	}
 	return out
+}
+
+// archivedStatus reports whether a note counts as archived and why, so
+// search results can show provenance. Checked in priority order: an
+// explicit frontmatter `archived: true`, a frontmatter `status: archived`,
+// then an `archive`/`archived` tag — which also covers kanban `done.md`
+// boards, whose renderer tags completed cards `archive` (board/store.go).
+func archivedStatus(n *vault.Note, tags []string) (archived bool, reason string) {
+	if b, ok := n.FM.Meta["archived"].(bool); ok && b {
+		return true, "frontmatter:archived"
+	}
+	if status := strings.ToLower(strings.TrimSpace(n.FM.MetaString("status"))); status == "archived" || status == "archive" {
+		return true, "frontmatter:status"
+	}
+	for _, t := range tags {
+		if t == "archive" || t == "archived" {
+			return true, "tag:archive"
+		}
+	}
+	return false, ""
 }
 
 func orEmpty(s []string) []string {

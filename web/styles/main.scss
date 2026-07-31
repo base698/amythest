@@ -419,6 +419,17 @@ blockquote.transclude {
     border-bottom: 1px solid var(--border);
   }
 
+  .search-option {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 1rem;
+    font-size: 0.8rem;
+    color: var(--fg-muted);
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+  }
+
   #search-results {
     list-style: none;
     margin: 0;
@@ -432,6 +443,15 @@ blockquote.transclude {
       &.selected { background: var(--highlight); }
     }
     .result-title { font-weight: 600; }
+    .archived-badge {
+      margin-left: 0.5em;
+      font-size: 0.7rem;
+      font-weight: 500;
+      color: var(--fg-muted);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0 0.35em;
+    }
     .result-excerpt {
       font-size: 0.8rem;
       color: var(--fg-muted);

@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -214,7 +215,8 @@ func (s *Server) writeJSON(w http.ResponseWriter, v any) {
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
-	results, err := s.db.Search(q, 10)
+	includeArchived := parseBoolParam(r.URL.Query().Get("include_archived"))
+	results, err := s.db.Search(q, 10, includeArchived)
 	if err != nil {
 		slog.Warn("search", "q", q, "err", err)
 		results = nil
@@ -223,6 +225,17 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		results = []index.SearchResult{}
 	}
 	s.writeJSON(w, results)
+}
+
+// parseBoolParam accepts the common truthy query-string spellings; anything
+// else (including empty/absent) is false, preserving default behavior.
+func parseBoolParam(v string) bool {
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleContentIndex(w http.ResponseWriter, r *http.Request) {
