@@ -9,6 +9,8 @@ type SearchResult = {
   slug: string
   title: string
   excerpt: string
+  archived: boolean
+  archived_reason?: string
 }
 
 let selected = 0
@@ -19,6 +21,7 @@ let bound = false
 const modal = () => document.getElementById("search-modal")
 const input = () => document.getElementById("search-input") as HTMLInputElement | null
 const list = () => document.getElementById("search-results")
+const includeArchived = () => document.getElementById("search-include-archived") as HTMLInputElement | null
 
 export function setupSearch() {
   if (bound) return
@@ -64,6 +67,12 @@ export function setupSearch() {
     window.clearTimeout(debounce)
     debounce = window.setTimeout(runQuery, 120)
   })
+
+  document.addEventListener("change", (e) => {
+    const el = e.target as HTMLElement
+    if (el.id !== "search-include-archived") return
+    runQuery()
+  })
 }
 
 function open() {
@@ -92,7 +101,8 @@ async function runQuery() {
     return
   }
   try {
-    const res = await fetch(`${baseURL()}api/search?q=${encodeURIComponent(q)}`)
+    const archived = includeArchived()?.checked ? "&include_archived=1" : ""
+    const res = await fetch(`${baseURL()}api/search?q=${encodeURIComponent(q)}${archived}`)
     if (!res.ok) return
     const fresh = (await res.json()) as SearchResult[]
     // A stale slow response must not clobber a newer query's results.
@@ -117,6 +127,12 @@ function render() {
     const title = document.createElement("div")
     title.className = "result-title"
     title.textContent = r.title
+    if (r.archived) {
+      const badge = document.createElement("span")
+      badge.className = "archived-badge"
+      badge.textContent = "Archived"
+      title.append(badge)
+    }
     const excerpt = document.createElement("div")
     excerpt.className = "result-excerpt"
     excerpt.innerHTML = r.excerpt // server-generated snippet with <b> marks

@@ -47,7 +47,11 @@ flags, and per-card status moves.*
 - **Graph view**: d3-force on canvas. Local BFS neighbourhood on every page,
   global graph in a modal, drag/zoom/pan, visited-node tinting.
 - **Search**: server-side SQLite FTS5 with snippet highlighting behind a
-  ⌘K modal — the full corpus never ships to the browser.
+  ⌘K modal — the full corpus never ships to the browser. Archived notes
+  (frontmatter `archived: true`/`status: archived`, or an `archive`/`archived`
+  tag — which covers kanban `done.md` boards) are excluded by default; the
+  modal's "Include archived" checkbox or `GET /api/search?include_archived=1`
+  brings them back, each result flagged with its archived provenance.
 - **Kanban built in.** Boards are markdown files inside the vault — human
   readable in Obsidian, canonical on disk — managed by a locked, journaled,
   crash-safe store with a stable JSON API and an embedded React board UI at
@@ -73,9 +77,9 @@ flags, and per-card status moves.*
   The full upload lifecycle and plugin contract are documented in
   `internal/share/share.go`.
 - **MCP endpoint** (`/mcp`, streamable HTTP, bearer token): agents get
-  `search_notes`, `get_note`, `list_notes`, `get_graph`, `query_tasks`,
-  `query_base`, `query_sql`, and full `kanban_*` actions — in-process,
-  same locks as the UI.
+  `search_notes` (with an `include_archived` flag), `get_note`, `list_notes`,
+  `get_graph`, `query_tasks`, `query_base`, `query_sql`, and full `kanban_*`
+  actions — in-process, same locks as the UI.
 
 ## Quick start
 

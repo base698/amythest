@@ -150,15 +150,19 @@ func (d *DB) ContentIndex() (map[string]*ContentEntry, error) {
 // ---- search ----
 
 type SearchResult struct {
-	Slug    string `json:"slug"`
-	Title   string `json:"title"`
-	Excerpt string  `json:"excerpt"` // HTML with <b> highlights
-	Score   float64 `json:"-"`
+	Slug           string  `json:"slug"`
+	Title          string  `json:"title"`
+	Excerpt        string  `json:"excerpt"` // HTML with <b> highlights
+	Archived       bool    `json:"archived"`
+	ArchivedReason string  `json:"archived_reason,omitempty"` // provenance, e.g. "tag:archive"
+	Score          float64 `json:"-"`
 }
 
 // Search runs an FTS5 match with title boosting and snippet extraction.
 // The query is user text; it is converted into a prefix-match FTS query.
-func (d *DB) Search(q string, limit int) ([]SearchResult, error) {
+// Archived notes are excluded unless includeArchived is set, so the
+// default result set matches today's behavior.
+func (d *DB) Search(q string, limit int, includeArchived bool) ([]SearchResult, error) {
 	ftsQuery := buildFTSQuery(q)
 	if ftsQuery == "" {
 		return nil, nil
@@ -166,10 +170,16 @@ func (d *DB) Search(q string, limit int) ([]SearchResult, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 10
 	}
-	rows, err := d.r.Query(`SELECT slug, title,
+	where := `notes_fts MATCH ?`
+	if !includeArchived {
+		where += ` AND n.archived = 0`
+	}
+	rows, err := d.r.Query(`SELECT notes_fts.slug, notes_fts.title,
 			snippet(notes_fts, 2, '<b>', '</b>', '…', 12),
-			bm25(notes_fts, 0, 10.0, 1.0, 5.0)
-		FROM notes_fts WHERE notes_fts MATCH ?
+			bm25(notes_fts, 0, 10.0, 1.0, 5.0),
+			n.archived, n.archived_reason
+		FROM notes_fts JOIN notes n ON n.slug = notes_fts.slug
+		WHERE `+where+`
 		ORDER BY bm25(notes_fts, 0, 10.0, 1.0, 5.0) LIMIT ?`, ftsQuery, limit)
 	if err != nil {
 		return nil, fmt.Errorf("fts: %w", err)
@@ -178,7 +188,7 @@ func (d *DB) Search(q string, limit int) ([]SearchResult, error) {
 	var out []SearchResult
 	for rows.Next() {
 		var r SearchResult
-		if err := rows.Scan(&r.Slug, &r.Title, &r.Excerpt, &r.Score); err != nil {
+		if err := rows.Scan(&r.Slug, &r.Title, &r.Excerpt, &r.Score, &r.Archived, &r.ArchivedReason); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

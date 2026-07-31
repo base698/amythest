@@ -24,8 +24,11 @@ CREATE TABLE IF NOT EXISTS notes(
   mtime      INTEGER NOT NULL,
   ctime      INTEGER NOT NULL DEFAULT 0,  -- frontmatter created date, else mtime
   hash       TEXT NOT NULL,
-  wordcount  INTEGER NOT NULL DEFAULT 0
+  wordcount  INTEGER NOT NULL DEFAULT 0,
+  archived        INTEGER NOT NULL DEFAULT 0,  -- 1 when frontmatter or tags mark the note archived
+  archived_reason TEXT NOT NULL DEFAULT ''     -- provenance, e.g. "frontmatter:status" or "tag:archive"
 );
+CREATE INDEX IF NOT EXISTS notes_archived ON notes(archived);
 CREATE TABLE IF NOT EXISTS links(
   from_slug TEXT NOT NULL,
   to_slug   TEXT NOT NULL,
@@ -77,7 +80,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
 `
 
 // schemaVersion invalidates the whole database when the DDL changes.
-const schemaVersion = 2
+const schemaVersion = 3
 
 const dsnOpts = "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=mmap_size(268435456)"
 
