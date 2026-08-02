@@ -2,6 +2,7 @@
 // through /api/tasks/toggle (recurring tasks roll forward server-side),
 // then the page refreshes in place to show the result.
 import { refreshCurrent } from "./spa"
+import { buildTriagePayload, type TriageAction } from "./taskTriage"
 
 let bound = false
 
@@ -14,6 +15,104 @@ export function setupTaskToggles() {
     if (!box.matches?.("input.task-toggle")) return
     void toggle(box)
   })
+}
+
+let triageBound = false
+
+export function setupTaskTriage() {
+  if (triageBound) return
+  triageBound = true
+
+  document.addEventListener("click", (e) => {
+    const target = e.target as Element
+    const fileButton = target.closest?.<HTMLButtonElement>("[data-task-triage] button[data-file-action]")
+    if (fileButton) {
+      void triageFile(fileButton)
+      return
+    }
+    const button = target.closest?.<HTMLButtonElement>("[data-task-triage] button[data-action]")
+    if (!button) return
+    void triage(button)
+  })
+  document.addEventListener("input", (e) => {
+    const input = e.target as HTMLInputElement
+    if (!input.matches?.("[data-triage-filter]")) return
+    const query = input.value.trim().toLowerCase()
+    document.querySelectorAll<HTMLElement>("[data-triage-file]").forEach((file) => {
+      const searchable = file.dataset.search || file.textContent || ""
+      file.hidden = query !== "" && !searchable.toLowerCase().includes(query)
+    })
+  })
+}
+
+async function triageFile(button: HTMLButtonElement) {
+  const action = button.dataset.fileAction as TriageAction
+  const cards = [...document.querySelectorAll<HTMLElement>("[data-task-triage] [data-triage-card]")]
+  if (cards.length === 0) return
+  const prompt = action === "reference"
+    ? `Convert all ${cards.length} checkboxes in this file to reference bullets?`
+    : `Mark all ${cards.length} tasks in this file as intentional #backlog?`
+  if (!window.confirm(prompt)) return
+
+  const allButtons = document.querySelectorAll<HTMLButtonElement>("[data-task-triage] button")
+  try {
+    const built = cards.map((card) => buildTriagePayload({
+      slug: card.dataset.slug || "",
+      line: Number(card.dataset.line),
+      expectedText: card.dataset.text || "",
+    }, action))
+    const slug = built[0].slug
+    if (built.some((item) => item.slug !== slug)) throw new Error("File selection changed; refresh the page")
+    const items = built.map(({ line, action: itemAction, expectedText }) => ({
+      line,
+      action: itemAction,
+      expectedText,
+    }))
+    allButtons.forEach((el) => { el.disabled = true })
+    const res = await fetch(`${baseURL()}api/tasks/triage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ slug, items }),
+    })
+    if (!res.ok) throw new Error((await res.text()) || `file triage failed (${res.status})`)
+    await refreshCurrent()
+  } catch (err) {
+    allButtons.forEach((el) => { el.disabled = false })
+    showToast(err instanceof Error ? err.message : "Couldn't triage the file")
+  }
+}
+
+async function triage(button: HTMLButtonElement) {
+  const card = button.closest<HTMLElement>("[data-triage-card]")
+  if (!card) return
+  const action = button.dataset.action as TriageAction
+  if ((action === "reference" || action === "cancel") && !window.confirm(
+    action === "reference"
+      ? "Convert this checkbox to a normal reference bullet?"
+      : "Cancel this task as obsolete?",
+  )) return
+
+  try {
+    const due = card.querySelector<HTMLInputElement>("[data-triage-due]")?.value || ""
+    const payload = buildTriagePayload({
+      slug: card.dataset.slug || "",
+      line: Number(card.dataset.line),
+      expectedText: card.dataset.text || "",
+    }, action, due)
+    card.querySelectorAll<HTMLButtonElement>("button").forEach((el) => { el.disabled = true })
+    const res = await fetch(`${baseURL()}api/tasks/triage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) throw new Error((await res.text()) || `triage failed (${res.status})`)
+    await refreshCurrent()
+  } catch (err) {
+    card.querySelectorAll<HTMLButtonElement>("button").forEach((el) => { el.disabled = false })
+    showToast(err instanceof Error ? err.message : "Couldn't triage the task")
+  }
 }
 
 async function toggle(box: HTMLInputElement) {

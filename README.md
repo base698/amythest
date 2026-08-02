@@ -58,7 +58,9 @@ flags, and per-card status moves.*
   `/kanban`.
 - **Tasks**: Obsidian Tasks emoji syntax (📅 ⏳ 🔁 ⏫ ✅) indexed vault-wide;
   ```` ```tasks ```` blocks in notes render live results (filters, relative
-  dates, sort/group/limit); `/tasks` dashboard; `/api/tasks`.
+  dates, sort/group/limit); `/tasks` dashboard; file-first `/tasks/triage`
+  workflow for undated work (intentional `#backlog`, real due date, reference
+  bullet, or cancellation); `/api/tasks`.
 - **Bases**: `.base` YAML views over your frontmatter with the Obsidian
   Bases expression language (`note.*`, `file.*`, `formula.*`, `if()`,
   string/number/date/list methods, `file.hasTag()` …) rendered as
