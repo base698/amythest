@@ -50,15 +50,7 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	var boardNames []string
-	if s.kanban != nil {
-		if summaries, listErr := s.kanban.ListBoards(); listErr == nil {
-			boardNames = make([]string, 0, len(summaries))
-			for _, summary := range summaries {
-				boardNames = append(boardNames, summary.Name)
-			}
-		}
-	}
+	boardNames := s.boardNames()
 
 	statusFilter := r.URL.Query().Get("status") // "", open, done, all
 	sortKey := r.URL.Query().Get("sort")        // "", due, priority, path, description, done
@@ -66,11 +58,15 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 
 	var b strings.Builder
 	b.WriteString(s.tasksToolbar(statusFilter, sortKey, groupKey))
-	b.WriteString(`<div class="tasks-bulkbar" data-task-bulkbar hidden>` +
-		`<span class="muted" data-task-selcount></span> ` +
-		`<button type="button" data-task-bulk-cancel>Cancel selected</button> ` +
-		`<button type="button" class="danger" data-task-bulk-purge>Purge selected</button> ` +
-		`<button type="button" data-task-select-none>Clear selection</button></div>`)
+	// Selection is an explicit mode: without it every row would show a second
+	// checkbox next to the completion toggle, which reads as a duplicate.
+	b.WriteString(`<div class="tasks-bulkbar" data-task-bulkbar>` +
+		`<button type="button" data-task-select-mode>Select</button>` +
+		`<span class="muted selecting-only" data-task-selcount></span>` +
+		`<button type="button" class="selecting-only" data-task-bulk-cancel>Cancel selected</button>` +
+		`<button type="button" class="danger selecting-only" data-task-bulk-purge>Purge selected</button>` +
+		`<button type="button" class="selecting-only" data-task-select-none>Clear</button>` +
+		`</div>`)
 
 	if statusFilter == "" && sortKey == "" && groupKey == "" {
 		section := func(title, query string) {
@@ -154,6 +150,23 @@ func (s *Server) handleTasksTriagePage(w http.ResponseWriter, r *http.Request) {
 		Tree:        s.tree.Load(),
 		Slug:        "tasks/triage",
 	})
+}
+
+// boardNames lists kanban boards for the move-to-board controls, empty when
+// kanban is disabled or the store cannot be read (the control then hides).
+func (s *Server) boardNames() []string {
+	if s.kanban == nil {
+		return nil
+	}
+	summaries, err := s.kanban.ListBoards()
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(summaries))
+	for _, summary := range summaries {
+		names = append(names, summary.Name)
+	}
+	return names
 }
 
 // tasksToolbar renders the status/sort/group controls as plain links. An

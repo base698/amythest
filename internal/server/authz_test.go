@@ -59,7 +59,7 @@ func TestVaultMutationsFailClosedWithoutKanbanAuth(t *testing.T) {
 	for _, target := range []string{
 		"/api/tasks/toggle", "/api/tasks/due", "/api/tasks/triage",
 		"/api/tasks/file", "/api/tasks/file/hide", "/api/tasks/move-to-board",
-		"/api/tasks/cancel", "/api/tasks/purge",
+		"/api/tasks/cancel", "/api/tasks/purge", "/api/tasks/priority",
 		"/api/share/upload", "/api/db/query",
 	} {
 		rec := httptest.NewRecorder()

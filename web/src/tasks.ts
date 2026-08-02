@@ -25,10 +25,23 @@ import {
   taskPurgeEndpoint,
   type SelectedTask,
 } from "./taskDelete"
+import { buildTaskPriorityPayload, taskPriorityEndpoint } from "./taskPriority"
 
 let bound = false
 
+// Select mode lives here, not in the DOM: refreshCurrent() morphs the whole
+// document from a fresh server render, which would drop a body class.
+let selecting = false
+
+function applySelectMode() {
+  document.body.classList.toggle("tasks-selecting", selecting)
+  updateBulkBar()
+}
+
 export function setupTaskToggles() {
+  // Runs on every SPA navigation (init), so re-assert the mode before the
+  // bind guard returns.
+  applySelectMode()
   if (bound) return
   bound = true
 
@@ -41,11 +54,23 @@ export function setupTaskToggles() {
     if (box.matches?.("[data-task-select]")) updateBulkBar()
   })
 
+  // <details> has no dismiss behaviour of its own: without this an opened
+  // editor stays open when you click away or press Escape.
+  document.addEventListener("keydown", (e) => {
+    if ((e as KeyboardEvent).key === "Escape") closeTaskEditors()
+  })
+
   document.addEventListener("click", (e) => {
     const target = e.target as Element
+    closeTaskEditors(target.closest?.(taskEditorSelector) ?? null)
     const moveButton = target.closest?.<HTMLButtonElement>("[data-task-move-submit]")
     if (moveButton) {
       void moveTaskToBoard(moveButton)
+      return
+    }
+    const prioButton = target.closest?.<HTMLButtonElement>("[data-task-prio-set]")
+    if (prioButton) {
+      void setPriority(prioButton)
       return
     }
     const cancelButton = target.closest?.<HTMLButtonElement>("[data-task-cancel]")
@@ -66,14 +91,30 @@ export function setupTaskToggles() {
       void bulkDelete("purge")
       return
     }
+    if (target.closest?.("[data-task-select-mode]")) {
+      selecting = !selecting
+      if (!selecting) clearSelection()
+      applySelectMode()
+      return
+    }
     if (target.closest?.("[data-task-select-none]")) {
-      document.querySelectorAll<HTMLInputElement>("[data-task-select]:checked").forEach((box) => { box.checked = false })
+      clearSelection()
       updateBulkBar()
       return
     }
     const button = target.closest?.<HTMLButtonElement>(`${taskDueSaveSelector}, ${taskDueClearSelector}`)
     if (!button) return
     void updateDueDate(button, button.matches(taskDueClearSelector))
+  })
+}
+
+const taskEditorSelector = "details.task-due-editor, details.task-prio-editor, details.task-move-editor, details.task-actions"
+
+// closeTaskEditors shuts every open task editor except the one being
+// interacted with, so only one panel is ever open and clicking away dismisses.
+function closeTaskEditors(keep: Element | null = null) {
+  document.querySelectorAll<HTMLDetailsElement>(taskEditorSelector).forEach((el) => {
+    if (el.open && el !== keep) el.open = false
   })
 }
 
@@ -87,11 +128,17 @@ function selectedTasks(): SelectedTask[] {
   }))
 }
 
+function clearSelection() {
+  document.querySelectorAll<HTMLInputElement>("[data-task-select]:checked").forEach((box) => { box.checked = false })
+}
+
 function updateBulkBar() {
   const bar = document.querySelector<HTMLElement>("[data-task-bulkbar]")
   if (!bar) return
+  const modeButton = bar.querySelector<HTMLButtonElement>("[data-task-select-mode]")
+  if (modeButton) modeButton.textContent = selecting ? "Done" : "Select"
+  if (!selecting) return
   const selected = selectedTasks()
-  bar.hidden = selected.length === 0
   const open = selected.filter((t) => t.status === "open").length
   const cancelled = selected.filter((t) => t.status === "cancelled").length
   const count = bar.querySelector("[data-task-selcount]")
@@ -102,7 +149,7 @@ function updateBulkBar() {
   if (purgeButton) purgeButton.disabled = cancelled === 0
 }
 
-async function postTaskDelete(endpoint: string, payload: unknown) {
+async function postTaskAction(endpoint: string, payload: unknown) {
   const res = await fetch(`${baseURL()}${endpoint}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -110,6 +157,28 @@ async function postTaskDelete(endpoint: string, payload: unknown) {
     body: JSON.stringify(payload),
   })
   if (!res.ok) throw new Error((await res.text()) || `request failed (${res.status})`)
+}
+
+async function setPriority(button: HTMLButtonElement) {
+  const editor = button.closest<HTMLElement>("[data-task-prio-editor]")
+  if (!editor) return
+  const controls = editor.querySelectorAll<HTMLButtonElement>("button")
+  try {
+    const payload = buildTaskPriorityPayload({
+      slug: editor.dataset.slug || "",
+      line: Number(editor.dataset.line),
+      expectedText: editor.dataset.expectedText || "",
+      expectedStatus: editor.dataset.expectedStatus || "",
+      expectedPriority: Number(editor.dataset.expectedPriority),
+      expectedVersion: editor.dataset.expectedVersion || "",
+    }, Number(button.dataset.taskPrioSet))
+    controls.forEach((el) => { el.disabled = true })
+    await postTaskAction(taskPriorityEndpoint, payload)
+    await refreshCurrent()
+  } catch (err) {
+    controls.forEach((el) => { el.disabled = false })
+    showToast(err instanceof Error ? err.message : "Couldn't set the priority")
+  }
 }
 
 async function cancelTask(button: HTMLButtonElement) {
@@ -124,7 +193,7 @@ async function cancelTask(button: HTMLButtonElement) {
       status: "open",
       version: button.dataset.version || "",
     }])
-    await postTaskDelete(taskCancelEndpoint, payloads[0])
+    await postTaskAction(taskCancelEndpoint, payloads[0])
     await refreshCurrent()
     updateBulkBar()
   } catch (err) {
@@ -144,7 +213,7 @@ async function purgeTask(button: HTMLButtonElement) {
       status: "cancelled",
       version: button.dataset.version || "",
     }])
-    await postTaskDelete(taskPurgeEndpoint, payloads[0])
+    await postTaskAction(taskPurgeEndpoint, payloads[0])
     await refreshCurrent()
     updateBulkBar()
   } catch (err) {
@@ -185,7 +254,7 @@ async function bulkDelete(kind: "cancel" | "purge") {
   buttons.forEach((el) => { el.disabled = true })
   try {
     for (const payload of payloads) {
-      await postTaskDelete(kind === "cancel" ? taskCancelEndpoint : taskPurgeEndpoint, payload)
+      await postTaskAction(kind === "cancel" ? taskCancelEndpoint : taskPurgeEndpoint, payload)
     }
     await refreshCurrent()
     updateBulkBar()

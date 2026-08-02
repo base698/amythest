@@ -6,8 +6,11 @@ package markdown
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"html/template"
+	"sort"
 	"strings"
 
 	"github.com/alecthomas/chroma/v2"
@@ -29,8 +32,37 @@ import (
 const maxEmbedDepth = 3
 
 type Engine struct {
-	base string // URL prefix, always with trailing slash
-	md   goldmark.Markdown
+	base   string // URL prefix, always with trailing slash
+	md     goldmark.Markdown
+	boards func() []string // kanban board names for note-view move controls
+}
+
+// SetBoards supplies the kanban board names offered by the move-to-board
+// control on task lines inside notes. Board names feed RenderSalt, so
+// changing the board set invalidates cached note HTML.
+func (e *Engine) SetBoards(provider func() []string) {
+	e.boards = provider
+}
+
+func (e *Engine) boardNames() []string {
+	if e.boards == nil {
+		return nil
+	}
+	return e.boards()
+}
+
+// RenderSalt fingerprints render inputs that live outside the note itself.
+// It participates in the index's change detection so a new or renamed board
+// re-renders notes instead of leaving stale options in cached HTML.
+func (e *Engine) RenderSalt() string {
+	names := e.boardNames()
+	if len(names) == 0 {
+		return ""
+	}
+	sorted := append([]string(nil), names...)
+	sort.Strings(sorted)
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\x00")))
+	return hex.EncodeToString(sum[:8])
 }
 
 type Heading struct {

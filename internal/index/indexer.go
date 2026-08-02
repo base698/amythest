@@ -17,15 +17,18 @@ import (
 // renderVersion participates in change detection: bump it whenever the
 // renderer's HTML output changes shape, and every note re-renders on the
 // next reconcile without anyone having to delete the data dir.
-const renderVersion = "7"
+const renderVersion = "9"
 
 // versionedHash is a note's change-detection identity: its own content hash
 // plus a fingerprint of the notes it directly transcludes, so a note's
 // cached HTML is invalidated when an embedded note changes. Only direct
 // embeds participate — cheap, deterministic, and covering what almost every
 // transclusion inlines; deeper chains stay bounded by maxEmbedDepth.
-func versionedHash(v *vault.Vault, n *vault.Note) string {
+func versionedHash(v *vault.Vault, n *vault.Note, salt string) string {
 	base := n.Hash + "/" + renderVersion
+	if salt != "" {
+		base += "/" + salt
+	}
 	if len(n.Embeds) == 0 {
 		return base
 	}
@@ -53,6 +56,9 @@ func versionedHash(v *vault.Vault, n *vault.Note) string {
 // renders in under a second per thousand notes, serially, to bound memory.
 func (d *DB) Reconcile(v *vault.Vault, e *markdown.Engine) error {
 	start := time.Now()
+	// Render inputs outside the notes themselves (kanban board names) take
+	// part in change detection so cached HTML cannot go stale.
+	salt := e.RenderSalt()
 
 	type dbNote struct{ hash string }
 	existing := map[string]dbNote{}
@@ -88,7 +94,7 @@ func (d *DB) Reconcile(v *vault.Vault, e *markdown.Engine) error {
 		if !ok {
 			slugSetChanged = true
 			work = append(work, n)
-		} else if old.hash != versionedHash(v, n) {
+		} else if old.hash != versionedHash(v, n, salt) {
 			work = append(work, n)
 		}
 	}
@@ -121,18 +127,8 @@ func (d *DB) Reconcile(v *vault.Vault, e *markdown.Engine) error {
 			slog.Warn("index render", "path", n.Path, "err", err)
 			continue
 		}
-		var noteTasks []tasks.Task
-		var fields []tasks.InlineField
-		// Kanban boards render their cards as checkboxes; those are reachable
-		// through the kanban API/tools and would double-count as tasks. Notes may
-		// also opt out with the case-sensitive canonical boolean `tasks: false`;
-		// the note itself is still rendered, linked, and indexed for search.
-		tasksEnabled, isBool := n.FM.Meta["tasks"].(bool)
-		tasksDisabled := isBool && !tasksEnabled
-		if !strings.HasPrefix(n.Path, "kanban/") && !tasksDisabled {
-			noteTasks, fields = tasks.ParseFile(n.Slug, n.Path, body)
-		}
-		if err := upsertNote(tx, v, n, res, noteTasks, fields); err != nil {
+		noteTasks, fields := parseNoteTasks(n, body)
+		if err := upsertNote(tx, v, n, res, noteTasks, fields, salt); err != nil {
 			return err
 		}
 	}
@@ -161,7 +157,7 @@ func deleteNote(tx *sql.Tx, slug string) error {
 	return nil
 }
 
-func upsertNote(tx *sql.Tx, v *vault.Vault, n *vault.Note, res *markdown.Result, noteTasks []tasks.Task, fields []tasks.InlineField) error {
+func upsertNote(tx *sql.Tx, v *vault.Vault, n *vault.Note, res *markdown.Result, noteTasks []tasks.Task, fields []tasks.InlineField, salt string) error {
 	if err := deleteNote(tx, n.Slug); err != nil {
 		return err
 	}
@@ -176,7 +172,7 @@ func upsertNote(tx *sql.Tx, v *vault.Vault, n *vault.Note, res *markdown.Result,
 	if _, err := tx.Exec(`INSERT INTO notes(slug,path,title,frontmatter,tags,aliases,mtime,ctime,hash,wordcount,archived,archived_reason)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		n.Slug, n.Path, n.Title, fmJSON, string(tagsJSON), string(aliasesJSON),
-		n.MTime.Unix(), ctimeUnix(n), versionedHash(v, n), len(strings.Fields(res.Plain)),
+		n.MTime.Unix(), ctimeUnix(n), versionedHash(v, n, salt), len(strings.Fields(res.Plain)),
 		archived, archivedReason); err != nil {
 		return err
 	}

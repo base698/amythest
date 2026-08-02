@@ -317,6 +317,63 @@ func (s *Server) handleTaskFileDisposition(w http.ResponseWriter, r *http.Reques
 	s.writeJSON(w, map[string]any{"ok": true, "destination": destination})
 }
 
+// handleTaskPriority sets one task's priority emoji.
+func (s *Server) handleTaskPriority(w http.ResponseWriter, r *http.Request) {
+	if !s.requireKanbanSession(w, r, "edit tasks") {
+		return
+	}
+	var req struct {
+		Slug             string `json:"slug"`
+		Line             int    `json:"line"`
+		ExpectedText     string `json:"expectedText"`
+		ExpectedStatus   string `json:"expectedStatus"`
+		ExpectedPriority *int   `json:"expectedPriority"`
+		Priority         *int   `json:"priority"`
+		ExpectedVersion  string `json:"expectedVersion"`
+	}
+	if err := jsonDecode(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Slug == "" || len(req.Slug) > 512 || req.Line < 1 || len(req.ExpectedText) > 10_000 {
+		http.Error(w, "slug, positive line, and expectedText are required", http.StatusBadRequest)
+		return
+	}
+	if len(req.ExpectedVersion) != 64 {
+		http.Error(w, "expectedVersion is required; refresh and retry", http.StatusBadRequest)
+		return
+	}
+	if req.Priority == nil || req.ExpectedPriority == nil ||
+		!tasks.ValidPriority(*req.Priority) || !tasks.ValidPriority(*req.ExpectedPriority) {
+		http.Error(w, "priority and expectedPriority must be between 0 and 5", http.StatusBadRequest)
+		return
+	}
+
+	s.taskWriteMu.Lock()
+	defer s.taskWriteMu.Unlock()
+	v := s.vault.Load()
+	n, ok := v.BySlug(req.Slug)
+	if !ok {
+		http.Error(w, "note not found", http.StatusNotFound)
+		return
+	}
+	if strings.HasPrefix(n.Path, "kanban/") {
+		http.Error(w, "kanban boards are managed through the kanban API", http.StatusForbidden)
+		return
+	}
+	if err := tasks.UpdatePriorityInFileAndReindex(v.Root, n.Path, req.Line, req.ExpectedText,
+		req.ExpectedStatus, *req.ExpectedPriority, *req.Priority, req.ExpectedVersion,
+		s.rescanWhileVaultLocked); err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	s.writeJSON(w, map[string]any{"ok": true})
+}
+
 // handleTaskCancel marks open tasks cancelled ([-] + ❌ date) — the
 // recoverable first half of deletion. Single-file batch, whole-file version
 // guard.

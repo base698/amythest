@@ -44,6 +44,14 @@ type Server struct {
 
 	rescanMu    sync.Mutex
 	taskWriteMu sync.Mutex
+
+	// Coalescing state for scheduleFullReconcile. reconcileDelay is the quiet
+	// period before a background pass; zero means the default (tests shorten it).
+	reconcileMu      sync.Mutex
+	reconcileRunning bool
+	reconcilePending bool
+	reconcileDelay   time.Duration
+
 	chromaCSS   []byte
 	kanban      *board.Store   // nil when kanban is not configured
 	kanbanAuth  *auth.Manager  // gates vault writes when set
@@ -97,6 +105,13 @@ func New(cfg config.Config) (*Server, error) {
 
 	s.share = share.New(cfg.Vault, cfg.SharePlugins)
 
+	// Kanban comes up before the first index pass: it supplies the board list
+	// the renderer bakes into move-to-board controls on note task lines, and
+	// that list feeds render-cache invalidation.
+	if err := s.mountKanban(); err != nil {
+		return nil, err
+	}
+
 	if err := s.Rescan(); err != nil {
 		return nil, err
 	}
@@ -128,6 +143,7 @@ func New(cfg config.Config) (*Server, error) {
 	s.mux.HandleFunc("POST /api/tasks/file", s.handleTaskFileDisposition)
 	s.mux.HandleFunc("POST /api/tasks/file/hide", s.handleTaskFileHide)
 	s.mux.HandleFunc("POST /api/tasks/move-to-board", s.handleTaskMoveToBoard)
+	s.mux.HandleFunc("POST /api/tasks/priority", s.handleTaskPriority)
 	s.mux.HandleFunc("POST /api/tasks/cancel", s.handleTaskCancel)
 	s.mux.HandleFunc("POST /api/tasks/purge", s.handleTaskPurge)
 	s.mux.HandleFunc("GET /tasks", s.handleTasksPage)
@@ -148,10 +164,6 @@ func New(cfg config.Config) (*Server, error) {
 		}
 		s.handleNote(w, r)
 	})
-
-	if err := s.mountKanban(); err != nil {
-		return nil, err
-	}
 
 	if h := mcp.Handler(mcp.Deps{
 		DB:      s.db,
@@ -204,6 +216,60 @@ func (s *Server) rescanWhileVaultLocked() (err error) {
 	s.tree.Store(buildTree(v, s.base()))
 	slog.Debug("vault scan", "notes", len(v.Notes), "assets", len(v.Assets), "took", time.Since(start))
 	return nil
+}
+
+// scheduleFullReconcile runs one background rescan that re-renders the whole
+// corpus, coalescing concurrent requests into a single pass — a burst of
+// uploads must not queue a burst of full reconciles.
+//
+// Callers are mutations that already indexed their own note incrementally
+// (see indexShareUpload). What is left to do is global and not
+// latency-critical: a new slug can make a [[Link]] elsewhere resolve, and only
+// a re-render notices. InvalidateRenderCache is what forces that pass, since
+// the incremental insert otherwise leaves the index looking up to date.
+// A short quiet period first, because the pass takes the same in-process
+// rescan lock the incremental publish needs: without it, the second upload of
+// a burst would wait out the first upload's reconcile and we would have moved
+// the stall rather than removed it. One full pass covers every write that
+// preceded it, so batching a burst costs nothing but freshness lag.
+const defaultFullReconcileDelay = 3 * time.Second
+
+func (s *Server) scheduleFullReconcile() {
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+	s.reconcilePending = true
+	if s.reconcileRunning {
+		return // the in-flight pass will cover this write, or loop once more
+	}
+	s.reconcileRunning = true
+	go s.fullReconcileLoop()
+}
+
+func (s *Server) fullReconcileLoop() {
+	delay := s.reconcileDelay
+	if delay <= 0 {
+		delay = defaultFullReconcileDelay
+	}
+	for {
+		time.Sleep(delay)
+		s.reconcileMu.Lock()
+		s.reconcilePending = false
+		s.reconcileMu.Unlock()
+
+		if err := s.db.InvalidateRenderCache(); err != nil {
+			slog.Warn("background reconcile invalidate", "err", err)
+		} else if err := s.Rescan(); err != nil {
+			slog.Warn("background reconcile", "err", err)
+		}
+
+		s.reconcileMu.Lock()
+		done := !s.reconcilePending // nothing landed while we were reconciling
+		s.reconcileRunning = !done
+		s.reconcileMu.Unlock()
+		if done {
+			return
+		}
+	}
 }
 
 // RunRescanLoop rescans on the configured interval until ctx is done. The

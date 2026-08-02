@@ -50,6 +50,9 @@ func (s *Server) mountKanban() error {
 	})
 	s.kanban = store
 	s.kanbanAuth = manager
+	// Task lines inside notes offer move-to-board, so the renderer needs the
+	// board list (and re-renders when it changes — see Engine.RenderSalt).
+	s.engine.SetBoards(s.boardNames)
 	s.mux.Handle("/kanban/", http.StripPrefix("/kanban", handler))
 	slog.Info("kanban enabled", "root", root)
 	return nil
