@@ -149,3 +149,33 @@ func TestReconcileRefreshesArchivedStatusOnFrontmatterChange(t *testing.T) {
 		t.Fatalf("after archiving, include-archived result = %#v, want archived via frontmatter:status", afterIncluded)
 	}
 }
+
+func TestReconcileSkipsTasksOnlyForCanonicalBooleanFalseAndKeepsNoteSearchable(t *testing.T) {
+	root := t.TempDir()
+	writeNote(t, root, "Hidden.md", "---\ntitle: Hidden project\ntasks: false\n---\nA searchable marmalade note.\n- [ ] Hidden task\n")
+	writeNote(t, root, "CaseSensitive.md", "---\nTasks: false\n---\n- [ ] Visible task\n")
+	writeNote(t, root, "StringFalse.md", "---\ntasks: \"false\"\n---\n- [ ] Also visible\n")
+	v, err := vault.Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.Reconcile(v, markdown.New("/")); err != nil {
+		t.Fatal(err)
+	}
+	all, err := db.AllTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 || all[0].Slug == "Hidden" || all[1].Slug == "Hidden" {
+		t.Fatalf("indexed tasks=%#v", all)
+	}
+	results, err := db.Search("marmalade", 10, false)
+	if err != nil || len(results) != 1 || results[0].Slug != "Hidden" {
+		t.Fatalf("hidden-task note search results=%#v err=%v", results, err)
+	}
+}

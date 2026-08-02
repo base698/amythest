@@ -176,6 +176,50 @@ func TestHandleTaskDueClearsDueDate(t *testing.T) {
 	}
 }
 
+func TestHandleTaskFileHideAddsFrontmatterAndReindexes(t *testing.T) {
+	root := t.TempDir()
+	rel := "Project.md"
+	content := []byte("# Project\n\n- [ ] Hide me\n")
+	if err := os.WriteFile(filepath.Join(root, rel), content, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	engine := markdown.New("/")
+	if err := db.Reconcile(v, engine); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{cfg: config.Config{Vault: root, BaseURL: "/"}, db: db, engine: engine}
+	s.vault.Store(v)
+	s.tree.Store(buildTree(v, "/"))
+
+	body := fmt.Sprintf(`{"slug":"Project","expectedVersion":%q}`, tasks.FileVersion(content))
+	rec := httptest.NewRecorder()
+	s.handleTaskFileHide(rec, httptest.NewRequest(http.MethodPost, "/api/tasks/file/hide", bytes.NewBufferString(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	got, _ := os.ReadFile(filepath.Join(root, rel))
+	if !strings.HasPrefix(string(got), "---\ntasks: false\n---\n# Project") {
+		t.Fatalf("hidden file=%q", got)
+	}
+	all, err := db.AllTasks()
+	if err != nil || len(all) != 0 {
+		t.Fatalf("tasks=%#v err=%v", all, err)
+	}
+	results, err := db.Search("Project", 10, false)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("note no longer searchable: %#v err=%v", results, err)
+	}
+}
+
 func TestHandleTaskFileDispositionArchivesAndReindexes(t *testing.T) {
 	root := t.TempDir()
 	rel := "Projects/Old.md"

@@ -97,8 +97,12 @@ func (d *DB) Reconcile(v *vault.Vault, e *markdown.Engine) error {
 		var noteTasks []tasks.Task
 		var fields []tasks.InlineField
 		// Kanban boards render their cards as checkboxes; those are reachable
-		// through the kanban API/tools and would double-count as tasks.
-		if !strings.HasPrefix(n.Path, "kanban/") {
+		// through the kanban API/tools and would double-count as tasks. Notes may
+		// also opt out with the case-sensitive canonical boolean `tasks: false`;
+		// the note itself is still rendered, linked, and indexed for search.
+		tasksEnabled, isBool := n.FM.Meta["tasks"].(bool)
+		tasksDisabled := isBool && !tasksEnabled
+		if !strings.HasPrefix(n.Path, "kanban/") && !tasksDisabled {
 			noteTasks, fields = tasks.ParseFile(n.Slug, n.Path, body)
 		}
 		if err := upsertNote(tx, n, res, noteTasks, fields); err != nil {

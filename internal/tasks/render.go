@@ -11,6 +11,12 @@ var priorityBadge = [6]string{"🔺", "⏫", "🔼", "", "🔽", "⏬"}
 // RenderHTML renders query result groups as a task list. Each task links
 // back to its source note.
 func RenderHTML(groups []Group, base string) string {
+	return RenderHTMLWithBoards(groups, base, nil)
+}
+
+// RenderHTMLWithBoards renders regular task rows with optional move-to-board
+// controls. Embedded task-query blocks call RenderHTML and remain read-only.
+func RenderHTMLWithBoards(groups []Group, base string, boards []string) string {
 	var b strings.Builder
 	b.WriteString(`<div class="tasks-list">`)
 	total := 0
@@ -24,7 +30,7 @@ func RenderHTML(groups []Group, base string) string {
 		}
 		b.WriteString("<ul>")
 		for _, t := range g.Tasks {
-			renderTask(&b, t, base)
+			renderTask(&b, t, base, boards)
 		}
 		b.WriteString("</ul>")
 	}
@@ -35,7 +41,7 @@ func RenderHTML(groups []Group, base string) string {
 	return b.String()
 }
 
-func renderTask(b *strings.Builder, t Task, base string) {
+func renderTask(b *strings.Builder, t Task, base string, boards []string) {
 	cls := "task-" + t.Status
 	checked := ""
 	if t.Status == StatusDone {
@@ -49,6 +55,7 @@ func renderTask(b *strings.Builder, t Task, base string) {
 		b.WriteString(` <span class="task-prio">` + p + `</span>`)
 	}
 	renderDueDateEditor(b, t)
+	renderMoveToBoardEditor(b, t, boards)
 	if t.Scheduled != "" {
 		b.WriteString(` <span class="task-date">⏳ ` + template.HTMLEscapeString(t.Scheduled) + `</span>`)
 	}
@@ -61,6 +68,23 @@ func renderTask(b *strings.Builder, t Task, base string) {
 	b.WriteString(` <a class="task-src" href="` + template.HTMLEscapeString(base+t.Slug) + `" title="` +
 		template.HTMLEscapeString(t.Path) + `">↗</a>`)
 	b.WriteString("</li>")
+}
+
+func renderMoveToBoardEditor(b *strings.Builder, t Task, boards []string) {
+	if t.Status != StatusOpen || len(boards) == 0 {
+		return
+	}
+	b.WriteString(` <details class="task-move-editor" data-task-move-editor data-slug="` +
+		template.HTMLEscapeString(t.Slug) + `" data-line="` + strconv.Itoa(t.Line) +
+		`" data-expected-text="` + template.HTMLEscapeString(t.Text) +
+		`" data-expected-status="` + template.HTMLEscapeString(t.Status) +
+		`" data-expected-version="` + template.HTMLEscapeString(t.Version) + `">`)
+	b.WriteString(`<summary>Move to board</summary><div class="task-move-controls"><label><span>Board</span><select data-task-board>`)
+	for _, board := range boards {
+		escaped := template.HTMLEscapeString(board)
+		b.WriteString(`<option value="` + escaped + `">` + escaped + `</option>`)
+	}
+	b.WriteString(`</select></label><button type="button" data-task-move-submit>Move</button></div></details>`)
 }
 
 func renderDueDateEditor(b *strings.Builder, t Task) {

@@ -13,6 +13,104 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestHideFileFromTasksAddsFrontmatterPreservingBodyModeAndCRLF(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "Project.md")
+	original := []byte("# Project\r\n\r\n- [ ] Ship release\r\n")
+	if err := os.WriteFile(path, original, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := HideFileFromTasks(root, "Project.md", FileVersion(original)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "---\r\ntasks: false\r\n---\r\n" + string(original)
+	if string(got) != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("mode=%v err=%v", info.Mode().Perm(), err)
+	}
+}
+
+func TestHideFileFromTasksAcceptsEmptyAndCommentOnlyFrontmatter(t *testing.T) {
+	for name, original := range map[string][]byte{
+		"empty":   []byte("---\n---\n- [ ] Task\n"),
+		"comment": []byte("---\n# keep this comment\n---\n- [ ] Task\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "Project.md")
+			if err := os.WriteFile(path, original, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := HideFileFromTasks(root, "Project.md", FileVersion(original)); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(got), "tasks: false") || !strings.Contains(string(got), "- [ ] Task") {
+				t.Fatalf("valid empty frontmatter was not updated safely: %q", got)
+			}
+			if name == "comment" && !strings.Contains(string(got), "# keep this comment") {
+				t.Fatalf("frontmatter comment was lost: %q", got)
+			}
+		})
+	}
+}
+
+func TestHideFileFromTasksUpdatesCanonicalKeyWithoutDuplicateAndIsIdempotent(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "Project.md")
+	original := []byte("---\ntitle: Project\ntasks: true\nTasks: keep-me\ntags: [work]\n---\n- [ ] Ship release\n")
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := HideFileFromTasks(root, "Project.md", FileVersion(original)); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := os.ReadFile(path)
+	if strings.Count(string(first), "tasks: false") != 1 || !strings.Contains(string(first), "Tasks: keep-me") || !strings.Contains(string(first), "tags: [work]") {
+		t.Fatalf("frontmatter not preserved: %s", first)
+	}
+	if err := HideFileFromTasks(root, "Project.md", FileVersion(first)); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := os.ReadFile(path)
+	if string(second) != string(first) {
+		t.Fatalf("idempotent hide changed content:\nfirst=%q\nsecond=%q", first, second)
+	}
+	if err := HideFileFromTasks(root, "Project.md", FileVersion(original)); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("stale idempotent request error=%v", err)
+	}
+}
+
+func TestHideFileFromTasksRejectsMalformedFrontmatterWithoutMutation(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "Broken.md")
+	for _, original := range [][]byte{
+		[]byte("---\ntitle: [broken\n---\n- [ ] Task\n"),
+		[]byte("---\ntitle: never closed\n- [ ] Task\n"),
+	} {
+		if err := os.WriteFile(path, original, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := HideFileFromTasks(root, "Broken.md", FileVersion(original)); err == nil || !strings.Contains(err.Error(), "frontmatter") {
+			t.Fatalf("expected malformed frontmatter rejection, got %v", err)
+		}
+		got, _ := os.ReadFile(path)
+		if string(got) != string(original) {
+			t.Fatalf("malformed note mutated: %q", got)
+		}
+	}
+}
+
 func TestUpdateDueDateInFilePreservesFrontmatter(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "Project.md")

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -34,10 +35,11 @@ var ErrBoardExists = errors.New("board already exists")
 var ErrCardExists = errors.New("card already exists on destination board")
 
 type Store struct {
-	root      string
-	now       func() time.Time
-	mutex     sync.Mutex
-	writeFile func(string, []byte) error
+	root        string
+	now         func() time.Time
+	mutex       sync.Mutex
+	writeFile   func(string, []byte) error
+	writeResult func(string, []byte) (bool, error)
 }
 
 type archiveJournal struct {
@@ -49,7 +51,7 @@ func NewStore(root string, clock func() time.Time) *Store {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Store{root: root, now: clock, writeFile: atomicWrite}
+	return &Store{root: root, now: clock, writeFile: atomicWrite, writeResult: atomicWriteResult}
 }
 
 func (s *Store) EnsureBoard(name string) error {
@@ -136,10 +138,88 @@ func (s *Store) UpdateBoardSettings(name string, dispatchEnabled bool) (Board, e
 }
 
 func (s *Store) CreateCard(name string, input CardInput) (Card, error) {
-	var created Card
-	err := s.withLock(name, func() error {
-		if err := s.ensureUnlocked(name); err != nil {
+	return s.createCard(name, input, true)
+}
+
+// CreateCardOnExistingBoard is the task-import path: it must never create a
+// board as a side effect of a stale or invalid selection.
+func (s *Store) CreateCardOnExistingBoard(name string, input CardInput) (Card, error) {
+	return s.createCard(name, input, false)
+}
+
+// TaskMoveBoard holds the selected board lock for the complete source/card
+// transaction, preventing edits, moves, archives, or deletes from racing its
+// compensating rollback.
+type TaskMoveBoard struct {
+	store *Store
+	name  string
+}
+
+func (s *Store) WithTaskMoveBoard(name string, fn func(*TaskMoveBoard) error) error {
+	if fn == nil {
+		return errors.New("task-move transaction callback is required")
+	}
+	return s.withBoardLocks([]string{name}, func() error {
+		if _, err := readBoard(s.boardPath(name)); err != nil {
 			return err
+		}
+		return fn(&TaskMoveBoard{store: s, name: name})
+	})
+}
+
+func (tx *TaskMoveBoard) Create(input CardInput) (Card, bool, error) {
+	return tx.store.createCardOnExistingBoardResultUnlocked(tx.name, input)
+}
+
+func (tx *TaskMoveBoard) DeleteExact(expected Card) (Card, bool, error) {
+	return tx.store.deleteTaskMoveCardResultUnlocked(tx.name, expected)
+}
+
+// CreateCardOnExistingBoardResult is the task-move transaction path. It
+// reports whether the board rename committed even when the following
+// directory sync reports an error.
+func (s *Store) CreateCardOnExistingBoardResult(name string, input CardInput) (Card, bool, error) {
+	var created Card
+	committed := false
+	err := s.withBoardLocks([]string{name}, func() error {
+		var err error
+		created, committed, err = s.createCardOnExistingBoardResultUnlocked(name, input)
+		return err
+	})
+	return created, committed, err
+}
+
+func (s *Store) createCardOnExistingBoardResultUnlocked(name string, input CardInput) (Card, bool, error) {
+	var created Card
+	if err := validateInput(input); err != nil {
+		return created, false, err
+	}
+	value, err := readBoard(s.boardPath(name))
+	if err != nil {
+		return created, false, err
+	}
+	now := s.now().UTC()
+	created = Card{
+		ID: newID(now), Title: strings.TrimSpace(input.Title), Description: strings.TrimSpace(input.Description),
+		DueDate: strings.TrimSpace(input.DueDate), Milestone: strings.ToLower(strings.TrimSpace(input.Milestone)),
+		Status: input.Status, Assignee: strings.TrimSpace(input.Assignee), Agent: strings.TrimSpace(input.Agent), Blocked: input.Blocked, Labels: normalizeLabels(input.Labels),
+		Comments: []Comment{}, Attachments: []Attachment{}, CreatedAt: now, UpdatedAt: now,
+	}
+	if created.Status == "" {
+		created.Status = Triage
+	}
+	value.Cards = append(value.Cards, created)
+	committed, err := s.writeResult(s.boardPath(name), renderBoard(value, false, s.now().UTC()))
+	return created, committed, err
+}
+
+func (s *Store) createCard(name string, input CardInput, ensure bool) (Card, error) {
+	var created Card
+	operation := func() error {
+		if ensure {
+			if err := s.ensureUnlocked(name); err != nil {
+				return err
+			}
 		}
 		if err := validateInput(input); err != nil {
 			return err
@@ -160,7 +240,13 @@ func (s *Store) CreateCard(name string, input CardInput) (Card, error) {
 		}
 		board.Cards = append(board.Cards, created)
 		return s.writeActive(name, board)
-	})
+	}
+	var err error
+	if ensure {
+		err = s.withLock(name, operation)
+	} else {
+		err = s.withBoardLocks([]string{name}, operation)
+	}
 	return created, err
 }
 
@@ -416,6 +502,40 @@ func (s *Store) DeleteCard(name, id string) (Card, error) {
 		return nil
 	})
 	return deleted, err
+}
+
+// DeleteTaskMoveCardResult removes a newly-created task card while reporting
+// whether the board rename committed. Task-import cards have no attachments;
+// if one gained attachments concurrently, retain it and let the source
+// reference be reapplied rather than deleting user data.
+func (s *Store) DeleteTaskMoveCardResult(name string, expected Card) (Card, bool, error) {
+	var deleted Card
+	committed := false
+	err := s.withLock(name, func() error {
+		var err error
+		deleted, committed, err = s.deleteTaskMoveCardResultUnlocked(name, expected)
+		return err
+	})
+	return deleted, committed, err
+}
+
+func (s *Store) deleteTaskMoveCardResultUnlocked(name string, expected Card) (Card, bool, error) {
+	var deleted Card
+	value, err := readBoard(s.boardPath(name))
+	if err != nil {
+		return deleted, false, err
+	}
+	index := cardIndex(value.Cards, expected.ID)
+	if index < 0 {
+		return deleted, false, os.ErrNotExist
+	}
+	deleted = value.Cards[index]
+	if !reflect.DeepEqual(deleted, expected) {
+		return deleted, false, errors.New("task-move card changed; refusing rollback deletion")
+	}
+	value.Cards = append(value.Cards[:index], value.Cards[index+1:]...)
+	committed, err := s.writeResult(s.boardPath(name), renderBoard(value, false, s.now().UTC()))
+	return deleted, committed, err
 }
 
 func (s *Store) ListArchived(name, query string, limit int) ([]Card, error) {
@@ -982,7 +1102,7 @@ func renderBoard(board Board, doneOnly bool, updated time.Time) []byte {
 				continue
 			}
 			found = true
-			fmt.Fprintf(&b, "### %s\n\n- **ID:** `%s`\n", card.Title, card.ID)
+			fmt.Fprintf(&b, "### %s ^card-%s\n\n- **ID:** `%s`\n", card.Title, card.ID, card.ID)
 			if card.Assignee != "" {
 				fmt.Fprintf(&b, "- **Assignee:** %s\n", card.Assignee)
 			}
@@ -1028,32 +1148,43 @@ func renderBoard(board Board, doneOnly bool, updated time.Time) []byte {
 }
 
 func atomicWrite(path string, data []byte) error {
+	_, err := atomicWriteResult(path, data)
+	return err
+}
+
+// atomicWriteResult reports whether rename installed data at path. An error
+// from the subsequent directory sync does not make the committed state
+// ambiguous to callers coordinating another file mutation.
+func atomicWriteResult(path string, data []byte) (bool, error) {
 	dir := filepath.Dir(path)
 	temp, err := os.CreateTemp(dir, ".kanban-*.tmp")
 	if err != nil {
-		return err
+		return false, err
 	}
 	tempName := temp.Name()
 	defer os.Remove(tempName)
 	if err := temp.Chmod(0o640); err != nil {
 		temp.Close()
-		return err
+		return false, err
 	}
 	if _, err := temp.Write(data); err != nil {
 		temp.Close()
-		return err
+		return false, err
 	}
 	if err := temp.Sync(); err != nil {
 		temp.Close()
-		return err
+		return false, err
 	}
 	if err := temp.Close(); err != nil {
-		return err
+		return false, err
 	}
 	if err := os.Rename(tempName, path); err != nil {
-		return err
+		return false, err
 	}
-	return syncDir(dir)
+	if err := syncDir(dir); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 func syncDir(path string) error {

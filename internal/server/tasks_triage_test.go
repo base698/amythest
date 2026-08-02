@@ -47,7 +47,7 @@ func TestRenderTaskTriageEscapesTaskTextAndProvidesActions(t *testing.T) {
 	if strings.Contains(html, "<script>") {
 		t.Fatalf("unescaped task text in %q", html)
 	}
-	for _, want := range []string{`data-task-triage`, `data-action="backlog"`, `data-action="due"`, `data-action="reference"`, `data-action="cancel"`, `data-file-action="backlog"`, `data-file-action="reference"`, `data-file-disposition="archive"`, `data-file-disposition="trash"`, `data-file-version="` + version + `"`, `Archive file`, `Move file to trash`, `class="triage-due-label">Due date`, `Projects/Work.md`} {
+	for _, want := range []string{`data-task-triage`, `data-action="backlog"`, `data-action="due"`, `data-action="reference"`, `data-action="cancel"`, `data-file-action="backlog"`, `data-file-action="reference"`, `data-file-hide`, `data-file-disposition="archive"`, `data-file-disposition="trash"`, `data-file-version="` + version + `"`, `Hide file from tasks`, `Archive file`, `Move file to trash`, `class="triage-due-label">Due date`, `Projects/Work.md`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %q in %q", want, html)
 		}

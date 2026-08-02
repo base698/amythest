@@ -6,6 +6,8 @@ import { buildTaskTogglePayload } from "./taskToggle"
 import {
   buildFileDispositionPayload,
   buildFileDispositionPrompt,
+  buildFileHidePayload,
+  buildTaskMovePayload,
   buildTriagePayload,
   type FileDispositionAction,
   type TriageAction,
@@ -31,6 +33,11 @@ export function setupTaskToggles() {
 
   document.addEventListener("click", (e) => {
     const target = e.target as Element
+    const moveButton = target.closest?.<HTMLButtonElement>("[data-task-move-submit]")
+    if (moveButton) {
+      void moveTaskToBoard(moveButton)
+      return
+    }
     const button = target.closest?.<HTMLButtonElement>(`${taskDueSaveSelector}, ${taskDueClearSelector}`)
     if (!button) return
     void updateDueDate(button, button.matches(taskDueClearSelector))
@@ -45,6 +52,11 @@ export function setupTaskTriage() {
 
   document.addEventListener("click", (e) => {
     const target = e.target as Element
+    const hideButton = target.closest?.<HTMLButtonElement>("[data-task-triage] button[data-file-hide]")
+    if (hideButton) {
+      void hideFileFromTasks(hideButton)
+      return
+    }
     const dispositionButton = target.closest?.<HTMLButtonElement>("[data-task-triage] button[data-file-disposition]")
     if (dispositionButton) {
       void disposeFile(dispositionButton)
@@ -68,6 +80,30 @@ export function setupTaskTriage() {
       file.hidden = query !== "" && !searchable.toLowerCase().includes(query)
     })
   })
+}
+
+async function hideFileFromTasks(button: HTMLButtonElement) {
+  const panel = button.closest<HTMLElement>("[data-selected-file]")
+  if (!panel) return
+  const path = panel.dataset.filePath || "this file"
+  if (!window.confirm(`Hide all tasks from “${path}”?\n\nAmythest will add tasks: false to the note. The note remains readable and searchable.`)) return
+
+  const allButtons = document.querySelectorAll<HTMLButtonElement>("[data-task-triage] button")
+  try {
+    const payload = buildFileHidePayload(panel.dataset.fileSlug || "", panel.dataset.fileVersion || "")
+    allButtons.forEach((el) => { el.disabled = true })
+    const res = await fetch(`${baseURL()}api/tasks/file/hide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) throw new Error((await res.text()) || `file hide failed (${res.status})`)
+    await refreshCurrent()
+  } catch (err) {
+    allButtons.forEach((el) => { el.disabled = false })
+    showToast(err instanceof Error ? err.message : "Couldn't hide the file from tasks")
+  }
 }
 
 async function disposeFile(button: HTMLButtonElement) {
@@ -223,6 +259,39 @@ async function updateDueDate(button: HTMLButtonElement, clear: boolean) {
   } catch (err) {
     controls.forEach((el) => { el.disabled = false })
     showToast(err instanceof Error ? err.message : "Couldn't update the due date")
+  }
+}
+
+async function moveTaskToBoard(button: HTMLButtonElement) {
+  const editor = button.closest<HTMLElement>("[data-task-move-editor]")
+  const select = editor?.querySelector<HTMLSelectElement>("[data-task-board]")
+  if (!editor || !select) return
+  const board = select.value
+  const task = editor.dataset.expectedText || "this task"
+  if (!window.confirm(`Move “${task}” to the ${board} board?\n\nThe source checkbox will become a reference link to the new card.`)) return
+
+  const controls = editor.querySelectorAll<HTMLSelectElement | HTMLButtonElement>("select, button")
+  try {
+    const payload = buildTaskMovePayload({
+      board,
+      slug: editor.dataset.slug || "",
+      line: Number(editor.dataset.line),
+      expectedText: editor.dataset.expectedText || "",
+      expectedStatus: editor.dataset.expectedStatus || "",
+      expectedVersion: editor.dataset.expectedVersion || "",
+    })
+    controls.forEach((el) => { el.disabled = true })
+    const res = await fetch(`${baseURL()}api/tasks/move-to-board`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) throw new Error((await res.text()) || `move to board failed (${res.status})`)
+    await refreshCurrent()
+  } catch (err) {
+    controls.forEach((el) => { el.disabled = false })
+    showToast(err instanceof Error ? err.message : "Couldn't move the task to a board")
   }
 }
 
