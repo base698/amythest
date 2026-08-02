@@ -66,6 +66,11 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 
 	var b strings.Builder
 	b.WriteString(s.tasksToolbar(statusFilter, sortKey, groupKey))
+	b.WriteString(`<div class="tasks-bulkbar" data-task-bulkbar hidden>` +
+		`<span class="muted" data-task-selcount></span> ` +
+		`<button type="button" data-task-bulk-cancel>Cancel selected</button> ` +
+		`<button type="button" class="danger" data-task-bulk-purge>Purge selected</button> ` +
+		`<button type="button" data-task-select-none>Clear selection</button></div>`)
 
 	if statusFilter == "" && sortKey == "" && groupKey == "" {
 		section := func(title, query string) {
@@ -79,7 +84,7 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			b.WriteString(`<h2>` + template.HTMLEscapeString(title) + `</h2>`)
-			b.WriteString(tasks.RenderHTMLWithBoards(groups, s.base(), boardNames))
+			b.WriteString(tasks.RenderHTMLWithOptions(groups, s.base(), tasks.RenderOptions{Boards: boardNames, Selectable: true}))
 		}
 		section("Overdue", "not done\ndue before today\nsort by due, priority")
 		section("Today", "not done\ndue on today\nsort by priority")
@@ -92,10 +97,7 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 		case "done":
 			lines = append(lines, "done")
 		case "all", "":
-		default:
-			lines = append(lines, "not done")
-		}
-		if statusFilter == "open" {
+		default: // "open" and anything unrecognized show only open tasks
 			lines = append(lines, "not done")
 		}
 		switch sortKey {
@@ -117,7 +119,7 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 			total += len(g.Tasks)
 		}
 		b.WriteString(`<p class="muted">` + itoa(total) + ` tasks</p>`)
-		b.WriteString(tasks.RenderHTMLWithBoards(groups, s.base(), boardNames))
+		b.WriteString(tasks.RenderHTMLWithOptions(groups, s.base(), tasks.RenderOptions{Boards: boardNames, Selectable: true}))
 	}
 
 	s.renderPage(w, pageData{
@@ -154,10 +156,12 @@ func (s *Server) handleTasksTriagePage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// tasksToolbar renders the status/sort/group controls as plain links.
+// tasksToolbar renders the status/sort/group controls as plain links. An
+// active chip links to the same view with its own dimension cleared, so
+// clicking it again toggles that filter off.
 func (s *Server) tasksToolbar(status, sortKey, group string) string {
 	var b strings.Builder
-	link := func(label, st, so, gr, current string, active bool) {
+	link := func(label, st, so, gr string, active bool) {
 		cls := "chip"
 		if active {
 			cls = "chip active"
@@ -178,13 +182,18 @@ func (s *Server) tasksToolbar(status, sortKey, group string) string {
 		}
 		b.WriteString(`<a class="` + cls + `" href="` + template.HTMLEscapeString(href) + `">` +
 			template.HTMLEscapeString(label) + `</a>`)
-		_ = current
+	}
+	toggle := func(current, k string) string {
+		if current == k {
+			return ""
+		}
+		return k
 	}
 	b.WriteString(`<div class="tasks-toolbar"><span class="eyebrow">Show</span>`)
-	link("Dashboard", "", "", "", status, status == "" && sortKey == "" && group == "")
-	link("Open", "open", sortKey, group, status, status == "open")
-	link("Done", "done", sortKey, group, status, status == "done")
-	link("All", "all", sortKey, group, status, status == "all")
+	link("Dashboard", "", "", "", status == "" && sortKey == "" && group == "")
+	link("Open", toggle(status, "open"), sortKey, group, status == "open")
+	link("Done", toggle(status, "done"), sortKey, group, status == "done")
+	link("All", toggle(status, "all"), sortKey, group, status == "all")
 	b.WriteString(`<a class="chip triage-chip" href="` + template.HTMLEscapeString(s.base()+"tasks/triage") + `">Triage no dates</a>`)
 	b.WriteString(`<span class="eyebrow">Sort</span>`)
 	for _, k := range []string{"due", "priority", "path", "description"} {
@@ -192,7 +201,7 @@ func (s *Server) tasksToolbar(status, sortKey, group string) string {
 		if st == "" {
 			st = "open"
 		}
-		link(k, st, k, group, sortKey, sortKey == k)
+		link(k, st, toggle(sortKey, k), group, sortKey == k)
 	}
 	b.WriteString(`<span class="eyebrow">Group</span>`)
 	for _, k := range []string{"folder", "priority", "status"} {
@@ -200,7 +209,7 @@ func (s *Server) tasksToolbar(status, sortKey, group string) string {
 		if st == "" {
 			st = "open"
 		}
-		link(k, st, sortKey, k, group, group == k)
+		link(k, st, sortKey, toggle(group, k), group == k)
 	}
 	b.WriteString(`</div>`)
 	return b.String()

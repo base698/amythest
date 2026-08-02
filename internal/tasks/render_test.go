@@ -20,6 +20,7 @@ func TestRenderHTMLIncludesDueDateEditor(t *testing.T) {
 		`data-expected-text="Ship release"`,
 		`data-expected-status="open"`,
 		`data-expected-due="2026-08-15"`,
+		`data-expected-version="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`,
 		`type="date"`,
 		`value="2026-08-15"`,
 		`data-task-due-save`,

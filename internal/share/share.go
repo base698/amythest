@@ -99,6 +99,17 @@ type Upload struct {
 
 var unsafeName = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
+// safeMime matches well-formed media types; anything else is replaced. The
+// note body renders with raw HTML enabled, so client-supplied strings must
+// never reach it unneutralized.
+var safeMime = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*/[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*$`)
+
+// escapeNoteText neutralizes raw-HTML injection and structure breaks for
+// client strings interpolated into the generated share note.
+var escapeNoteText = strings.NewReplacer(
+	"&", "&amp;", "<", "&lt;", "\r", " ", "\n", " ",
+)
+
 // SaveUpload stores the file and creates the wrapping note.
 func (s *Store) SaveUpload(name, title, mime string, r io.Reader, now time.Time) (*Upload, error) {
 	base := unsafeName.ReplaceAllString(filepath.Base(name), "-")
@@ -151,9 +162,12 @@ func (s *Store) SaveUpload(name, title, mime string, r io.Reader, now time.Time)
 		return nil, err
 	}
 
+	if !safeMime.MatchString(mime) {
+		mime = "application/octet-stream"
+	}
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "---\ntype: source\ncreated: %s\ntags: [share]\n---\n\n# %s\n\n![[%s]]\n",
-		now.Format("2006-01-02"), noteTitle, assetRel)
+		now.Format("2006-01-02"), escapeNoteText.Replace(noteTitle), assetRel)
 	fmt.Fprintf(&b, "\n- **Uploaded:** %s\n- **File:** `%s` (%s)\n",
 		now.Format("2006-01-02 15:04"), assetRel, mime)
 	if err := os.WriteFile(noteAbs, b.Bytes(), 0o644); err != nil {

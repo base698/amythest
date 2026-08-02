@@ -549,6 +549,35 @@ blockquote.transclude {
 
 // ---- tasks ----
 
+.tasks-bulkbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  margin: 0.6rem 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-alt);
+  font-size: 0.78rem;
+
+  &[hidden] { display: none; }
+
+  button {
+    padding: 0.28rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--fg-muted);
+    background: var(--bg);
+    font: inherit;
+    font-size: 0.72rem;
+    cursor: pointer;
+    &:hover { border-color: var(--accent); color: var(--accent); }
+    &.danger { border-color: color-mix(in srgb, #c64f4f 55%, var(--border)); color: #c64f4f; }
+    &:disabled { opacity: 0.5; cursor: not-allowed; }
+  }
+}
+
 .tasks-list {
   ul { list-style: none; padding-left: 0.25rem; margin: 0.5rem 0 1rem; }
 
@@ -560,6 +589,27 @@ blockquote.transclude {
     &.task-cancelled .task-text { color: var(--fg-faint); text-decoration: line-through; }
   }
 
+  .tasks-group {
+    margin: 1rem 0 0.25rem;
+    color: var(--fg-muted);
+    font-size: 0.95rem;
+  }
+
+  .tasks-empty { color: var(--fg-muted); font-style: italic; }
+}
+
+// Task row controls appear on /tasks (.tasks-list) and on task lines inside
+// rendered notes (article.note) — the markup is identical in both.
+.tasks-list, article.note {
+  .task-tag {
+    font-size: 0.75rem;
+    color: var(--accent);
+    background: var(--bg-alt);
+    border-radius: 5px;
+    padding: 0.05rem 0.35rem;
+    white-space: nowrap;
+  }
+
   .task-date {
     font-size: 0.75rem;
     color: var(--fg-muted);
@@ -569,6 +619,21 @@ blockquote.transclude {
     margin-left: 0.3rem;
     white-space: nowrap;
   }
+
+  .task-cancel, .task-purge {
+    margin-left: 0.3rem;
+    padding: 0.05rem 0.4rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--fg-muted);
+    background: var(--bg);
+    font: inherit;
+    font-size: 0.7rem;
+    cursor: pointer;
+    &:hover { border-color: #c64f4f; color: #c64f4f; }
+    &:disabled { opacity: 0.5; cursor: wait; }
+  }
+  .task-purge { border-color: color-mix(in srgb, #c64f4f 55%, var(--border)); color: #c64f4f; }
 
   .task-due-editor {
     display: inline-block;
@@ -639,14 +704,6 @@ blockquote.transclude {
     opacity: 0.6;
     &:hover { opacity: 1; text-decoration: none; }
   }
-
-  .tasks-group {
-    margin: 1rem 0 0.25rem;
-    color: var(--fg-muted);
-    font-size: 0.95rem;
-  }
-
-  .tasks-empty { color: var(--fg-muted); font-style: italic; }
 }
 
 .legacy-dataview {
@@ -841,6 +898,9 @@ input.task-toggle:disabled { cursor: wait; opacity: 0.6; }
   .triage-files input { box-sizing: border-box; width: 100%; margin: 0.45rem 0 0.7rem; padding: 0.48rem 0.6rem; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
   .triage-files nav { display: grid; gap: 0.25rem; }
   .triage-file { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.7rem; align-items: center; padding: 0.48rem 0.55rem; border-radius: 8px; color: var(--fg-muted); font-size: 0.78rem; }
+  // display: grid beats the user-agent [hidden] rule (see the modal note
+  // above), so the filter needs an explicit override to hide entries.
+  .triage-file[hidden] { display: none; }
   .triage-file span { overflow-wrap: anywhere; }
   .triage-file strong { min-width: 1.65rem; padding: 0.06rem 0.35rem; border-radius: 999px; background: var(--bg); text-align: center; font-size: 0.72rem; }
   .triage-file:hover, .triage-file.active { background: var(--highlight); color: var(--accent); text-decoration: none; }

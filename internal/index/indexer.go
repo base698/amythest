@@ -1,7 +1,9 @@
 package index
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"strings"
@@ -17,7 +19,32 @@ import (
 // next reconcile without anyone having to delete the data dir.
 const renderVersion = "7"
 
-func versionedHash(n *vault.Note) string { return n.Hash + "/" + renderVersion }
+// versionedHash is a note's change-detection identity: its own content hash
+// plus a fingerprint of the notes it directly transcludes, so a note's
+// cached HTML is invalidated when an embedded note changes. Only direct
+// embeds participate — cheap, deterministic, and covering what almost every
+// transclusion inlines; deeper chains stay bounded by maxEmbedDepth.
+func versionedHash(v *vault.Vault, n *vault.Note) string {
+	base := n.Hash + "/" + renderVersion
+	if len(n.Embeds) == 0 {
+		return base
+	}
+	seen := map[string]bool{}
+	var deps strings.Builder
+	for _, target := range n.Embeds {
+		dep, ok := v.Resolve(target)
+		if !ok || dep.Slug == n.Slug || seen[dep.Slug] {
+			continue
+		}
+		seen[dep.Slug] = true
+		deps.WriteString(dep.Hash)
+	}
+	if deps.Len() == 0 {
+		return base
+	}
+	sum := sha256.Sum256([]byte(deps.String()))
+	return base + "+" + hex.EncodeToString(sum[:8])
+}
 
 // Reconcile brings the database in line with a vault snapshot. Notes whose
 // hash is unchanged are skipped; new, changed, and deleted notes are
@@ -61,7 +88,7 @@ func (d *DB) Reconcile(v *vault.Vault, e *markdown.Engine) error {
 		if !ok {
 			slugSetChanged = true
 			work = append(work, n)
-		} else if old.hash != versionedHash(n) {
+		} else if old.hash != versionedHash(v, n) {
 			work = append(work, n)
 		}
 	}
@@ -105,7 +132,7 @@ func (d *DB) Reconcile(v *vault.Vault, e *markdown.Engine) error {
 		if !strings.HasPrefix(n.Path, "kanban/") && !tasksDisabled {
 			noteTasks, fields = tasks.ParseFile(n.Slug, n.Path, body)
 		}
-		if err := upsertNote(tx, n, res, noteTasks, fields); err != nil {
+		if err := upsertNote(tx, v, n, res, noteTasks, fields); err != nil {
 			return err
 		}
 	}
@@ -134,7 +161,7 @@ func deleteNote(tx *sql.Tx, slug string) error {
 	return nil
 }
 
-func upsertNote(tx *sql.Tx, n *vault.Note, res *markdown.Result, noteTasks []tasks.Task, fields []tasks.InlineField) error {
+func upsertNote(tx *sql.Tx, v *vault.Vault, n *vault.Note, res *markdown.Result, noteTasks []tasks.Task, fields []tasks.InlineField) error {
 	if err := deleteNote(tx, n.Slug); err != nil {
 		return err
 	}
@@ -149,7 +176,7 @@ func upsertNote(tx *sql.Tx, n *vault.Note, res *markdown.Result, noteTasks []tas
 	if _, err := tx.Exec(`INSERT INTO notes(slug,path,title,frontmatter,tags,aliases,mtime,ctime,hash,wordcount,archived,archived_reason)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		n.Slug, n.Path, n.Title, fmJSON, string(tagsJSON), string(aliasesJSON),
-		n.MTime.Unix(), ctimeUnix(n), versionedHash(n), len(strings.Fields(res.Plain)),
+		n.MTime.Unix(), ctimeUnix(n), versionedHash(v, n), len(strings.Fields(res.Plain)),
 		archived, archivedReason); err != nil {
 		return err
 	}

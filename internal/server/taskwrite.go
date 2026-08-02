@@ -14,16 +14,8 @@ import (
 // handleTaskFileHide opts an entire note out of task indexing while retaining
 // the note itself in rendering, links, and search.
 func (s *Server) handleTaskFileHide(w http.ResponseWriter, r *http.Request) {
-	if s.kanbanAuth != nil {
-		cookie, err := r.Cookie(kanbanSessionCookie)
-		if err != nil {
-			http.Error(w, "sign in to the kanban to edit tasks", http.StatusUnauthorized)
-			return
-		}
-		if _, err := s.kanbanAuth.Verify(cookie.Value, time.Now()); err != nil {
-			http.Error(w, "session expired: sign in to the kanban again", http.StatusUnauthorized)
-			return
-		}
+	if !s.requireKanbanSession(w, r, "edit tasks") {
+		return
 	}
 	var req struct {
 		Slug            string `json:"slug"`
@@ -65,16 +57,8 @@ func (s *Server) handleTaskFileHide(w http.ResponseWriter, r *http.Request) {
 // owns those files) and, when kanban auth is configured, a valid session is
 // required so the write path is never weaker than the kanban API.
 func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
-	if s.kanbanAuth != nil {
-		cookie, err := r.Cookie(kanbanSessionCookie)
-		if err != nil {
-			http.Error(w, "sign in to the kanban to edit tasks", http.StatusUnauthorized)
-			return
-		}
-		if _, err := s.kanbanAuth.Verify(cookie.Value, time.Now()); err != nil {
-			http.Error(w, "session expired: sign in to the kanban again", http.StatusUnauthorized)
-			return
-		}
+	if !s.requireKanbanSession(w, r, "edit tasks") {
+		return
 	}
 
 	var req struct {
@@ -119,28 +103,22 @@ func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTaskDue sets, changes, or clears the due date on an indexed task.
-// The request carries the rendered text and prior due date so stale rows are
-// rejected before the shared atomic writer replaces the note.
+// The request carries the rendered text, prior due date, and whole-file
+// version so stale rows are rejected before the shared atomic writer
+// replaces the note.
 func (s *Server) handleTaskDue(w http.ResponseWriter, r *http.Request) {
-	if s.kanbanAuth != nil {
-		cookie, err := r.Cookie(kanbanSessionCookie)
-		if err != nil {
-			http.Error(w, "sign in to the kanban to edit tasks", http.StatusUnauthorized)
-			return
-		}
-		if _, err := s.kanbanAuth.Verify(cookie.Value, time.Now()); err != nil {
-			http.Error(w, "session expired: sign in to the kanban again", http.StatusUnauthorized)
-			return
-		}
+	if !s.requireKanbanSession(w, r, "edit tasks") {
+		return
 	}
 
 	var req struct {
-		Slug           string `json:"slug"`
-		Line           int    `json:"line"`
-		ExpectedText   string `json:"expectedText"`
-		ExpectedStatus string `json:"expectedStatus"`
-		ExpectedDue    string `json:"expectedDue"`
-		Due            string `json:"due"`
+		Slug            string `json:"slug"`
+		Line            int    `json:"line"`
+		ExpectedText    string `json:"expectedText"`
+		ExpectedStatus  string `json:"expectedStatus"`
+		ExpectedDue     string `json:"expectedDue"`
+		ExpectedVersion string `json:"expectedVersion"`
+		Due             string `json:"due"`
 	}
 	if err := jsonDecode(r, &req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -148,6 +126,10 @@ func (s *Server) handleTaskDue(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Slug == "" || len(req.Slug) > 512 || req.Line < 1 || len(req.ExpectedText) > 10_000 {
 		http.Error(w, "slug, positive line, and expectedText of at most 10000 characters are required", http.StatusBadRequest)
+		return
+	}
+	if len(req.ExpectedVersion) != 64 {
+		http.Error(w, "expectedVersion is required; refresh and retry", http.StatusBadRequest)
 		return
 	}
 	if req.ExpectedStatus != tasks.StatusOpen && req.ExpectedStatus != tasks.StatusDone && req.ExpectedStatus != tasks.StatusCancelled && req.ExpectedStatus != tasks.StatusOther {
@@ -175,7 +157,7 @@ func (s *Server) handleTaskDue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "kanban boards are managed through the kanban API", http.StatusForbidden)
 		return
 	}
-	if err := tasks.UpdateDueDateInFileAndReindex(v.Root, n.Path, req.Line, req.ExpectedText, req.ExpectedStatus, req.ExpectedDue, req.Due, s.rescanWhileVaultLocked); err != nil {
+	if err := tasks.UpdateDueDateInFileAndReindex(v.Root, n.Path, req.Line, req.ExpectedText, req.ExpectedStatus, req.ExpectedDue, req.Due, req.ExpectedVersion, s.rescanWhileVaultLocked); err != nil {
 		status := http.StatusConflict
 		if errors.Is(err, os.ErrNotExist) {
 			status = http.StatusNotFound
@@ -190,16 +172,8 @@ func (s *Server) handleTaskDue(w http.ResponseWriter, r *http.Request) {
 // deadline. It uses the same vault-note lookup, auth gate, kanban exclusion,
 // atomic write, and immediate reindex contract as task toggles.
 func (s *Server) handleTaskTriage(w http.ResponseWriter, r *http.Request) {
-	if s.kanbanAuth != nil {
-		cookie, err := r.Cookie(kanbanSessionCookie)
-		if err != nil {
-			http.Error(w, "sign in to the kanban to edit tasks", http.StatusUnauthorized)
-			return
-		}
-		if _, err := s.kanbanAuth.Verify(cookie.Value, time.Now()); err != nil {
-			http.Error(w, "session expired: sign in to the kanban again", http.StatusUnauthorized)
-			return
-		}
+	if !s.requireKanbanSession(w, r, "edit tasks") {
+		return
 	}
 
 	type requestItem struct {
@@ -292,16 +266,8 @@ func (s *Server) handleTaskTriage(w http.ResponseWriter, r *http.Request) {
 // "trash" moves it under Obsidian's hidden .trash tree. Neither action unlinks
 // content permanently or overwrites an existing destination.
 func (s *Server) handleTaskFileDisposition(w http.ResponseWriter, r *http.Request) {
-	if s.kanbanAuth != nil {
-		cookie, err := r.Cookie(kanbanSessionCookie)
-		if err != nil {
-			http.Error(w, "sign in to the kanban to edit tasks", http.StatusUnauthorized)
-			return
-		}
-		if _, err := s.kanbanAuth.Verify(cookie.Value, time.Now()); err != nil {
-			http.Error(w, "session expired: sign in to the kanban again", http.StatusUnauthorized)
-			return
-		}
+	if !s.requireKanbanSession(w, r, "edit tasks") {
+		return
 	}
 
 	var req struct {
@@ -349,6 +315,127 @@ func (s *Server) handleTaskFileDisposition(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.writeJSON(w, map[string]any{"ok": true, "destination": destination})
+}
+
+// handleTaskCancel marks open tasks cancelled ([-] + ❌ date) — the
+// recoverable first half of deletion. Single-file batch, whole-file version
+// guard.
+func (s *Server) handleTaskCancel(w http.ResponseWriter, r *http.Request) {
+	if !s.requireKanbanSession(w, r, "edit tasks") {
+		return
+	}
+	var req struct {
+		Slug            string `json:"slug"`
+		ExpectedVersion string `json:"expectedVersion"`
+		Items           []struct {
+			Line         int    `json:"line"`
+			ExpectedText string `json:"expectedText"`
+		} `json:"items"`
+	}
+	if err := jsonDecodeLimit(r, &req, 8<<20); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Slug == "" || len(req.Slug) > 512 {
+		http.Error(w, "slug is required and must be at most 512 characters", http.StatusBadRequest)
+		return
+	}
+	if len(req.ExpectedVersion) != 64 {
+		http.Error(w, "expectedVersion is required; refresh and retry", http.StatusBadRequest)
+		return
+	}
+	if len(req.Items) == 0 || len(req.Items) > taskTriageBatchLimit {
+		http.Error(w, "between 1 and 5000 tasks may be cancelled at once", http.StatusBadRequest)
+		return
+	}
+	items := make([]tasks.CancelItem, 0, len(req.Items))
+	for _, item := range req.Items {
+		if item.Line < 1 || len(item.ExpectedText) > 10_000 {
+			http.Error(w, "each task needs a positive line and expectedText of at most 10000 characters", http.StatusBadRequest)
+			return
+		}
+		items = append(items, tasks.CancelItem{Line: item.Line, ExpectedText: item.ExpectedText})
+	}
+
+	s.taskWriteMu.Lock()
+	defer s.taskWriteMu.Unlock()
+	v := s.vault.Load()
+	n, ok := v.BySlug(req.Slug)
+	if !ok {
+		http.Error(w, "note not found", http.StatusNotFound)
+		return
+	}
+	if strings.HasPrefix(n.Path, "kanban/") {
+		http.Error(w, "kanban boards are managed through the kanban API", http.StatusForbidden)
+		return
+	}
+	if err := tasks.CancelTasksInFileAndReindex(v.Root, n.Path, items, req.ExpectedVersion, time.Now(), s.rescanWhileVaultLocked); err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	s.writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleTaskPurge permanently removes cancelled task lines — the destructive
+// second half of deletion. Only cancelled tasks qualify, so nothing open or
+// done can be removed in one step.
+func (s *Server) handleTaskPurge(w http.ResponseWriter, r *http.Request) {
+	if !s.requireKanbanSession(w, r, "edit tasks") {
+		return
+	}
+	var req struct {
+		Slug            string `json:"slug"`
+		ExpectedVersion string `json:"expectedVersion"`
+		Lines           []int  `json:"lines"`
+	}
+	if err := jsonDecodeLimit(r, &req, 8<<20); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Slug == "" || len(req.Slug) > 512 {
+		http.Error(w, "slug is required and must be at most 512 characters", http.StatusBadRequest)
+		return
+	}
+	if len(req.ExpectedVersion) != 64 {
+		http.Error(w, "expectedVersion is required; refresh and retry", http.StatusBadRequest)
+		return
+	}
+	if len(req.Lines) == 0 || len(req.Lines) > taskTriageBatchLimit {
+		http.Error(w, "between 1 and 5000 tasks may be purged at once", http.StatusBadRequest)
+		return
+	}
+	for _, line := range req.Lines {
+		if line < 1 {
+			http.Error(w, "each line must be positive", http.StatusBadRequest)
+			return
+		}
+	}
+
+	s.taskWriteMu.Lock()
+	defer s.taskWriteMu.Unlock()
+	v := s.vault.Load()
+	n, ok := v.BySlug(req.Slug)
+	if !ok {
+		http.Error(w, "note not found", http.StatusNotFound)
+		return
+	}
+	if strings.HasPrefix(n.Path, "kanban/") {
+		http.Error(w, "kanban boards are managed through the kanban API", http.StatusForbidden)
+		return
+	}
+	if err := tasks.PurgeCancelledInFileAndReindex(v.Root, n.Path, req.Lines, req.ExpectedVersion, s.rescanWhileVaultLocked); err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	s.writeJSON(w, map[string]any{"ok": true})
 }
 
 // toggleInFile delegates to the shared task writer so this path and the MCP

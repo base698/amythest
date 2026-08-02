@@ -24,7 +24,6 @@ echo "# compat vault" > "$TMP/vault/index.md"
 export KANBAN_USERNAME=compat
 export KANBAN_PASSWORD='compat-password-1'
 export KANBAN_SESSION_SECRET='0123456789abcdef0123456789abcdef'
-export KANBAN_BASE_URL="http://127.0.0.1:8641/kanban"
 export KANBAN_SESSION_FILE="$TMP/session.json"
 export KANBAN_ENV_FILE="$TMP/no-env-file"
 

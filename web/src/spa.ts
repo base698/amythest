@@ -55,7 +55,9 @@ async function go(url: URL, push: boolean, onNav: () => void, keepScroll = false
     await morph(document, next)
     if (!keepScroll) {
       if (url.hash) {
-        document.querySelector(url.hash)?.scrollIntoView()
+        // Not querySelector: heading ids can start with a digit ("2026-plan"),
+        // which is an invalid CSS selector.
+        document.getElementById(decodeURIComponent(url.hash.slice(1)))?.scrollIntoView()
       } else {
         window.scrollTo(0, 0)
       }

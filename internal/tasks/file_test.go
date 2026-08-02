@@ -14,7 +14,7 @@ import (
 )
 
 func TestHideFileFromTasksAddsFrontmatterPreservingBodyModeAndCRLF(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	path := filepath.Join(root, "Project.md")
 	original := []byte("# Project\r\n\r\n- [ ] Ship release\r\n")
 	if err := os.WriteFile(path, original, 0o640); err != nil {
@@ -43,7 +43,7 @@ func TestHideFileFromTasksAcceptsEmptyAndCommentOnlyFrontmatter(t *testing.T) {
 		"comment": []byte("---\n# keep this comment\n---\n- [ ] Task\n"),
 	} {
 		t.Run(name, func(t *testing.T) {
-			root := t.TempDir()
+			root := tempVaultDir(t)
 			path := filepath.Join(root, "Project.md")
 			if err := os.WriteFile(path, original, 0o644); err != nil {
 				t.Fatal(err)
@@ -66,7 +66,7 @@ func TestHideFileFromTasksAcceptsEmptyAndCommentOnlyFrontmatter(t *testing.T) {
 }
 
 func TestHideFileFromTasksUpdatesCanonicalKeyWithoutDuplicateAndIsIdempotent(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	path := filepath.Join(root, "Project.md")
 	original := []byte("---\ntitle: Project\ntasks: true\nTasks: keep-me\ntags: [work]\n---\n- [ ] Ship release\n")
 	if err := os.WriteFile(path, original, 0o644); err != nil {
@@ -92,7 +92,7 @@ func TestHideFileFromTasksUpdatesCanonicalKeyWithoutDuplicateAndIsIdempotent(t *
 }
 
 func TestHideFileFromTasksRejectsMalformedFrontmatterWithoutMutation(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	path := filepath.Join(root, "Broken.md")
 	for _, original := range [][]byte{
 		[]byte("---\ntitle: [broken\n---\n- [ ] Task\n"),
@@ -112,14 +112,14 @@ func TestHideFileFromTasksRejectsMalformedFrontmatterWithoutMutation(t *testing.
 }
 
 func TestUpdateDueDateInFilePreservesFrontmatter(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	path := filepath.Join(root, "Project.md")
 	original := "---\ntype: project\n---\n- [ ] Ship release 📅 2026-08-15\n"
 	if err := os.WriteFile(path, []byte(original), 0o640); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := UpdateDueDateInFile(root, "Project.md", 1, "Ship release", StatusOpen, "2026-08-15", "2026-08-20"); err != nil {
+	if err := UpdateDueDateInFile(root, "Project.md", 1, "Ship release", StatusOpen, "2026-08-15", "2026-08-20", FileVersion([]byte(original))); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(path)
@@ -132,7 +132,7 @@ func TestUpdateDueDateInFilePreservesFrontmatter(t *testing.T) {
 }
 
 func TestVaultOperationsRejectSymlinkedRootPath(t *testing.T) {
-	parent := t.TempDir()
+	parent := tempVaultDir(t)
 	realRoot := filepath.Join(parent, "real")
 	if err := os.Mkdir(realRoot, 0o755); err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestTaskVaultWriteLockHelperProcess(t *testing.T) {
 }
 
 func TestTaskVaultWriteLockSerializesProcesses(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	start := func() (*exec.Cmd, *bufio.Scanner, func()) {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestTaskVaultWriteLockHelperProcess$")
 		cmd.Env = append(os.Environ(), "AMYTHEST_LOCK_TEST_ROOT="+root)
@@ -223,7 +223,7 @@ func TestTaskVaultWriteLockSerializesProcesses(t *testing.T) {
 // ToggleInFile is shared by the web UI's HTTP handler and the MCP toggle_task
 // tool, so it is covered directly rather than only through ToggleLine.
 func TestWithTaskVaultWriteLockSerializesWriters(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	firstEntered := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	firstDone := make(chan error, 1)
@@ -276,7 +276,7 @@ func TestWithTaskVaultWriteLockSerializesWriters(t *testing.T) {
 }
 
 func TestRollbackTaskExchangePreservesASecondConcurrentEdit(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	path := filepath.Join(root, "note.md")
 	if err := os.WriteFile(path, []byte("external-before"), 0o644); err != nil {
 		t.Fatal(err)
@@ -295,7 +295,7 @@ func TestRollbackTaskExchangePreservesASecondConcurrentEdit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := unix.Renameat2(parentFD, tmp, parentFD, leaf, unix.RENAME_EXCHANGE); err != nil {
+	if err := renameExchangeAt(parentFD, tmp, parentFD, leaf); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte("external-after"), 0o644); err != nil {
@@ -316,7 +316,7 @@ func TestRollbackTaskExchangePreservesASecondConcurrentEdit(t *testing.T) {
 }
 
 func TestReplaceTaskFileRejectsConcurrentEdit(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	path := filepath.Join(root, "note.md")
 	expected := []byte("- [ ] Original\n")
 	concurrent := []byte("owner: changed elsewhere\n- [ ] Original\n")
@@ -348,7 +348,7 @@ func TestReplaceTaskFileRejectsConcurrentEdit(t *testing.T) {
 }
 
 func TestReplaceExistingNoteFileRejectsEditAfterReadAndPreservesIt(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	path := filepath.Join(root, "note.md")
 	expected := []byte("original")
 	external := []byte("external edit")
@@ -377,7 +377,7 @@ func TestReplaceExistingNoteFileRejectsEditAfterReadAndPreservesIt(t *testing.T)
 }
 
 func TestWriteNoteFileUsesSharedSafeAtomicPath(t *testing.T) {
-	parent := t.TempDir()
+	parent := tempVaultDir(t)
 	root := filepath.Join(parent, "vault")
 	outside := filepath.Join(parent, "outside")
 	if err := os.Mkdir(root, 0o755); err != nil {
@@ -419,7 +419,7 @@ func TestWriteNoteFileUsesSharedSafeAtomicPath(t *testing.T) {
 }
 
 func TestMoveFileInVaultRejectsMalformedVersion(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	if err := os.WriteFile(filepath.Join(root, "Old.md"), []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -433,7 +433,7 @@ func TestMoveFileInVaultRejectsMalformedVersion(t *testing.T) {
 }
 
 func TestMoveFileInVaultArchivesAndPreservesRelativePath(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	source := "Projects/Old.md"
 	if err := os.MkdirAll(filepath.Join(root, "Projects"), 0o755); err != nil {
 		t.Fatal(err)
@@ -464,7 +464,7 @@ func TestMoveFileInVaultArchivesAndPreservesRelativePath(t *testing.T) {
 }
 
 func TestMoveFileInVaultTrashRejectsCollisionAndStaleVersion(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	source := "Old.md"
 	content := []byte("# Old\n")
 	if err := os.WriteFile(filepath.Join(root, source), content, 0o644); err != nil {
@@ -497,7 +497,7 @@ func TestMoveFileInVaultTrashRejectsCollisionAndStaleVersion(t *testing.T) {
 }
 
 func TestMoveFileInVaultRejectsSourceSymlink(t *testing.T) {
-	parent := t.TempDir()
+	parent := tempVaultDir(t)
 	root := filepath.Join(parent, "vault")
 	if err := os.Mkdir(root, 0o755); err != nil {
 		t.Fatal(err)
@@ -519,7 +519,7 @@ func TestMoveFileInVaultRejectsSourceSymlink(t *testing.T) {
 }
 
 func TestToggleInFilePreservesMode(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	path := filepath.Join(root, "mode.md")
 	if err := os.WriteFile(path, []byte("- [ ] Task\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -540,7 +540,7 @@ func TestToggleInFilePreservesMode(t *testing.T) {
 }
 
 func TestToggleAndReindexHoldVaultLockAsOneCriticalSection(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	content := []byte("- [ ] Task\n")
 	if err := os.WriteFile(filepath.Join(root, "note.md"), content, 0o644); err != nil {
 		t.Fatal(err)
@@ -583,7 +583,7 @@ func TestToggleAndReindexHoldVaultLockAsOneCriticalSection(t *testing.T) {
 }
 
 func TestToggleInFileCompletesAndRecurs(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	rel := "Chores.md"
 	original := "# Chores\n\n- [ ] Water the plants 🔁 every week 📅 2026-07-01\n- [ ] Buy milk\n"
 	if err := os.WriteFile(filepath.Join(root, rel), []byte(original), 0o644); err != nil {
@@ -628,7 +628,7 @@ func TestToggleInFileCompletesAndRecurs(t *testing.T) {
 }
 
 func TestToggleInFileRejectsStaleVersionAfterTaskLineShift(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	rel := "Chores.md"
 	original := []byte("- [ ] Water plants 🔁 every week\n- [ ] Buy milk\n")
 	if err := os.WriteFile(filepath.Join(root, rel), original, 0o644); err != nil {
@@ -656,7 +656,7 @@ func TestToggleInFileRejectsStaleVersionAfterTaskLineShift(t *testing.T) {
 // disagreed, completing a task in any note with frontmatter would silently tick
 // a different one — this pins the contract.
 func TestToggleInFileLinesAreBodyRelative(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	rel := "note.md"
 	original := "---\ntitle: Example\ntags: [a]\n---\n\n- [ ] First\n- [ ] Second\n"
 	if err := os.WriteFile(filepath.Join(root, rel), []byte(original), 0o644); err != nil {
@@ -683,7 +683,7 @@ func TestToggleInFileLinesAreBodyRelative(t *testing.T) {
 }
 
 func TestToggleInFileRejectsNonTaskLine(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	rel := "note.md"
 	if err := os.WriteFile(filepath.Join(root, rel),
 		[]byte("just prose\n"), 0o644); err != nil {

@@ -9,7 +9,7 @@ import (
 )
 
 func TestMoveTaskToBoardReplacesOpenCheckboxWithReferenceAfterCardCreation(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	path := filepath.Join(root, "Project.md")
 	original := []byte("# Project\n\n  - [ ] Ship release 📅 2026-08-20 #launch\n")
 	if err := os.WriteFile(path, original, 0o640); err != nil {
@@ -53,7 +53,7 @@ func TestMoveTaskToBoardReplacesOpenCheckboxWithReferenceAfterCardCreation(t *te
 }
 
 func TestMoveTaskToBoardValidatesVersionTextAndOpenStatusBeforeCreatingCard(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	original := []byte("- [x] Finished\n")
 	if err := os.WriteFile(filepath.Join(root, "Project.md"), original, 0o644); err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestMoveTaskToBoardValidatesVersionTextAndOpenStatusBeforeCreatingCard(t *t
 }
 
 func TestMoveTaskToBoardKeepsCardWhenSourceCommitReportsCleanupError(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	path := filepath.Join(root, "Project.md")
 	original := []byte("- [ ] Keep safe\n")
 	if err := os.WriteFile(path, original, 0o644); err != nil {
@@ -111,7 +111,7 @@ func TestMoveTaskToBoardKeepsCardWhenSourceCommitReportsCleanupError(t *testing.
 }
 
 func TestMoveTaskToBoardReappliesReferenceWhenCardRollbackFails(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	path := filepath.Join(root, "Project.md")
 	original := []byte("- [ ] Keep safe\n")
 	if err := os.WriteFile(path, original, 0o644); err != nil {
@@ -146,7 +146,7 @@ func TestMoveTaskToBoardReappliesReferenceWhenCardRollbackFails(t *testing.T) {
 }
 
 func TestMoveTaskToBoardRollsBackCardAndSourceWhenReindexFails(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	path := filepath.Join(root, "Project.md")
 	original := []byte("- [ ] Keep safe\n")
 	if err := os.WriteFile(path, original, 0o644); err != nil {

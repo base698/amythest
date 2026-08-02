@@ -4,6 +4,7 @@ export interface TaskDueContext {
   expectedText: string
   expectedStatus: string
   expectedDue: string
+  expectedVersion: string
 }
 
 export interface TaskDuePayload extends TaskDueContext {
@@ -17,6 +18,9 @@ export const taskDueEndpoint = "api/tasks/due"
 export function buildTaskDuePayload(context: TaskDueContext, due: string): TaskDuePayload {
   if (!context.slug || !Number.isInteger(context.line) || context.line < 1 || !context.expectedStatus) {
     throw new Error("Task location is missing; refresh the page")
+  }
+  if (!/^[0-9a-f]{64}$/.test(context.expectedVersion)) {
+    throw new Error("Task version missing; refresh the page")
   }
   if (due !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(due)) {
     throw new Error("Choose a valid due date")

@@ -142,6 +142,10 @@ func registerNoteTools(server *sdk.Server, deps Deps) {
 			if err != nil {
 				return nil, searchOut{}, err
 			}
+			for i := range res {
+				res[i].Excerpt = strings.ReplaceAll(res[i].Excerpt, "\x02", "**")
+				res[i].Excerpt = strings.ReplaceAll(res[i].Excerpt, "\x03", "**")
+			}
 			return nil, searchOut{Results: res}, nil
 		})
 

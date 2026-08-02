@@ -699,6 +699,56 @@ func TestLoadRecoversInterruptedDoneArchiveFromJournal(t *testing.T) {
 	}
 }
 
+func TestLoadNonexistentBoardLeavesNoDirectoryBehind(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root, fixedClock)
+	if _, err := store.Load("nonexistent"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("load error = %v, want os.ErrNotExist", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "nonexistent")); !os.IsNotExist(err) {
+		t.Fatalf("read of a nonexistent board created its directory: %v", err)
+	}
+	if _, err := store.ListArchived("nonexistent", "", 10); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("archive list error = %v, want os.ErrNotExist", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("read-only probes left artifacts behind: %v", entries)
+	}
+}
+
+func TestLoadQuarantinesCorruptDoneArchiveJournal(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root, fixedClock)
+	if err := store.EnsureBoard("proof"); err != nil {
+		t.Fatal(err)
+	}
+	card, err := store.CreateCard("proof", CardInput{Title: "Survive corruption", Status: Ready})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.journalPath("proof"), []byte("{truncated garbage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load("proof")
+	if err != nil {
+		t.Fatalf("corrupt journal blocked reads: %v", err)
+	}
+	if cardIndex(loaded.Cards, card.ID) < 0 {
+		t.Fatalf("board content lost: %#v", loaded.Cards)
+	}
+	if _, err := os.Stat(store.journalPath("proof")); !os.IsNotExist(err) {
+		t.Fatalf("corrupt journal was not moved aside: %v", err)
+	}
+	quarantined := fmt.Sprintf("%s.corrupt-%d", store.journalPath("proof"), fixedClock().UTC().Unix())
+	if payload, err := os.ReadFile(quarantined); err != nil || string(payload) != "{truncated garbage" {
+		t.Fatalf("quarantined journal payload=%q err=%v", payload, err)
+	}
+}
+
 func TestRestoreCardMovesDoneCardBackToActiveBoard(t *testing.T) {
 	store := NewStore(t.TempDir(), fixedClock)
 	if err := store.EnsureBoard("operations"); err != nil {

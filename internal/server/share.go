@@ -4,6 +4,8 @@ import (
 	"html/template"
 	"net/http"
 	"time"
+
+	"github.com/base698/amythest/internal/share"
 )
 
 // handleSharePage renders the /share capture page.
@@ -47,22 +49,16 @@ func (s *Server) sharePluginsBlurb() string {
 // handleShareUpload accepts the multipart upload, stores it, creates the
 // note, kicks plugins off in the background, and reindexes.
 func (s *Server) handleShareUpload(w http.ResponseWriter, r *http.Request) {
-	if s.kanbanAuth != nil {
-		cookie, err := r.Cookie(kanbanSessionCookie)
-		if err != nil {
-			http.Error(w, "sign in to the kanban to share", http.StatusUnauthorized)
-			return
-		}
-		if _, err := s.kanbanAuth.Verify(cookie.Value, time.Now()); err != nil {
-			http.Error(w, "session expired: sign in to the kanban again", http.StatusUnauthorized)
-			return
-		}
+	if !s.requireKanbanSession(w, r, "share") {
+		return
 	}
 	if s.share == nil {
 		http.Error(w, "share not configured", http.StatusNotFound)
 		return
 	}
 
+	// Cap the request body before the multipart parser spools it to disk.
+	r.Body = http.MaxBytesReader(w, r.Body, share.MaxUploadBytes+(1<<20))
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

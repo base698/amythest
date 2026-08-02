@@ -11,7 +11,11 @@ Amythest is a single binary. A typical small-server deployment:
 4. `systemctl --user daemon-reload && systemctl --user enable --now amythest`.
 5. Put a TLS-terminating proxy in front (Tailscale Serve, Caddy, nginx).
    Amythest binds loopback by default. If it serves under a path prefix,
-   pass `-base-url /notes` and have the proxy strip the prefix.
+   pass `-base-url /notes`; the server accepts both stripped and unstripped
+   request paths, so the proxy may forward either form. Proxies should send
+   `X-Forwarded-Prefix` (the kanban SPA uses it to point its asset URLs at
+   the public mount). Serve everything from one prefix — do not add a
+   second top-level route into the same instance.
 
 Monitoring: `/metrics` exposes Prometheus series (request histograms,
 vault gauges, rescan health). A reasonable alert is resident memory

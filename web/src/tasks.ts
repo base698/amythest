@@ -18,6 +18,13 @@ import {
   taskDueEndpoint,
   taskDueSaveSelector,
 } from "./taskDue"
+import {
+  buildCancelPayloads,
+  buildPurgePayloads,
+  taskCancelEndpoint,
+  taskPurgeEndpoint,
+  type SelectedTask,
+} from "./taskDelete"
 
 let bound = false
 
@@ -27,8 +34,11 @@ export function setupTaskToggles() {
 
   document.addEventListener("change", (e) => {
     const box = e.target as HTMLInputElement
-    if (!box.matches?.("input.task-toggle")) return
-    void toggle(box)
+    if (box.matches?.("input.task-toggle")) {
+      void toggle(box)
+      return
+    }
+    if (box.matches?.("[data-task-select]")) updateBulkBar()
   })
 
   document.addEventListener("click", (e) => {
@@ -38,10 +48,152 @@ export function setupTaskToggles() {
       void moveTaskToBoard(moveButton)
       return
     }
+    const cancelButton = target.closest?.<HTMLButtonElement>("[data-task-cancel]")
+    if (cancelButton) {
+      void cancelTask(cancelButton)
+      return
+    }
+    const purgeButton = target.closest?.<HTMLButtonElement>("[data-task-purge]")
+    if (purgeButton) {
+      void purgeTask(purgeButton)
+      return
+    }
+    if (target.closest?.("[data-task-bulk-cancel]")) {
+      void bulkDelete("cancel")
+      return
+    }
+    if (target.closest?.("[data-task-bulk-purge]")) {
+      void bulkDelete("purge")
+      return
+    }
+    if (target.closest?.("[data-task-select-none]")) {
+      document.querySelectorAll<HTMLInputElement>("[data-task-select]:checked").forEach((box) => { box.checked = false })
+      updateBulkBar()
+      return
+    }
     const button = target.closest?.<HTMLButtonElement>(`${taskDueSaveSelector}, ${taskDueClearSelector}`)
     if (!button) return
     void updateDueDate(button, button.matches(taskDueClearSelector))
   })
+}
+
+function selectedTasks(): SelectedTask[] {
+  return [...document.querySelectorAll<HTMLInputElement>("[data-task-select]:checked")].map((box) => ({
+    slug: box.dataset.slug || "",
+    line: Number(box.dataset.line),
+    text: box.dataset.text || "",
+    status: box.dataset.status || "",
+    version: box.dataset.version || "",
+  }))
+}
+
+function updateBulkBar() {
+  const bar = document.querySelector<HTMLElement>("[data-task-bulkbar]")
+  if (!bar) return
+  const selected = selectedTasks()
+  bar.hidden = selected.length === 0
+  const open = selected.filter((t) => t.status === "open").length
+  const cancelled = selected.filter((t) => t.status === "cancelled").length
+  const count = bar.querySelector("[data-task-selcount]")
+  if (count) count.textContent = `${selected.length} selected — ${open} open, ${cancelled} cancelled`
+  const cancelButton = bar.querySelector<HTMLButtonElement>("[data-task-bulk-cancel]")
+  if (cancelButton) cancelButton.disabled = open === 0
+  const purgeButton = bar.querySelector<HTMLButtonElement>("[data-task-bulk-purge]")
+  if (purgeButton) purgeButton.disabled = cancelled === 0
+}
+
+async function postTaskDelete(endpoint: string, payload: unknown) {
+  const res = await fetch(`${baseURL()}${endpoint}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error((await res.text()) || `request failed (${res.status})`)
+}
+
+async function cancelTask(button: HTMLButtonElement) {
+  const text = button.dataset.text || "this task"
+  if (!window.confirm(`Cancel “${text}”?\n\nIt is marked [-] cancelled with today's date; purge later to remove it.`)) return
+  button.disabled = true
+  try {
+    const payloads = buildCancelPayloads([{
+      slug: button.dataset.slug || "",
+      line: Number(button.dataset.line),
+      text: button.dataset.text || "",
+      status: "open",
+      version: button.dataset.version || "",
+    }])
+    await postTaskDelete(taskCancelEndpoint, payloads[0])
+    await refreshCurrent()
+    updateBulkBar()
+  } catch (err) {
+    button.disabled = false
+    showToast(err instanceof Error ? err.message : "Couldn't cancel the task")
+  }
+}
+
+async function purgeTask(button: HTMLButtonElement) {
+  if (!window.confirm("Permanently remove this cancelled task line from the note?\n\nIndented sub-items are left in place. This cannot be undone.")) return
+  button.disabled = true
+  try {
+    const payloads = buildPurgePayloads([{
+      slug: button.dataset.slug || "",
+      line: Number(button.dataset.line),
+      text: "",
+      status: "cancelled",
+      version: button.dataset.version || "",
+    }])
+    await postTaskDelete(taskPurgeEndpoint, payloads[0])
+    await refreshCurrent()
+    updateBulkBar()
+  } catch (err) {
+    button.disabled = false
+    showToast(err instanceof Error ? err.message : "Couldn't purge the task")
+  }
+}
+
+async function bulkDelete(kind: "cancel" | "purge") {
+  const selected = selectedTasks()
+  let payloads: { slug: string }[]
+  let count = 0
+  try {
+    if (kind === "cancel") {
+      const built = buildCancelPayloads(selected)
+      count = built.reduce((n, p) => n + p.items.length, 0)
+      payloads = built
+    } else {
+      const built = buildPurgePayloads(selected)
+      count = built.reduce((n, p) => n + p.lines.length, 0)
+      payloads = built
+    }
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : "Selection is stale; refresh the page")
+    return
+  }
+  if (count === 0) {
+    showToast(kind === "cancel" ? "Select open tasks to cancel" : "Select cancelled tasks to purge")
+    return
+  }
+  const files = payloads.length
+  const prompt = kind === "cancel"
+    ? `Cancel ${count} open task${count === 1 ? "" : "s"} across ${files} file${files === 1 ? "" : "s"}?\n\nThey are marked [-] cancelled with today's date; purge later to remove them.`
+    : `Permanently remove ${count} cancelled task${count === 1 ? "" : "s"} from ${files} file${files === 1 ? "" : "s"}?\n\nIndented sub-items are left in place. This cannot be undone.`
+  if (!window.confirm(prompt)) return
+
+  const buttons = document.querySelectorAll<HTMLButtonElement>("[data-task-bulkbar] button")
+  buttons.forEach((el) => { el.disabled = true })
+  try {
+    for (const payload of payloads) {
+      await postTaskDelete(kind === "cancel" ? taskCancelEndpoint : taskPurgeEndpoint, payload)
+    }
+    await refreshCurrent()
+    updateBulkBar()
+  } catch (err) {
+    buttons.forEach((el) => { el.disabled = false })
+    updateBulkBar()
+    showToast(err instanceof Error ? err.message : `Couldn't ${kind} the selected tasks`)
+  }
 }
 
 let triageBound = false
@@ -246,6 +398,7 @@ async function updateDueDate(button: HTMLButtonElement, clear: boolean) {
       expectedText: editor.dataset.expectedText || "",
       expectedStatus: editor.dataset.expectedStatus || "",
       expectedDue: editor.dataset.expectedDue || "",
+      expectedVersion: editor.dataset.expectedVersion || "",
     }, clear ? "" : input.value)
     controls.forEach((el) => { el.disabled = true })
     const res = await fetch(`${baseURL()}${taskDueEndpoint}`, {

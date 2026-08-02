@@ -76,9 +76,12 @@ async function show(link: HTMLAnchorElement, generation: number) {
   popover.style.width = `${pw}px`
   popover.style.visibility = "visible"
 
-  // Scroll to fragment if the link targets a heading.
+  // Scroll to fragment if the link targets a heading. CSS.escape keeps ids
+  // starting with a digit ("2026-plan") from being invalid selectors; the
+  // lookup stays scoped to the popover's fetched content.
   if (url.hash) {
-    const target = popover.querySelector(url.hash) as HTMLElement | null
+    const id = decodeURIComponent(url.hash.slice(1))
+    const target = popover.querySelector(`#${CSS.escape(id)}`) as HTMLElement | null
     if (target) popover.scrollTop = Math.max(0, target.offsetTop - 12)
   }
 }

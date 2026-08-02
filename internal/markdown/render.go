@@ -15,6 +15,7 @@ import (
 	"github.com/yuin/goldmark/util"
 
 	"github.com/base698/amythest/internal/markdown/obsidian"
+	"github.com/base698/amythest/internal/tasks"
 	"github.com/base698/amythest/internal/vault"
 )
 
@@ -80,11 +81,39 @@ func (e *Engine) resolve(v *vault.Vault, n *vault.Note, doc ast.Node, source []b
 					t.SetAttributeString("slug", n.Slug)
 					t.SetAttributeString("line", line)
 					t.SetAttributeString("version", n.Hash)
+					// The note's own tasks get the same inline actions as
+					// /tasks rows; transcluded tasks keep just the toggle.
+					if depth == 0 {
+						if task, tok := tasks.ParseLine(sourceLine(source, line), n.Slug, n.Path, line, n.Hash); tok {
+							if parent := t.Parent(); parent != nil {
+								actions := ast.NewString([]byte(" " + tasks.RenderInlineActions(task)))
+								actions.SetCode(true)
+								parent.AppendChild(parent, actions)
+							}
+						}
+					}
 				}
 			}
 		}
 		return ast.WalkContinue, nil
 	})
+}
+
+// sourceLine returns the 1-based line from source, without its newline.
+func sourceLine(source []byte, lineNo int) string {
+	start := 0
+	for current := 1; current < lineNo; current++ {
+		i := bytes.IndexByte(source[start:], '\n')
+		if i < 0 {
+			return ""
+		}
+		start += i + 1
+	}
+	rest := source[start:]
+	if i := bytes.IndexByte(rest, '\n'); i >= 0 {
+		rest = rest[:i]
+	}
+	return string(rest)
 }
 
 // checkboxLine locates a checkbox's 1-based body line via its parent

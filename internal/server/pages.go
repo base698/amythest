@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -246,7 +247,19 @@ func (s *Server) renderPageStatus(w http.ResponseWriter, status int, data pageDa
 	_, _ = w.Write(buf.Bytes())
 }
 
-// handleAsset serves non-markdown vault files under /assets/.
+// inlineAssetExts are content types browsers may render in place without a
+// script execution risk on our origin. Everything else downloads as an
+// opaque attachment; SVG stays inline but sandboxed since it can script.
+var inlineAssetExts = map[string]bool{
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
+	".avif": true, ".bmp": true, ".ico": true,
+	".mp3": true, ".m4a": true, ".wav": true, ".ogg": true, ".opus": true, ".flac": true,
+	".mp4": true, ".webm": true, ".mov": true, ".m4v": true,
+	".pdf": true, ".txt": true,
+}
+
+// handleAsset serves non-markdown vault files under /assets/. Only files the
+// scan recorded are served — never symlinks or paths the scan skipped.
 func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	v := s.vault.Load()
 	rel := strings.TrimPrefix(r.URL.Path, "/assets/")
@@ -254,13 +267,22 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 		rel = dec
 	}
 	abs, ok := v.AssetPath(rel)
-	if !ok {
+	if !ok || !v.HasAsset(rel) {
 		http.NotFound(w, r)
 		return
 	}
-	if st, err := os.Stat(abs); err != nil || st.IsDir() {
+	if st, err := os.Lstat(abs); err != nil || !st.Mode().IsRegular() {
 		http.NotFound(w, r)
 		return
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	ext := strings.ToLower(filepath.Ext(abs))
+	switch {
+	case ext == ".svg":
+		w.Header().Set("Content-Security-Policy", "sandbox")
+	case !inlineAssetExts[ext]:
+		w.Header().Set("Content-Disposition", "attachment")
+		w.Header().Set("Content-Type", "application/octet-stream")
 	}
 	http.ServeFile(w, r, abs)
 }

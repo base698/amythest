@@ -192,6 +192,9 @@ func evalCall(c *Call, env Env) (Value, error) {
 		y, m, d := time.Now().Date()
 		return DateV(time.Date(y, m, d, 0, 0, 0, 0, time.Local)), nil
 	case "number":
+		if len(args) != 1 {
+			return NullV(), fmt.Errorf("number() takes 1 argument")
+		}
 		n, err := args[0].AsNumber()
 		if err != nil {
 			return NullV(), err
