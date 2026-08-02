@@ -42,14 +42,13 @@ func renderTask(b *strings.Builder, t Task, base string) {
 		checked = " checked"
 	}
 	b.WriteString(`<li class="task ` + cls + `"><input type="checkbox" class="task-toggle" data-slug="` +
-		template.HTMLEscapeString(t.Slug) + `" data-line="` + strconv.Itoa(t.Line) + `"` + checked + `> `)
+		template.HTMLEscapeString(t.Slug) + `" data-line="` + strconv.Itoa(t.Line) + `" data-version="` +
+		template.HTMLEscapeString(t.Version) + `"` + checked + `> `)
 	b.WriteString(`<span class="task-text">` + template.HTMLEscapeString(t.Text) + `</span>`)
 	if p := priorityBadge[t.Priority]; p != "" {
 		b.WriteString(` <span class="task-prio">` + p + `</span>`)
 	}
-	if t.Due != "" {
-		b.WriteString(` <span class="task-date task-due">📅 ` + template.HTMLEscapeString(t.Due) + `</span>`)
-	}
+	renderDueDateEditor(b, t)
 	if t.Scheduled != "" {
 		b.WriteString(` <span class="task-date">⏳ ` + template.HTMLEscapeString(t.Scheduled) + `</span>`)
 	}
@@ -62,4 +61,24 @@ func renderTask(b *strings.Builder, t Task, base string) {
 	b.WriteString(` <a class="task-src" href="` + template.HTMLEscapeString(base+t.Slug) + `" title="` +
 		template.HTMLEscapeString(t.Path) + `">↗</a>`)
 	b.WriteString("</li>")
+}
+
+func renderDueDateEditor(b *strings.Builder, t Task) {
+	summary := "Due date"
+	if t.Due != "" {
+		summary = "📅 " + t.Due
+	}
+	clearDisabled := ""
+	if t.Due == "" {
+		clearDisabled = " disabled"
+	}
+	b.WriteString(` <details class="task-due-editor" data-task-due-editor data-slug="` +
+		template.HTMLEscapeString(t.Slug) + `" data-line="` + strconv.Itoa(t.Line) +
+		`" data-expected-text="` + template.HTMLEscapeString(t.Text) +
+		`" data-expected-status="` + template.HTMLEscapeString(t.Status) +
+		`" data-expected-due="` + template.HTMLEscapeString(t.Due) + `">`)
+	b.WriteString(`<summary class="task-date task-due">` + template.HTMLEscapeString(summary) + `</summary>`)
+	b.WriteString(`<div class="task-due-controls"><label><span>Due date</span><input type="date" data-task-due-input value="` +
+		template.HTMLEscapeString(t.Due) + `"></label><button type="button" data-task-due-save>Save</button>`)
+	b.WriteString(`<button type="button" data-task-due-clear` + clearDisabled + `>Clear</button></div></details>`)
 }

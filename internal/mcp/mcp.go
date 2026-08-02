@@ -30,7 +30,8 @@ type Deps struct {
 	Vault   func() *vault.Vault
 	BaseURL string
 	// Rescan reindexes after a write so the new note is immediately
-	// searchable and linked.
+	// searchable and linked. It runs inside the tasks package's shared vault
+	// lock and therefore must not try to acquire that lock itself.
 	Rescan func() error
 }
 
@@ -218,25 +219,8 @@ func registerNoteTools(server *sdk.Server, deps Deps) {
 				return nil, createNoteOut{}, fmt.Errorf("dotfiles are not notes")
 			}
 			v := deps.Vault()
-			abs := filepath.Join(v.Root, filepath.FromSlash(rel))
-			if _, err := os.Stat(abs); err == nil && !in.Overwrite {
-				return nil, createNoteOut{}, fmt.Errorf("%s already exists (set overwrite to replace)", rel)
-			}
-			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			if err := tasks.WriteNoteFileAndReindex(v.Root, rel, []byte(in.Content), in.Overwrite, deps.Rescan); err != nil {
 				return nil, createNoteOut{}, err
-			}
-			tmp := abs + ".amythest-tmp"
-			if err := os.WriteFile(tmp, []byte(in.Content), 0o644); err != nil {
-				return nil, createNoteOut{}, err
-			}
-			if err := os.Rename(tmp, abs); err != nil {
-				_ = os.Remove(tmp)
-				return nil, createNoteOut{}, err
-			}
-			if deps.Rescan != nil {
-				if err := deps.Rescan(); err != nil {
-					return nil, createNoteOut{}, fmt.Errorf("saved but reindex failed: %w", err)
-				}
 			}
 			return nil, createNoteOut{Path: rel, Slug: vault.Slugify(rel), URL: deps.BaseURL + vault.Slugify(rel)}, nil
 		})
@@ -321,34 +305,36 @@ func registerTaskTools(server *sdk.Server, deps Deps) {
 		})
 
 	sdk.AddTool(server, &sdk.Tool{Name: "toggle_task",
-		Description: "Complete or reopen a task in a vault note. Use the exact slug and line that query_tasks returned. Completing a recurring task also inserts its next occurrence, unchecked with its dates advanced, matching the Obsidian Tasks plugin. Kanban cards are not vault tasks - use the kanban tools for those."},
+		Description: "Complete or reopen a task in a vault note. Use the exact slug, line, and version that query_tasks returned. Completing a recurring task also inserts its next occurrence, unchecked with its dates advanced, matching the Obsidian Tasks plugin. Kanban cards are not vault tasks - use the kanban tools for those."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in toggleTaskIn) (*sdk.CallToolResult, toggleTaskOut, error) {
-			v := deps.Vault()
-			n, ok := v.BySlug(in.Slug)
-			if !ok {
-				return nil, toggleTaskOut{}, fmt.Errorf("note %q not found", in.Slug)
-			}
-			if strings.HasPrefix(n.Path, "kanban/") {
-				return nil, toggleTaskOut{}, fmt.Errorf("kanban boards are managed through the kanban tools")
-			}
-			recurred, err := tasks.ToggleInFile(v.Root, n.Path, in.Line, in.Done, time.Now())
-			if err != nil {
-				return nil, toggleTaskOut{}, err
-			}
-			// Reindex so the next query_tasks reflects the write.
-			if deps.Rescan != nil {
-				if err := deps.Rescan(); err != nil {
-					return nil, toggleTaskOut{}, err
-				}
-			}
-			return nil, toggleTaskOut{OK: true, Recurred: recurred, Path: n.Path}, nil
+			out, err := toggleTask(deps, in)
+			return nil, out, err
 		})
 }
 
+// toggleTask contains the transport-independent toggle behavior so the MCP tool
+// and its stale-write guarantees can be exercised without an SDK round trip.
+func toggleTask(deps Deps, in toggleTaskIn) (toggleTaskOut, error) {
+	v := deps.Vault()
+	n, ok := v.BySlug(in.Slug)
+	if !ok {
+		return toggleTaskOut{}, fmt.Errorf("note %q not found", in.Slug)
+	}
+	if strings.HasPrefix(n.Path, "kanban/") {
+		return toggleTaskOut{}, fmt.Errorf("kanban boards are managed through the kanban tools")
+	}
+	recurred, err := tasks.ToggleInFileAndReindex(v.Root, n.Path, in.Line, in.ExpectedVersion, in.Done, time.Now(), deps.Rescan)
+	if err != nil {
+		return toggleTaskOut{}, err
+	}
+	return toggleTaskOut{OK: true, Recurred: recurred, Path: n.Path}, nil
+}
+
 type toggleTaskIn struct {
-	Slug string `json:"slug" jsonschema:"slug of the note holding the task, exactly as query_tasks returned it"`
-	Line int    `json:"line" jsonschema:"1-based line number of the task, exactly as query_tasks returned it"`
-	Done bool   `json:"done" jsonschema:"true to complete the task, false to reopen it"`
+	Slug            string `json:"slug" jsonschema:"slug of the note holding the task, exactly as query_tasks returned it"`
+	Line            int    `json:"line" jsonschema:"1-based line number of the task, exactly as query_tasks returned it"`
+	ExpectedVersion string `json:"expectedVersion" jsonschema:"version of the task source file, exactly as query_tasks returned it"`
+	Done            bool   `json:"done" jsonschema:"true to complete the task, false to reopen it"`
 }
 
 type toggleTaskOut struct {

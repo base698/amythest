@@ -42,14 +42,52 @@ func TestRenderTaskTriageEscapesTaskTextAndProvidesActions(t *testing.T) {
 		Text: `<script>alert("x")</script>`, Status: tasks.StatusOpen,
 	}}
 
-	html := renderTaskTriage(all, "Projects/Work.md", taskTriageOptions{}, "/")
+	version := strings.Repeat("a", 64)
+	html := renderTaskTriage(all, "Projects/Work.md", taskTriageOptions{Versions: map[string]string{"Projects/Work.md": version}}, "/")
 	if strings.Contains(html, "<script>") {
 		t.Fatalf("unescaped task text in %q", html)
 	}
-	for _, want := range []string{`data-task-triage`, `data-action="backlog"`, `data-action="due"`, `data-action="reference"`, `data-action="cancel"`, `data-file-action="backlog"`, `data-file-action="reference"`, `Projects/Work.md`} {
+	for _, want := range []string{`data-task-triage`, `data-action="backlog"`, `data-action="due"`, `data-action="reference"`, `data-action="cancel"`, `data-file-action="backlog"`, `data-file-action="reference"`, `data-file-disposition="archive"`, `data-file-disposition="trash"`, `data-file-version="` + version + `"`, `Archive file`, `Move file to trash`, `class="triage-due-label">Due date`, `Projects/Work.md`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %q in %q", want, html)
 		}
+	}
+}
+
+func TestRenderTaskTriageUsesConfiguredBaseURL(t *testing.T) {
+	all := []tasks.Task{{Slug: "project", Path: "Project.md", Line: 1, Text: "Task", Status: tasks.StatusOpen}}
+	html := renderTaskTriage(all, "Project.md", taskTriageOptions{}, "/notes/")
+	for _, want := range []string{`href="/notes/tasks"`, `href="/notes/project"`} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("missing base-prefixed link %q in %q", want, html)
+		}
+	}
+}
+
+func TestRenderTaskTriageDisablesFileActionsOverBatchLimit(t *testing.T) {
+	all := make([]tasks.Task, 0, 5001)
+	for i := 1; i <= 5001; i++ {
+		all = append(all, tasks.Task{Slug: "large", Path: "Large.md", Line: i, Text: "Item", Status: tasks.StatusOpen})
+	}
+	html := renderTaskTriage(all, "Large.md", taskTriageOptions{}, "/")
+	if strings.Contains(html, `data-file-action=`) {
+		t.Fatal("file-wide actions should be disabled over the API batch limit")
+	}
+	if !strings.Contains(html, "File actions unavailable for more than 5000 tasks") {
+		t.Fatal("missing clear batch-limit explanation")
+	}
+}
+
+func TestSelectedTaskTriagePathUsesRequestedOrLargestFile(t *testing.T) {
+	candidates := []tasks.Task{
+		{Path: "A.md"},
+		{Path: "B.md"}, {Path: "B.md"},
+	}
+	if got := selectedTaskTriagePath(candidates, "A.md"); got != "A.md" {
+		t.Fatalf("requested selection = %q", got)
+	}
+	if got := selectedTaskTriagePath(candidates, "missing.md"); got != "B.md" {
+		t.Fatalf("fallback selection = %q", got)
 	}
 }
 
@@ -64,13 +102,20 @@ func TestLoadTaskTriageContextsShowsSurroundingBodyLines(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	contexts := loadTaskTriageContexts(root, []tasks.Task{{
-		Slug: "work", Path: rel, Line: 3, Text: "Choose a direction", Status: tasks.StatusOpen,
-	}}, rel)
+	contexts, versions := loadTaskTriageContexts(root, []tasks.Task{
+		{Slug: "work", Path: rel, Line: 3, Text: "Choose a direction", Status: tasks.StatusOpen},
+		{Slug: "missing", Path: "Missing.md", Line: 1, Text: "Must not load", Status: tasks.StatusOpen},
+	}, rel)
 	got := contexts[taskTriageContextKey("work", 3)]
 	for _, want := range []string{"2 · ## Options", "3 · - [ ] Choose a direction", "4 · Decision notes live here."} {
 		if !strings.Contains(got, want) {
 			t.Errorf("context %q missing %q", got, want)
 		}
+	}
+	if versions[rel] != tasks.FileVersion([]byte(src)) {
+		t.Fatalf("version=%q", versions[rel])
+	}
+	if _, loaded := versions["Missing.md"]; loaded {
+		t.Fatal("unselected file was loaded")
 	}
 }

@@ -15,7 +15,7 @@ import (
 // renderVersion participates in change detection: bump it whenever the
 // renderer's HTML output changes shape, and every note re-renders on the
 // next reconcile without anyone having to delete the data dir.
-const renderVersion = "6"
+const renderVersion = "7"
 
 func versionedHash(n *vault.Note) string { return n.Hash + "/" + renderVersion }
 
@@ -176,11 +176,12 @@ func upsertNote(tx *sql.Tx, n *vault.Note, res *markdown.Result, noteTasks []tas
 		return err
 	}
 	for _, t := range noteTasks {
+		t.Version = n.Hash
 		tagsJSON, _ := json.Marshal(orEmpty(t.Tags))
-		if _, err := tx.Exec(`INSERT INTO tasks(slug,line,text,status,due,scheduled,start,recurrence,priority,done_date,tags)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		if _, err := tx.Exec(`INSERT INTO tasks(slug,line,text,status,due,scheduled,start,recurrence,priority,done_date,tags,version)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 			t.Slug, t.Line, t.Text, t.Status, t.Due, t.Scheduled, t.Start,
-			t.Recurrence, t.Priority, t.DoneDate, string(tagsJSON)); err != nil {
+			t.Recurrence, t.Priority, t.DoneDate, string(tagsJSON), t.Version); err != nil {
 			return err
 		}
 	}
