@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { buildFileDispositionPayload, buildFileDispositionPrompt, buildTriagePayload } from "./taskTriage.ts"
+import { buildFileDispositionPayload, buildFileDispositionPrompt, buildFileHidePayload, buildTaskMovePayload, buildTriagePayload } from "./taskTriage.ts"
 import { buildTaskDuePayload, taskDueClearSelector, taskDueEndpoint, taskDueSaveSelector } from "./taskDue.ts"
 import { buildTaskTogglePayload } from "./taskToggle.ts"
 
@@ -103,4 +103,36 @@ test("buildFileDispositionPayload validates a recoverable whole-file action", ()
 test("buildFileDispositionPrompt names the file and recoverable destination", () => {
   assert.match(buildFileDispositionPrompt("Projects/Old.md", "archive"), /Projects\/Old\.md.*Archive\/Deleted/s)
   assert.match(buildFileDispositionPrompt("Projects/Old.md", "trash"), /Projects\/Old\.md.*\.trash\/Amythest/s)
+})
+
+test("buildFileHidePayload carries the selected file's exact version", () => {
+  const version = "c".repeat(64)
+  assert.deepEqual(buildFileHidePayload("Projects/Checklist", version), {
+    slug: "Projects/Checklist",
+    expectedVersion: version,
+  })
+  assert.throws(() => buildFileHidePayload("Projects/Checklist", ""), /refresh/)
+})
+
+test("buildTaskMovePayload carries complete stale task identity", () => {
+  const version = "d".repeat(64)
+  assert.deepEqual(buildTaskMovePayload({
+    board: "personal",
+    slug: "Projects/Launch",
+    line: 7,
+    expectedText: "Ship release",
+    expectedStatus: "open",
+    expectedVersion: version,
+  }), {
+    board: "personal",
+    slug: "Projects/Launch",
+    line: 7,
+    expectedText: "Ship release",
+    expectedStatus: "open",
+    expectedVersion: version,
+  })
+  assert.throws(() => buildTaskMovePayload({
+    board: "", slug: "Projects/Launch", line: 7, expectedText: "Ship release",
+    expectedStatus: "open", expectedVersion: version,
+  }), /board/)
 })

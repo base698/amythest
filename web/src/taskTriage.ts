@@ -50,3 +50,33 @@ export function buildTriagePayload(
   if (action === "due") payload.due = due
   return payload
 }
+
+export interface FileHidePayload {
+  slug: string
+  expectedVersion: string
+}
+
+export function buildFileHidePayload(slug: string, expectedVersion: string): FileHidePayload {
+  if (!slug || !/^[a-f0-9]{64}$/i.test(expectedVersion)) {
+    throw new Error("File identity is stale; refresh the page")
+  }
+  return { slug, expectedVersion }
+}
+
+export interface TaskMovePayload {
+  board: string
+  slug: string
+  line: number
+  expectedText: string
+  expectedStatus: string
+  expectedVersion: string
+}
+
+export function buildTaskMovePayload(payload: TaskMovePayload): TaskMovePayload {
+  if (!payload.board.trim()) throw new Error("Choose a board")
+  if (!payload.slug || !Number.isInteger(payload.line) || payload.line < 1 ||
+      payload.expectedStatus !== "open" || !/^[a-f0-9]{64}$/i.test(payload.expectedVersion)) {
+    throw new Error("Task identity is stale; refresh the page")
+  }
+  return { ...payload, board: payload.board.trim() }
+}

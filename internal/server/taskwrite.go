@@ -11,6 +11,55 @@ import (
 	"github.com/base698/amythest/internal/vault"
 )
 
+// handleTaskFileHide opts an entire note out of task indexing while retaining
+// the note itself in rendering, links, and search.
+func (s *Server) handleTaskFileHide(w http.ResponseWriter, r *http.Request) {
+	if s.kanbanAuth != nil {
+		cookie, err := r.Cookie(kanbanSessionCookie)
+		if err != nil {
+			http.Error(w, "sign in to the kanban to edit tasks", http.StatusUnauthorized)
+			return
+		}
+		if _, err := s.kanbanAuth.Verify(cookie.Value, time.Now()); err != nil {
+			http.Error(w, "session expired: sign in to the kanban again", http.StatusUnauthorized)
+			return
+		}
+	}
+	var req struct {
+		Slug            string `json:"slug"`
+		ExpectedVersion string `json:"expectedVersion"`
+	}
+	if err := jsonDecode(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Slug == "" || len(req.Slug) > 512 || len(req.ExpectedVersion) != 64 {
+		http.Error(w, "slug and expectedVersion are required; refresh and retry", http.StatusBadRequest)
+		return
+	}
+	s.taskWriteMu.Lock()
+	defer s.taskWriteMu.Unlock()
+	v := s.vault.Load()
+	n, ok := v.BySlug(req.Slug)
+	if !ok {
+		http.Error(w, "note not found", http.StatusNotFound)
+		return
+	}
+	if strings.HasPrefix(n.Path, "kanban/") {
+		http.Error(w, "kanban boards are managed through the kanban API", http.StatusForbidden)
+		return
+	}
+	if err := tasks.HideFileFromTasksAndReindex(v.Root, n.Path, req.ExpectedVersion, s.rescanWhileVaultLocked); err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	s.writeJSON(w, map[string]any{"ok": true})
+}
+
 // handleTaskToggle checks/unchecks a task line in its vault file. This is
 // the notes side's only write path; kanban boards are excluded (their store
 // owns those files) and, when kanban auth is configured, a valid session is

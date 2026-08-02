@@ -43,6 +43,144 @@ func TestCreateBoardCreatesNoteBackedBoardAndRejectsDuplicateOrInvalidNames(t *t
 	}
 }
 
+func TestCreateCardOnExistingBoardReportsCommittedWriteError(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	if err := store.EnsureBoard("project"); err != nil {
+		t.Fatal(err)
+	}
+	store.writeResult = func(path string, data []byte) (bool, error) {
+		if err := atomicWrite(path, data); err != nil {
+			return false, err
+		}
+		return true, errors.New("directory sync failed")
+	}
+	card, committed, err := store.CreateCardOnExistingBoardResult("project", CardInput{Title: "Committed card", Status: Triage})
+	if err == nil || !committed || card.ID == "" {
+		t.Fatalf("card=%#v committed=%v err=%v", card, committed, err)
+	}
+	loaded, loadErr := store.Load("project")
+	if loadErr != nil || cardIndex(loaded.Cards, card.ID) < 0 {
+		t.Fatalf("committed card missing: board=%#v err=%v", loaded, loadErr)
+	}
+}
+
+func TestDeleteTaskMoveCardReportsCommittedWriteError(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	if err := store.EnsureBoard("project"); err != nil {
+		t.Fatal(err)
+	}
+	card, err := store.CreateCardOnExistingBoard("project", CardInput{Title: "Delete me", Status: Triage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.writeResult = func(path string, data []byte) (bool, error) {
+		if err := atomicWrite(path, data); err != nil {
+			return false, err
+		}
+		return true, errors.New("directory sync failed")
+	}
+	deleted, committed, err := store.DeleteTaskMoveCardResult("project", card)
+	if err == nil || !committed || deleted.ID != card.ID {
+		t.Fatalf("deleted=%#v committed=%v err=%v", deleted, committed, err)
+	}
+	loaded, loadErr := store.Load("project")
+	if loadErr != nil || cardIndex(loaded.Cards, card.ID) >= 0 {
+		t.Fatalf("committed deletion not visible: board=%#v err=%v", loaded, loadErr)
+	}
+}
+
+func TestWithTaskMoveBoardHoldsBoardLockAcrossSourceTransaction(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	if err := store.EnsureBoard("project"); err != nil {
+		t.Fatal(err)
+	}
+	card, err := store.CreateCardOnExistingBoard("project", CardInput{Title: "Original", Status: Triage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	txDone := make(chan error, 1)
+	go func() {
+		txDone <- store.WithTaskMoveBoard("project", func(*TaskMoveBoard) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	updateDone := make(chan error, 1)
+	changed := "Changed"
+	go func() {
+		_, err := store.UpdateCard("project", card.ID, CardPatch{Title: &changed})
+		updateDone <- err
+	}()
+	select {
+	case err := <-updateDone:
+		t.Fatalf("board update escaped task transaction lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-txDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-updateDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteTaskMoveCardRefusesModifiedSnapshot(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	if err := store.EnsureBoard("project"); err != nil {
+		t.Fatal(err)
+	}
+	card, err := store.CreateCardOnExistingBoard("project", CardInput{Title: "Original", Status: Triage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := "Changed by user"
+	if _, err := store.UpdateCard("project", card.ID, CardPatch{Title: &changed}); err != nil {
+		t.Fatal(err)
+	}
+	if _, committed, err := store.DeleteTaskMoveCardResult("project", card); err == nil || committed {
+		t.Fatalf("modified card deletion committed=%v err=%v", committed, err)
+	}
+	loaded, err := store.Load("project")
+	if err != nil || cardIndex(loaded.Cards, card.ID) < 0 {
+		t.Fatalf("modified card was deleted: board=%#v err=%v", loaded, err)
+	}
+}
+
+func TestCreateCardOnExistingBoardRejectsMissingBoardWithoutCreatingFiles(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root, time.Now)
+	if _, err := store.CreateCardOnExistingBoard("missing", CardInput{Title: "Must not create", Status: Triage}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("error=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "missing")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing board directory was created: %v", err)
+	}
+}
+
+func TestRenderBoardExposesStableCardIDBlockLink(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root, time.Now)
+	if _, err := store.CreateBoard("project"); err != nil {
+		t.Fatal(err)
+	}
+	card, err := store.CreateCardOnExistingBoard("project", CardInput{Title: "Title with ] and |", Status: Triage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "project", "board.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "^card-"+card.ID) {
+		t.Fatalf("board note lacks stable block ID for card %q:\n%s", card.ID, content)
+	}
+}
+
 func TestCardDueDatePersistsInStructuredAndReadableBoardAndCanBeCleared(t *testing.T) {
 	root := t.TempDir()
 	store := NewStore(root, fixedClock)

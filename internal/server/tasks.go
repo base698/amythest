@@ -50,6 +50,15 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	var boardNames []string
+	if s.kanban != nil {
+		if summaries, listErr := s.kanban.ListBoards(); listErr == nil {
+			boardNames = make([]string, 0, len(summaries))
+			for _, summary := range summaries {
+				boardNames = append(boardNames, summary.Name)
+			}
+		}
+	}
 
 	statusFilter := r.URL.Query().Get("status") // "", open, done, all
 	sortKey := r.URL.Query().Get("sort")        // "", due, priority, path, description, done
@@ -70,7 +79,7 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			b.WriteString(`<h2>` + template.HTMLEscapeString(title) + `</h2>`)
-			b.WriteString(tasks.RenderHTML(groups, s.base()))
+			b.WriteString(tasks.RenderHTMLWithBoards(groups, s.base(), boardNames))
 		}
 		section("Overdue", "not done\ndue before today\nsort by due, priority")
 		section("Today", "not done\ndue on today\nsort by priority")
@@ -108,7 +117,7 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 			total += len(g.Tasks)
 		}
 		b.WriteString(`<p class="muted">` + itoa(total) + ` tasks</p>`)
-		b.WriteString(tasks.RenderHTML(groups, s.base()))
+		b.WriteString(tasks.RenderHTMLWithBoards(groups, s.base(), boardNames))
 	}
 
 	s.renderPage(w, pageData{

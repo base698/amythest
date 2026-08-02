@@ -597,6 +597,42 @@ blockquote.transclude {
     button { padding: 0.25rem 0.6rem; }
   }
 
+  .task-move-editor {
+    display: inline-block;
+    margin-left: 0.3rem;
+    vertical-align: middle;
+
+    > summary {
+      padding: 0.05rem 0.35rem;
+      border-radius: 5px;
+      color: var(--fg-muted);
+      background: var(--bg-alt);
+      cursor: pointer;
+      font-size: 0.75rem;
+      list-style: none;
+      white-space: nowrap;
+    }
+    > summary::-webkit-details-marker { display: none; }
+    &[open] { display: block; margin: 0.35rem 0 0.55rem 1.6rem; }
+  }
+
+  .task-move-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 0.4rem;
+    margin-top: 0.35rem;
+    padding: 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-alt);
+
+    label { display: grid; flex: 1 1 12rem; gap: 0.15rem; color: var(--fg-muted); font-size: 0.72rem; font-weight: 600; }
+    select, button { min-height: 2rem; }
+    select { width: 100%; min-width: 0; padding: 0.25rem 0.4rem; }
+    button { padding: 0.25rem 0.6rem; }
+  }
+
   .task-src {
     margin-left: 0.3rem;
     font-size: 0.8rem;

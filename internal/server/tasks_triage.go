@@ -185,6 +185,7 @@ func renderTaskTriage(all []tasks.Task, selectedPath string, opts taskTriageOpti
 			b.WriteString(`<span class="muted">File actions unavailable for more than 5000 tasks</span>`)
 		}
 		if opts.Versions[selectedPath] != "" && !isTaskTriageIgnoredPath(selectedPath) {
+			b.WriteString(`<button type="button" data-file-hide>Hide file from tasks</button>`)
 			b.WriteString(`<button type="button" data-file-disposition="archive">Archive file</button>`)
 			b.WriteString(`<button type="button" class="danger" data-file-disposition="trash">Move file to trash</button>`)
 		}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/base698/amythest/internal/vault"
 	"golang.org/x/sys/unix"
+	"gopkg.in/yaml.v3"
 )
 
 var taskFileWriteMu sync.Mutex
@@ -222,14 +223,14 @@ func rollbackTaskExchangeAt(parentFD int, leaf, tmp string, updated []byte) (str
 	return "", nil
 }
 
-// replaceTaskFileAt atomically exchanges the prepared replacement with the
-// target, then compares the exact file displaced by that exchange. This closes
-// the check-then-rename window: if an external editor won the race, its version
-// is exchanged back into place before an error is returned.
-func replaceTaskFileAt(parentFD int, leaf string, expected, updated []byte, mode os.FileMode) error {
+// replaceTaskFileAtResult atomically exchanges the prepared replacement with
+// the target and reports whether updated is durably installed at leaf. A
+// post-exchange cleanup error can therefore be distinguished from a failed
+// commit by composite operations that have already created another artifact.
+func replaceTaskFileAtResult(parentFD int, leaf string, expected, updated []byte, mode os.FileMode) (bool, error) {
 	tmp, err := createTempAt(parentFD, leaf, updated, mode)
 	if err != nil {
-		return err
+		return false, err
 	}
 	removeTemp := true
 	defer func() {
@@ -238,26 +239,35 @@ func replaceTaskFileAt(parentFD int, leaf string, expected, updated []byte, mode
 		}
 	}()
 	if err := renameat2(parentFD, tmp, parentFD, leaf, unix.RENAME_EXCHANGE); err != nil {
-		return err
+		return false, err
 	}
 	old, _, readErr := readRegularAt(parentFD, tmp)
 	if readErr == nil && bytes.Equal(old, expected) {
 		if err := unix.Unlinkat(parentFD, tmp, 0); err != nil {
-			return err
+			// The exchange already committed updated at leaf. Report that state
+			// so callers never delete a paired card after a cleanup-only failure.
+			return true, err
 		}
 		removeTemp = false
 		_ = unix.Fsync(parentFD)
-		return nil
+		return true, nil
 	}
 	removeTemp = false
 	preserved, rollbackErr := rollbackTaskExchangeAt(parentFD, leaf, tmp, updated)
 	if rollbackErr != nil {
-		return fmt.Errorf("task file changed; %v (original read error: %v; preserved path: %s)", rollbackErr, readErr, preserved)
+		current, _, currentErr := readRegularAt(parentFD, leaf)
+		committed := currentErr == nil && bytes.Equal(current, updated)
+		return committed, fmt.Errorf("task file changed; %v (original read error: %v; preserved path: %s)", rollbackErr, readErr, preserved)
 	}
 	if readErr != nil {
-		return fmt.Errorf("task file changed during update; restored original: %w", readErr)
+		return false, fmt.Errorf("task file changed during update; restored original: %w", readErr)
 	}
-	return fmt.Errorf("task file changed during update; reload and retry")
+	return false, fmt.Errorf("task file changed during update; reload and retry")
+}
+
+func replaceTaskFileAt(parentFD int, leaf string, expected, updated []byte, mode os.FileMode) error {
+	_, err := replaceTaskFileAtResult(parentFD, leaf, expected, updated, mode)
+	return err
 }
 
 func replaceExistingNoteFileAt(parentFD int, leaf string, expected, updated []byte, mode os.FileMode) error {
@@ -312,6 +322,116 @@ func mutateTaskFile(vaultRoot, relPath string, mutate func([]byte) ([]byte, erro
 // controls and checked again while holding the vault writer lock.
 func FileVersion(content []byte) string {
 	return fmt.Sprintf("%x", sha256.Sum256(content))
+}
+
+// HideFileFromTasks sets the canonical top-level tasks property to false using
+// the same stale-safe, mode-preserving, no-follow writer as task mutations.
+func HideFileFromTasks(vaultRoot, relPath, expectedVersion string) error {
+	return HideFileFromTasksAndReindex(vaultRoot, relPath, expectedVersion, nil)
+}
+
+func HideFileFromTasksAndReindex(vaultRoot, relPath, expectedVersion string, reindex func() error) error {
+	return mutateTaskFileAndReindex(vaultRoot, relPath, func(src []byte) ([]byte, error) {
+		decoded, err := hex.DecodeString(expectedVersion)
+		if err != nil || len(decoded) != sha256.Size {
+			return nil, fmt.Errorf("file version is required; refresh and retry")
+		}
+		if FileVersion(src) != expectedVersion {
+			return nil, fmt.Errorf("file changed; refresh and retry")
+		}
+		return setTasksDisabledFrontmatter(src)
+	}, reindex)
+}
+
+func setTasksDisabledFrontmatter(src []byte) ([]byte, error) {
+	newline := []byte("\n")
+	if bytes.Contains(src, []byte("\r\n")) {
+		newline = []byte("\r\n")
+	}
+	fm, body := vault.ParseFrontmatter(src)
+	hasOpeningDelimiter := bytes.HasPrefix(src, []byte("---\n")) || bytes.HasPrefix(src, []byte("---\r\n"))
+	if hasOpeningDelimiter && len(body) == len(src) {
+		return nil, fmt.Errorf("malformed frontmatter: missing closing delimiter")
+	}
+	if fm.Err != nil {
+		return nil, fmt.Errorf("malformed frontmatter: %w", fm.Err)
+	}
+	if hasOpeningDelimiter && frontmatterOnlyComments(fm.Raw) {
+		out := append([]byte("---"), newline...)
+		raw := []byte(fm.Raw)
+		out = append(out, raw...)
+		if len(raw) > 0 && !bytes.HasSuffix(raw, newline) {
+			out = append(out, newline...)
+		}
+		out = append(out, []byte("tasks: false")...)
+		out = append(out, newline...)
+		out = append(out, []byte("---")...)
+		out = append(out, newline...)
+		out = append(out, body...)
+		return out, nil
+	}
+
+	var document yaml.Node
+	if hasOpeningDelimiter {
+		if err := yaml.Unmarshal([]byte(fm.Raw), &document); err != nil {
+			return nil, fmt.Errorf("malformed frontmatter: %w", err)
+		}
+	} else {
+		document = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
+		body = src
+	}
+	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("malformed frontmatter: top-level YAML must be a mapping")
+	}
+	mapping := document.Content[0]
+	found := false
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value != "tasks" {
+			continue
+		}
+		found = true
+		value := mapping.Content[i+1]
+		if value.Kind == yaml.ScalarNode && value.Tag == "!!bool" && value.Value == "false" {
+			return append([]byte(nil), src...), nil
+		}
+		*value = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"}
+	}
+	if !found {
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tasks"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"},
+		)
+	}
+	var encoded bytes.Buffer
+	encoder := yaml.NewEncoder(&encoded)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(&document); err != nil {
+		return nil, fmt.Errorf("encode frontmatter: %w", err)
+	}
+	if err := encoder.Close(); err != nil {
+		return nil, fmt.Errorf("encode frontmatter: %w", err)
+	}
+	yamlBytes := bytes.TrimSuffix(encoded.Bytes(), []byte("\n"))
+	if bytes.Equal(newline, []byte("\r\n")) {
+		yamlBytes = bytes.ReplaceAll(yamlBytes, []byte("\n"), newline)
+	}
+	out := append([]byte("---"), newline...)
+	out = append(out, yamlBytes...)
+	out = append(out, newline...)
+	out = append(out, []byte("---")...)
+	out = append(out, newline...)
+	out = append(out, body...)
+	return out, nil
+}
+
+func frontmatterOnlyComments(raw string) bool {
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			return false
+		}
+	}
+	return true
 }
 
 type FileDisposition string
