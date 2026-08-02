@@ -38,13 +38,14 @@ type Server struct {
 	vault atomic.Pointer[vault.Vault]
 	tree  atomic.Pointer[treeNode]
 
-	rescanMu   sync.Mutex
-	chromaCSS  []byte
-	kanban     *board.Store   // nil when kanban is not configured
-	kanbanAuth *auth.Manager  // gates vault writes when set
-	catalog    *bases.Catalog // sqlite tabular data store
-	share      *share.Store
-	metrics    serverMetrics
+	rescanMu    sync.Mutex
+	taskWriteMu sync.Mutex
+	chromaCSS   []byte
+	kanban      *board.Store   // nil when kanban is not configured
+	kanbanAuth  *auth.Manager  // gates vault writes when set
+	catalog     *bases.Catalog // sqlite tabular data store
+	share       *share.Store
+	metrics     serverMetrics
 }
 
 // kanbanSessionCookie mirrors httpapi.SessionCookie without importing the
@@ -107,7 +108,9 @@ func New(cfg config.Config) (*Server, error) {
 	s.mux.HandleFunc("GET /api/contentIndex", s.handleContentIndex)
 	s.mux.HandleFunc("GET /api/tasks", s.handleTasksAPI)
 	s.mux.HandleFunc("POST /api/tasks/toggle", s.handleTaskToggle)
+	s.mux.HandleFunc("POST /api/tasks/triage", s.handleTaskTriage)
 	s.mux.HandleFunc("GET /tasks", s.handleTasksPage)
+	s.mux.HandleFunc("GET /tasks/triage", s.handleTasksTriagePage)
 	s.mux.HandleFunc("GET /share", s.handleSharePage)
 	s.mux.HandleFunc("POST /api/share/upload", s.handleShareUpload)
 	s.mux.HandleFunc("GET /bases/", s.handleBases)

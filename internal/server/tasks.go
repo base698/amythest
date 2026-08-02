@@ -122,6 +122,28 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleTasksTriagePage(w http.ResponseWriter, r *http.Request) {
+	all, err := s.db.AllTasks()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	showAll := r.URL.Query().Get("scope") == "all"
+	opts := taskTriageOptions{IncludeBacklog: showAll, IncludeIgnored: showAll}
+	candidates := taskTriageCandidates(all, opts)
+	opts.Contexts = loadTaskTriageContexts(s.cfg.Vault, candidates, "")
+	html := renderTaskTriage(all, r.URL.Query().Get("path"), opts, s.base())
+	s.renderPage(w, pageData{
+		SiteName:    s.cfg.SiteName,
+		Base:        s.base(),
+		Title:       "Task triage",
+		HTML:        template.HTML(html),
+		Breadcrumbs: []crumb{{Name: "Home", URL: s.base()}, {Name: "Tasks", URL: s.base() + "tasks"}},
+		Tree:        s.tree.Load(),
+		Slug:        "tasks/triage",
+	})
+}
+
 // tasksToolbar renders the status/sort/group controls as plain links.
 func (s *Server) tasksToolbar(status, sortKey, group string) string {
 	var b strings.Builder
@@ -153,6 +175,7 @@ func (s *Server) tasksToolbar(status, sortKey, group string) string {
 	link("Open", "open", sortKey, group, status, status == "open")
 	link("Done", "done", sortKey, group, status, status == "done")
 	link("All", "all", sortKey, group, status, status == "all")
+	b.WriteString(`<a class="chip triage-chip" href="` + template.HTMLEscapeString(s.base()+"tasks/triage") + `">Triage no dates</a>`)
 	b.WriteString(`<span class="eyebrow">Sort</span>`)
 	for _, k := range []string{"due", "priority", "path", "description"} {
 		st := status

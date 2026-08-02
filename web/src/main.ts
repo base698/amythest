@@ -5,7 +5,7 @@ import { setupSearch } from "./search"
 import { setupGraph } from "./graph"
 import { setupPopovers } from "./popover"
 import { setupShare } from "./share"
-import { setupTaskToggles } from "./tasks"
+import { setupTaskToggles, setupTaskTriage } from "./tasks"
 import { setupSPA } from "./spa"
 
 function init() {
@@ -15,6 +15,7 @@ function init() {
   setupGraph()
   setupPopovers()
   setupTaskToggles()
+  setupTaskTriage()
   setupShare()
   if (document.querySelector("pre.mermaid")) {
     void import("./mermaid").then((m) => m.renderMermaid())
