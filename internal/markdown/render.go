@@ -86,7 +86,7 @@ func (e *Engine) resolve(v *vault.Vault, n *vault.Note, doc ast.Node, source []b
 					if depth == 0 {
 						if task, tok := tasks.ParseLine(sourceLine(source, line), n.Slug, n.Path, line, n.Hash); tok {
 							if parent := t.Parent(); parent != nil {
-								actions := ast.NewString([]byte(" " + tasks.RenderInlineActions(task)))
+								actions := ast.NewString([]byte(" " + tasks.RenderInlineActions(task, e.boardNames())))
 								actions.SetCode(true)
 								parent.AppendChild(parent, actions)
 							}

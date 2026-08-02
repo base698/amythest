@@ -53,14 +53,18 @@ func TestRenderTaskShowsEveryTagExactlyOnce(t *testing.T) {
 
 func TestRenderInlineActionsMatchesRowMarkup(t *testing.T) {
 	open := Task{Slug: "P", Line: 3, Text: "Ship", Status: StatusOpen, Due: "2026-08-15", Version: strings.Repeat("a", 64)}
-	html := RenderInlineActions(open)
-	for _, want := range []string{"data-task-due-editor", "data-task-cancel", `data-expected-due="2026-08-15"`} {
+	html := RenderInlineActions(open, []string{"proof"})
+	for _, want := range []string{
+		"data-task-due-editor", "data-task-cancel", `data-expected-due="2026-08-15"`,
+		"data-task-move-editor",                       // move-to-board reaches note view
+		`data-task-prio-set="1"`, "data-task-prio-editor", // priority is tappable
+	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("open-task actions missing %s: %s", want, html)
 		}
 	}
 	cancelled := Task{Slug: "P", Line: 4, Text: "Old", Status: StatusCancelled, Version: strings.Repeat("a", 64)}
-	if html := RenderInlineActions(cancelled); !strings.Contains(html, "data-task-purge") {
+	if html := RenderInlineActions(cancelled, nil); !strings.Contains(html, "data-task-purge") {
 		t.Fatalf("cancelled-task actions missing purge: %s", html)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -84,18 +85,7 @@ func Scan(root string) (*Vault, error) {
 		if err != nil {
 			return nil
 		}
-		rel = filepath.ToSlash(rel)
-		if strings.EqualFold(filepath.Ext(name), ".md") {
-			v.addNote(path, rel, d)
-		} else if strings.EqualFold(filepath.Ext(name), ".base") {
-			v.Bases[Slugify(strings.TrimSuffix(rel, ".base"))] = rel
-		} else {
-			v.Assets = append(v.Assets, rel)
-			v.asset[strings.ToLower(rel)] = rel
-			if _, exists := v.asset[strings.ToLower(name)]; !exists {
-				v.asset[strings.ToLower(name)] = rel
-			}
-		}
+		v.addFile(path, filepath.ToSlash(rel), d.Info)
 		return nil
 	})
 	if err != nil {
@@ -106,13 +96,76 @@ func Scan(root string) (*Vault, error) {
 	return v, nil
 }
 
-func (v *Vault) addNote(abs, rel string, d fs.DirEntry) {
+// WithFiles returns a new snapshot equal to v plus the named vault-relative
+// paths, read fresh from disk; paths already present are replaced. It is the
+// incremental counterpart to Scan: a writer that knows exactly which files it
+// just created can refresh the snapshot in microseconds instead of re-walking
+// and re-hashing the whole vault. Everything else in the snapshot is carried
+// over as-is, so concurrent edits by other writers stay invisible until the
+// next Scan — the same staleness that exists between periodic rescans.
+// Unreadable paths are skipped, exactly as in Scan. v is not modified;
+// callers must publish the result themselves.
+func (v *Vault) WithFiles(rels ...string) *Vault {
+	nv := &Vault{
+		Root:    v.Root,
+		Notes:   make([]*Note, 0, len(v.Notes)+len(rels)),
+		Assets:  append(make([]string, 0, len(v.Assets)+len(rels)), v.Assets...),
+		Bases:   maps.Clone(v.Bases),
+		bySlug:  make(map[string]*Note, len(v.bySlug)+len(rels)),
+		byPath:  make(map[string]*Note, len(v.byPath)+len(rels)),
+		byBase:  make(map[string][]*Note, len(v.byBase)+len(rels)),
+		byAlias: make(map[string][]*Note, len(v.byAlias)),
+		asset:   maps.Clone(v.asset),
+	}
+	replaced := make(map[string]bool, len(rels))
+	for _, rel := range rels {
+		replaced[cleanRel(rel)] = true
+	}
+	for _, n := range v.Notes {
+		if !replaced[n.Path] {
+			nv.Notes = append(nv.Notes, n)
+		}
+	}
+	for _, rel := range rels {
+		rel = cleanRel(rel)
+		abs := filepath.Join(v.Root, filepath.FromSlash(rel))
+		nv.addFile(abs, rel, func() (fs.FileInfo, error) { return os.Stat(abs) })
+	}
+	nv.buildIndexes()
+	return nv
+}
+
+func cleanRel(rel string) string {
+	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(rel)))
+}
+
+// addFile files one vault entry into the snapshot under construction. stat is
+// deferred so only notes pay for it.
+func (v *Vault) addFile(abs, rel string, stat func() (fs.FileInfo, error)) {
+	name := filepath.Base(rel)
+	switch {
+	case strings.EqualFold(filepath.Ext(name), ".md"):
+		v.addNote(abs, rel, stat)
+	case strings.EqualFold(filepath.Ext(name), ".base"):
+		v.Bases[Slugify(strings.TrimSuffix(rel, ".base"))] = rel
+	default:
+		if v.asset[strings.ToLower(rel)] != rel {
+			v.Assets = append(v.Assets, rel)
+		}
+		v.asset[strings.ToLower(rel)] = rel
+		if _, exists := v.asset[strings.ToLower(name)]; !exists {
+			v.asset[strings.ToLower(name)] = rel
+		}
+	}
+}
+
+func (v *Vault) addNote(abs, rel string, stat func() (fs.FileInfo, error)) {
 	src, err := os.ReadFile(abs)
 	if err != nil {
 		return
 	}
 	fm, _ := ParseFrontmatter(src)
-	info, err := d.Info()
+	info, err := stat()
 	if err != nil {
 		return
 	}

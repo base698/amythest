@@ -40,6 +40,47 @@ func TestNoteTasksCarryInlineActions(t *testing.T) {
 	if strings.Count(html, "data-task-cancel") != 1 {
 		t.Fatalf("cancel must appear only on the open task:\n%s", html)
 	}
+
+	// A note line prints its own metadata, so the controls must not echo it:
+	// no value badges, just one neutral disclosure per task.
+	for _, banned := range []string{`class="task-prio"`, `class="task-date task-due"`} {
+		if strings.Contains(html, banned) {
+			t.Fatalf("note view duplicates metadata already in the line (%s):\n%s", banned, html)
+		}
+	}
+	if got := strings.Count(html, `class="task-actions-toggle"`); got != 2 {
+		t.Fatalf("expected one actions disclosure per task line, got %d:\n%s", got, html)
+	}
+}
+
+func TestNoteTaskActionsDoNotRepeatDueDateOrPriority(t *testing.T) {
+	root := t.TempDir()
+	// Both metadata kinds present: the line renders "🔺" and "📅 2026-08-15"
+	// itself, so neither may be repeated by the control summary.
+	if err := os.WriteFile(filepath.Join(root, "T.md"), []byte("- [ ] Ship it 🔺 📅 2026-08-15\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := markdown.New("/").Render(v, v.Notes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(res.HTML)
+	summary := html[strings.Index(html, "<summary"):]
+	summary = summary[:strings.Index(summary, "</summary>")]
+	if !strings.Contains(summary, "⋯") {
+		t.Fatalf("control summary should be neutral, got %q", summary)
+	}
+	if strings.Contains(summary, "🔺") || strings.Contains(summary, "2026-08-15") {
+		t.Fatalf("summary repeats metadata already in the line: %q", summary)
+	}
+	// "Due date" must not be printed as a visible label next to the summary.
+	if strings.Contains(html, "<span>Due date</span>") {
+		t.Fatalf("redundant visible due-date label:\n%s", html)
+	}
 }
 
 func TestTranscludedTasksStayToggleOnly(t *testing.T) {

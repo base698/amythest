@@ -130,7 +130,9 @@ func renderTask(b *strings.Builder, t Task, base string, opts RenderOptions) {
 		template.HTMLEscapeString(t.Version) + `"` + checked + `> `)
 	b.WriteString(`<span class="task-text">` + renderTaskText(t.Text) + `</span>`)
 	renderTrailingTags(b, t)
-	if p := priorityBadge[t.Priority]; p != "" {
+	if opts.Selectable {
+		renderPriorityEditor(b, t)
+	} else if p := priorityBadge[t.Priority]; p != "" {
 		b.WriteString(` <span class="task-prio">` + p + `</span>`)
 	}
 	renderDueDateEditor(b, t)
@@ -184,15 +186,101 @@ func renderCancelPurgeButtons(b *strings.Builder, t Task) {
 	}
 }
 
-// RenderInlineActions renders the row affordances (due-date editor plus
-// cancel/purge) for one task, for embedding at the end of a task line inside
-// a rendered note. The markup matches /tasks rows, so the same delegated
-// frontend handlers drive both surfaces.
-func RenderInlineActions(t Task) string {
+// RenderInlineActions renders the row affordances (due-date editor,
+// move-to-board, cancel/purge) for one task, for embedding at the end of a
+// task line inside a rendered note. The markup matches /tasks rows, so the
+// same delegated frontend handlers drive both surfaces.
+// A task line inside a note already renders its own metadata — the priority
+// emoji, 📅 date and tags are part of the text. So the note-view control is a
+// single neutral disclosure rather than the /tasks row's value badges, which
+// would show every one of them a second time.
+//
+// The three per-control markers live on this one element so the delegated
+// handlers (which look them up with closest()) work unchanged.
+func RenderInlineActions(t Task, boards []string) string {
 	var b strings.Builder
-	renderDueDateEditor(&b, t)
-	renderCancelPurgeButtons(&b, t)
+	b.WriteString(` <details class="task-actions" data-task-due-editor data-task-prio-editor data-task-move-editor data-slug="` +
+		template.HTMLEscapeString(t.Slug) + `" data-line="` + strconv.Itoa(t.Line) +
+		`" data-expected-text="` + template.HTMLEscapeString(t.Text) +
+		`" data-expected-status="` + template.HTMLEscapeString(t.Status) +
+		`" data-expected-due="` + template.HTMLEscapeString(t.Due) +
+		`" data-expected-priority="` + strconv.Itoa(t.Priority) +
+		`" data-expected-version="` + template.HTMLEscapeString(t.Version) + `">`)
+	b.WriteString(`<summary class="task-actions-toggle" title="Edit task">⋯</summary>`)
+	b.WriteString(`<div class="task-actions-panel">`)
+
+	b.WriteString(`<div class="task-actions-row"><span class="task-actions-label">Due</span>`)
+	clearDisabled := ""
+	if t.Due == "" {
+		clearDisabled = " disabled"
+	}
+	b.WriteString(`<input type="date" aria-label="Due date" data-task-due-input value="` +
+		template.HTMLEscapeString(t.Due) + `"><button type="button" data-task-due-save>Save</button>` +
+		`<button type="button" data-task-due-clear` + clearDisabled + `>Clear</button></div>`)
+
+	b.WriteString(`<div class="task-actions-row"><span class="task-actions-label">Priority</span>`)
+	for _, choice := range priorityChoices {
+		disabled := ""
+		if choice.level == t.Priority {
+			disabled = " disabled"
+		}
+		b.WriteString(`<button type="button" data-task-prio-set="` + strconv.Itoa(choice.level) + `"` + disabled + `>` +
+			template.HTMLEscapeString(choice.label) + `</button>`)
+	}
+	b.WriteString(`</div>`)
+
+	if t.Status == StatusOpen && len(boards) > 0 {
+		b.WriteString(`<div class="task-actions-row"><span class="task-actions-label">Board</span><select data-task-board>`)
+		for _, board := range boards {
+			escaped := template.HTMLEscapeString(board)
+			b.WriteString(`<option value="` + escaped + `">` + escaped + `</option>`)
+		}
+		b.WriteString(`</select><button type="button" data-task-move-submit>Move</button></div>`)
+	}
+	if t.Status == StatusOpen || t.Status == StatusCancelled {
+		b.WriteString(`<div class="task-actions-row">`)
+		renderCancelPurgeButtons(&b, t)
+		b.WriteString(`</div>`)
+	}
+	b.WriteString(`</div></details>`)
 	return b.String()
+}
+
+var priorityChoices = []struct {
+	level int
+	label string
+}{
+	{0, "🔺 Highest"}, {1, "⏫ High"}, {2, "🔼 Medium"},
+	{PriorityNone, "None"}, {4, "🔽 Low"}, {5, "⏬ Lowest"},
+}
+
+// renderPriorityEditor makes the priority badge itself the control: tapping
+// it opens the level picker. Tasks with no priority still get a discreet
+// affordance so the level can be set in the first place.
+func renderPriorityEditor(b *strings.Builder, t Task) {
+	// An unprioritized task still needs something to tap, but the word
+	// "priority" on every such row is noise — an outline flag stays quiet.
+	summary := priorityBadge[t.Priority]
+	if summary == "" {
+		summary = "⚐"
+	}
+	b.WriteString(` <details class="task-prio-editor" data-task-prio-editor data-slug="` +
+		template.HTMLEscapeString(t.Slug) + `" data-line="` + strconv.Itoa(t.Line) +
+		`" data-expected-text="` + template.HTMLEscapeString(t.Text) +
+		`" data-expected-status="` + template.HTMLEscapeString(t.Status) +
+		`" data-expected-priority="` + strconv.Itoa(t.Priority) +
+		`" data-expected-version="` + template.HTMLEscapeString(t.Version) + `">`)
+	b.WriteString(`<summary class="task-prio" title="Set priority">` + template.HTMLEscapeString(summary) + `</summary>`)
+	b.WriteString(`<div class="task-prio-controls">`)
+	for _, choice := range priorityChoices {
+		disabled := ""
+		if choice.level == t.Priority {
+			disabled = " disabled"
+		}
+		b.WriteString(`<button type="button" data-task-prio-set="` + strconv.Itoa(choice.level) + `"` + disabled + `>` +
+			template.HTMLEscapeString(choice.label) + `</button>`)
+	}
+	b.WriteString(`</div></details>`)
 }
 
 func renderMoveToBoardEditor(b *strings.Builder, t Task, boards []string) {
@@ -228,7 +316,9 @@ func renderDueDateEditor(b *strings.Builder, t Task) {
 		`" data-expected-due="` + template.HTMLEscapeString(t.Due) +
 		`" data-expected-version="` + template.HTMLEscapeString(t.Version) + `">`)
 	b.WriteString(`<summary class="task-date task-due">` + template.HTMLEscapeString(summary) + `</summary>`)
-	b.WriteString(`<div class="task-due-controls"><label><span>Due date</span><input type="date" data-task-due-input value="` +
-		template.HTMLEscapeString(t.Due) + `"></label><button type="button" data-task-due-save>Save</button>`)
+	// The summary already reads "Due date"; a visible field label would just
+	// repeat it, so the input carries the name for assistive tech instead.
+	b.WriteString(`<div class="task-due-controls"><input type="date" aria-label="Due date" data-task-due-input value="` +
+		template.HTMLEscapeString(t.Due) + `"><button type="button" data-task-due-save>Save</button>`)
 	b.WriteString(`<button type="button" data-task-due-clear` + clearDisabled + `>Clear</button></div></details>`)
 }

@@ -549,6 +549,12 @@ blockquote.transclude {
 
 // ---- tasks ----
 
+// Selection checkboxes only exist in select mode; otherwise they read as a
+// duplicate of the completion toggle sitting right next to them.
+.task-select { display: none; }
+body.tasks-selecting .task-select { display: inline-block; }
+body:not(.tasks-selecting) .tasks-bulkbar .selecting-only { display: none; }
+
 .tasks-bulkbar {
   display: flex;
   flex-wrap: wrap;
@@ -562,6 +568,9 @@ blockquote.transclude {
   font-size: 0.78rem;
 
   &[hidden] { display: none; }
+
+  [data-task-select-mode] { font-weight: 600; }
+  body.tasks-selecting & [data-task-select-mode] { border-color: var(--accent); color: var(--accent); }
 
   button {
     padding: 0.28rem 0.55rem;
@@ -635,6 +644,50 @@ blockquote.transclude {
   }
   .task-purge { border-color: color-mix(in srgb, #c64f4f 55%, var(--border)); color: #c64f4f; }
 
+  .task-prio-editor {
+    display: inline-block;
+    margin-left: 0.3rem;
+    vertical-align: middle;
+
+    > summary {
+      padding: 0.05rem 0.35rem;
+      border-radius: 5px;
+      color: var(--fg-muted);
+      background: var(--bg-alt);
+      cursor: pointer;
+      font-size: 0.75rem;
+      list-style: none;
+      white-space: nowrap;
+    }
+    > summary::-webkit-details-marker { display: none; }
+    &[open] { display: block; margin: 0.35rem 0 0.55rem 1.6rem; }
+  }
+
+  .task-prio-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin-top: 0.35rem;
+    padding: 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-alt);
+
+    button {
+      min-height: 2rem;
+      padding: 0.25rem 0.55rem;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      color: var(--fg);
+      background: var(--bg);
+      font: inherit;
+      font-size: 0.75rem;
+      cursor: pointer;
+      &:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+      &:disabled { opacity: 0.55; cursor: default; }
+    }
+  }
+
   .task-due-editor {
     display: inline-block;
     margin-left: 0.3rem;
@@ -648,7 +701,7 @@ blockquote.transclude {
   .task-due-controls {
     display: flex;
     flex-wrap: wrap;
-    align-items: end;
+    align-items: center;
     gap: 0.4rem;
     margin-top: 0.35rem;
     padding: 0.55rem;
@@ -656,10 +709,69 @@ blockquote.transclude {
     border-radius: 8px;
     background: var(--bg-alt);
 
-    label { display: grid; gap: 0.15rem; color: var(--fg-muted); font-size: 0.72rem; font-weight: 600; }
     input, button { min-height: 2rem; }
     input { padding: 0.25rem 0.4rem; }
     button { padding: 0.25rem 0.6rem; }
+  }
+
+  // Note-view tasks already print their own metadata, so all the controls sit
+  // behind one unobtrusive disclosure instead of a row of value badges.
+  .task-actions {
+    display: inline-block;
+    margin-left: 0.3rem;
+    vertical-align: middle;
+
+    > summary {
+      padding: 0 0.4rem;
+      border-radius: 5px;
+      color: var(--fg-faint);
+      cursor: pointer;
+      font-size: 0.9rem;
+      line-height: 1.2;
+      list-style: none;
+      &:hover { color: var(--accent); background: var(--bg-alt); }
+    }
+    > summary::-webkit-details-marker { display: none; }
+    &[open] { display: block; margin: 0.35rem 0 0.55rem 1.6rem; }
+  }
+
+  .task-actions-panel {
+    display: grid;
+    gap: 0.4rem;
+    margin-top: 0.35rem;
+    padding: 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-alt);
+  }
+
+  .task-actions-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    align-items: center;
+
+    input, select, button { min-height: 1.9rem; }
+    input, select { padding: 0.2rem 0.4rem; }
+    button {
+      padding: 0.2rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      color: var(--fg);
+      background: var(--bg);
+      font: inherit;
+      font-size: 0.75rem;
+      cursor: pointer;
+      &:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+      &:disabled { opacity: 0.55; cursor: default; }
+    }
+  }
+
+  .task-actions-label {
+    min-width: 4rem;
+    color: var(--fg-muted);
+    font-size: 0.72rem;
+    font-weight: 600;
   }
 
   .task-move-editor {

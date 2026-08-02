@@ -8,7 +8,9 @@
 //     task toggles: when kanban auth is configured, a valid session is
 //     required.
 //  2. The file streams to {vault}/Assets/Share/YYYY/MM/<stamp>-<name>,
-//     written atomically (temp + rename), 100 MiB cap.
+//     written atomically (temp + rename), 100 MiB cap. The name is reserved
+//     with O_EXCL and suffixed -2, -3, … on collision, so two shares of
+//     image.jpg in the same second cannot overwrite each other.
 //  3. A note is created at {vault}/_Inbox/Share <stamp>.md with frontmatter
 //     and an ![[embed]] of the asset. The API responds here — the note is
 //     immediately visitable.
@@ -16,8 +18,10 @@
 //     on stdin and whatever markdown it prints on stdout is appended to the
 //     note under its own section. A failing plugin appends a warning
 //     callout instead; it never blocks the upload.
-//  5. The caller triggers a rescan after upload and after plugins finish,
-//     so search/graph/tasks pick the note up.
+//  5. The caller indexes the new note on its own before responding, then lets
+//     a background pass reconcile the rest of the vault once the plugins are
+//     done — a full rescan on the response path made every upload wait for a
+//     whole-vault re-render.
 //
 // # Plugin contract
 //
@@ -43,8 +47,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -110,23 +116,47 @@ var escapeNoteText = strings.NewReplacer(
 	"&", "&amp;", "<", "&lt;", "\r", " ", "\n", " ",
 )
 
+// Asset is a stored upload payload, before its note exists.
+type Asset struct {
+	Rel string // vault-relative asset path
+}
+
 // SaveUpload stores the file and creates the wrapping note.
 func (s *Store) SaveUpload(name, title, mime string, r io.Reader, now time.Time) (*Upload, error) {
+	a, err := s.SaveAsset(name, r, now)
+	if err != nil {
+		return nil, err
+	}
+	return s.CreateNote(a, title, mime, now)
+}
+
+// SaveAsset streams the payload into the vault. It is split from CreateNote
+// so the handler can stream the multipart file part straight to its final
+// home without knowing the title yet — multipart puts the file part first,
+// and spooling 100 MiB through memory or a temp file to learn a form field
+// doubles the I/O of every large share.
+func (s *Store) SaveAsset(name string, r io.Reader, now time.Time) (*Asset, error) {
 	base := unsafeName.ReplaceAllString(filepath.Base(name), "-")
 	if base == "" || base == "-" {
 		base = "upload"
 	}
 	stamp := now.Format("20060102-150405")
-	assetRel := filepath.ToSlash(filepath.Join("Assets", "Share",
-		now.Format("2006"), now.Format("01"), stamp+"-"+base))
-
-	assetAbs := filepath.Join(s.vaultRoot, filepath.FromSlash(assetRel))
-	if err := os.MkdirAll(filepath.Dir(assetAbs), 0o755); err != nil {
+	dir := filepath.Join(s.vaultRoot, "Assets", "Share", now.Format("2006"), now.Format("01"))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	tmp := assetAbs + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	ext := filepath.Ext(base)
+	assetAbs, err := reserveUnique(dir, stamp+"-"+strings.TrimSuffix(base, ext), ext)
 	if err != nil {
+		return nil, err
+	}
+
+	// Write beside the reservation and rename over it, so a crash mid-upload
+	// never leaves a truncated asset where the note points.
+	tmp := assetAbs + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		_ = os.Remove(assetAbs)
 		return nil, err
 	}
 	n, err := io.Copy(f, io.LimitReader(r, MaxUploadBytes+1))
@@ -137,28 +167,34 @@ func (s *Store) SaveUpload(name, title, mime string, r io.Reader, now time.Time)
 	if err == nil && n > MaxUploadBytes {
 		err = fmt.Errorf("upload exceeds %d MiB", MaxUploadBytes>>20)
 	}
+	if err == nil {
+		err = os.Rename(tmp, assetAbs)
+	}
 	if err != nil {
 		_ = os.Remove(tmp)
-		return nil, err
-	}
-	if err := os.Rename(tmp, assetAbs); err != nil {
-		_ = os.Remove(tmp)
+		_ = os.Remove(assetAbs)
 		return nil, err
 	}
 
+	rel, err := filepath.Rel(s.vaultRoot, assetAbs)
+	if err != nil {
+		return nil, err
+	}
+	return &Asset{Rel: filepath.ToSlash(rel)}, nil
+}
+
+// CreateNote writes the _Inbox note wrapping a stored asset.
+func (s *Store) CreateNote(a *Asset, title, mime string, now time.Time) (*Upload, error) {
 	noteTitle := strings.TrimSpace(title)
 	if noteTitle == "" {
 		noteTitle = "Share " + now.Format("2006-01-02 15:04")
 	}
-	noteRel := filepath.ToSlash(filepath.Join("_Inbox",
-		unsafeName.ReplaceAllString(noteTitle, " ")+".md"))
-	noteAbs := filepath.Join(s.vaultRoot, filepath.FromSlash(noteRel))
-	if _, err := os.Stat(noteAbs); err == nil {
-		noteRel = filepath.ToSlash(filepath.Join("_Inbox",
-			unsafeName.ReplaceAllString(noteTitle, " ")+" "+stamp+".md"))
-		noteAbs = filepath.Join(s.vaultRoot, filepath.FromSlash(noteRel))
+	dir := filepath.Join(s.vaultRoot, "_Inbox")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(noteAbs), 0o755); err != nil {
+	noteAbs, err := reserveUnique(dir, unsafeName.ReplaceAllString(noteTitle, " "), ".md")
+	if err != nil {
 		return nil, err
 	}
 
@@ -167,14 +203,42 @@ func (s *Store) SaveUpload(name, title, mime string, r io.Reader, now time.Time)
 	}
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "---\ntype: source\ncreated: %s\ntags: [share]\n---\n\n# %s\n\n![[%s]]\n",
-		now.Format("2006-01-02"), escapeNoteText.Replace(noteTitle), assetRel)
+		now.Format("2006-01-02"), escapeNoteText.Replace(noteTitle), a.Rel)
 	fmt.Fprintf(&b, "\n- **Uploaded:** %s\n- **File:** `%s` (%s)\n",
-		now.Format("2006-01-02 15:04"), assetRel, mime)
+		now.Format("2006-01-02 15:04"), a.Rel, mime)
 	if err := os.WriteFile(noteAbs, b.Bytes(), 0o644); err != nil {
+		_ = os.Remove(noteAbs)
 		return nil, err
 	}
 
-	return &Upload{AssetRel: assetRel, NoteRel: noteRel, NoteSlug: vault.Slugify(noteRel)}, nil
+	rel, err := filepath.Rel(s.vaultRoot, noteAbs)
+	if err != nil {
+		return nil, err
+	}
+	noteRel := filepath.ToSlash(rel)
+	return &Upload{AssetRel: a.Rel, NoteRel: noteRel, NoteSlug: vault.Slugify(noteRel)}, nil
+}
+
+// reserveUnique atomically claims dir/base+ext, appending -2, -3, … until it
+// finds a free name. O_EXCL is what makes it safe: two shares of image.jpg in
+// the same second (or two concurrent uploads) used to compute the same path
+// and silently overwrite each other's asset and note.
+func reserveUnique(dir, base, ext string) (string, error) {
+	for i := 1; i < 1000; i++ {
+		name := base + ext
+		if i > 1 {
+			name = fmt.Sprintf("%s-%d%s", base, i, ext)
+		}
+		abs := filepath.Join(dir, name)
+		f, err := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			return abs, f.Close()
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("no free filename for %q in %s", base+ext, dir)
 }
 
 type pluginEvent struct {
