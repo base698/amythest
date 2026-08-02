@@ -29,12 +29,17 @@ func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Slug string `json:"slug"`
-		Line int    `json:"line"`
-		Done bool   `json:"done"`
+		Slug            string `json:"slug"`
+		Line            int    `json:"line"`
+		ExpectedVersion string `json:"expectedVersion"`
+		Done            bool   `json:"done"`
 	}
 	if err := jsonDecode(r, &req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Slug == "" || req.Line < 1 || len(req.ExpectedVersion) != 64 {
+		http.Error(w, "slug, positive line, and expectedVersion are required; refresh and retry", http.StatusBadRequest)
 		return
 	}
 
@@ -51,7 +56,7 @@ func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	recurred, err := toggleInFile(v, n, req.Line, req.Done)
+	recurred, err := toggleInFile(v, n, req.Line, req.ExpectedVersion, req.Done, s.rescanWhileVaultLocked)
 	if err != nil {
 		status := http.StatusConflict
 		if errors.Is(err, os.ErrNotExist) {
@@ -61,12 +66,75 @@ func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reindex now so the response's follow-up page fetch sees fresh HTML.
-	if err := s.Rescan(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	s.writeJSON(w, map[string]any{"ok": true, "recurred": recurred})
+}
+
+// handleTaskDue sets, changes, or clears the due date on an indexed task.
+// The request carries the rendered text and prior due date so stale rows are
+// rejected before the shared atomic writer replaces the note.
+func (s *Server) handleTaskDue(w http.ResponseWriter, r *http.Request) {
+	if s.kanbanAuth != nil {
+		cookie, err := r.Cookie(kanbanSessionCookie)
+		if err != nil {
+			http.Error(w, "sign in to the kanban to edit tasks", http.StatusUnauthorized)
+			return
+		}
+		if _, err := s.kanbanAuth.Verify(cookie.Value, time.Now()); err != nil {
+			http.Error(w, "session expired: sign in to the kanban again", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	var req struct {
+		Slug           string `json:"slug"`
+		Line           int    `json:"line"`
+		ExpectedText   string `json:"expectedText"`
+		ExpectedStatus string `json:"expectedStatus"`
+		ExpectedDue    string `json:"expectedDue"`
+		Due            string `json:"due"`
+	}
+	if err := jsonDecode(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.writeJSON(w, map[string]any{"ok": true, "recurred": recurred})
+	if req.Slug == "" || len(req.Slug) > 512 || req.Line < 1 || len(req.ExpectedText) > 10_000 {
+		http.Error(w, "slug, positive line, and expectedText of at most 10000 characters are required", http.StatusBadRequest)
+		return
+	}
+	if req.ExpectedStatus != tasks.StatusOpen && req.ExpectedStatus != tasks.StatusDone && req.ExpectedStatus != tasks.StatusCancelled && req.ExpectedStatus != tasks.StatusOther {
+		http.Error(w, "expectedStatus must be open, done, cancelled, or other", http.StatusBadRequest)
+		return
+	}
+	if len(req.ExpectedDue) != 0 && len(req.ExpectedDue) != 10 {
+		http.Error(w, "expectedDue must be empty or YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+	if len(req.Due) != 0 && len(req.Due) != 10 {
+		http.Error(w, "due must be empty or YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+
+	s.taskWriteMu.Lock()
+	defer s.taskWriteMu.Unlock()
+	v := s.vault.Load()
+	n, ok := v.BySlug(req.Slug)
+	if !ok {
+		http.Error(w, "note not found", http.StatusNotFound)
+		return
+	}
+	if strings.HasPrefix(n.Path, "kanban/") {
+		http.Error(w, "kanban boards are managed through the kanban API", http.StatusForbidden)
+		return
+	}
+	if err := tasks.UpdateDueDateInFileAndReindex(v.Root, n.Path, req.Line, req.ExpectedText, req.ExpectedStatus, req.ExpectedDue, req.Due, s.rescanWhileVaultLocked); err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	s.writeJSON(w, map[string]any{"ok": true, "due": req.Due})
 }
 
 // handleTaskTriage classifies one open, undated task without inventing a
@@ -99,7 +167,9 @@ func (s *Server) handleTaskTriage(w http.ResponseWriter, r *http.Request) {
 		ExpectedText string        `json:"expectedText"`
 		Items        []requestItem `json:"items"`
 	}
-	if err := jsonDecode(r, &req); err != nil {
+	// File-wide triage can legitimately exceed the generic 1 MiB API limit.
+	// Keep this endpoint bounded while allowing realistic 5,000-item payloads.
+	if err := jsonDecodeLimit(r, &req, 64<<20); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -107,8 +177,8 @@ func (s *Server) handleTaskTriage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "slug is required and must be at most 512 characters", http.StatusBadRequest)
 		return
 	}
-	if len(req.Items) > 500 {
-		http.Error(w, "at most 500 tasks may be triaged at once", http.StatusBadRequest)
+	if len(req.Items) > taskTriageBatchLimit {
+		http.Error(w, "at most 5000 tasks may be triaged at once", http.StatusBadRequest)
 		return
 	}
 	items := make([]tasks.TriageItem, 0, max(1, len(req.Items)))
@@ -156,7 +226,7 @@ func (s *Server) handleTaskTriage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := tasks.TriageBatchInFile(v.Root, n.Path, items, time.Now())
+	err := tasks.TriageBatchInFileAndReindex(v.Root, n.Path, items, time.Now(), s.rescanWhileVaultLocked)
 	if err != nil {
 		status := http.StatusConflict
 		if errors.Is(err, os.ErrNotExist) {
@@ -165,15 +235,75 @@ func (s *Server) handleTaskTriage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), status)
 		return
 	}
-	if err := s.Rescan(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	s.writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleTaskFileDisposition moves an entire triage note to one of two
+// recoverable destinations. "archive" keeps it visible under Archive/Deleted;
+// "trash" moves it under Obsidian's hidden .trash tree. Neither action unlinks
+// content permanently or overwrites an existing destination.
+func (s *Server) handleTaskFileDisposition(w http.ResponseWriter, r *http.Request) {
+	if s.kanbanAuth != nil {
+		cookie, err := r.Cookie(kanbanSessionCookie)
+		if err != nil {
+			http.Error(w, "sign in to the kanban to edit tasks", http.StatusUnauthorized)
+			return
+		}
+		if _, err := s.kanbanAuth.Verify(cookie.Value, time.Now()); err != nil {
+			http.Error(w, "session expired: sign in to the kanban again", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	var req struct {
+		Slug            string `json:"slug"`
+		Action          string `json:"action"`
+		ExpectedVersion string `json:"expectedVersion"`
+	}
+	if err := jsonDecode(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.writeJSON(w, map[string]any{"ok": true})
+	if req.Slug == "" || len(req.Slug) > 512 {
+		http.Error(w, "slug is required and must be at most 512 characters", http.StatusBadRequest)
+		return
+	}
+	if len(req.ExpectedVersion) != 64 {
+		http.Error(w, "expectedVersion is required; refresh and retry", http.StatusBadRequest)
+		return
+	}
+	disposition := tasks.FileDisposition(req.Action)
+	if disposition != tasks.FileDispositionArchive && disposition != tasks.FileDispositionTrash {
+		http.Error(w, "action must be archive or trash", http.StatusBadRequest)
+		return
+	}
+
+	s.taskWriteMu.Lock()
+	defer s.taskWriteMu.Unlock()
+	v := s.vault.Load()
+	n, ok := v.BySlug(req.Slug)
+	if !ok {
+		http.Error(w, "note not found", http.StatusNotFound)
+		return
+	}
+	if strings.HasPrefix(n.Path, "kanban/") || isTaskTriageIgnoredPath(n.Path) {
+		http.Error(w, "this note is not eligible for triage file actions", http.StatusForbidden)
+		return
+	}
+	destination, err := tasks.MoveFileInVaultAndReindex(v.Root, n.Path, disposition, req.ExpectedVersion, s.rescanWhileVaultLocked)
+	if err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	s.writeJSON(w, map[string]any{"ok": true, "destination": destination})
 }
 
 // toggleInFile delegates to the shared task writer so this path and the MCP
 // toggle_task tool apply identical recurrence and file-safety semantics.
-func toggleInFile(v *vault.Vault, n *vault.Note, line int, done bool) (bool, error) {
-	return tasks.ToggleInFile(v.Root, n.Path, line, done, time.Now())
+func toggleInFile(v *vault.Vault, n *vault.Note, line int, expectedVersion string, done bool, reindex func() error) (bool, error) {
+	return tasks.ToggleInFileAndReindex(v.Root, n.Path, line, expectedVersion, done, time.Now(), reindex)
 }

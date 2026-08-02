@@ -131,8 +131,9 @@ func (s *Server) handleTasksTriagePage(w http.ResponseWriter, r *http.Request) {
 	showAll := r.URL.Query().Get("scope") == "all"
 	opts := taskTriageOptions{IncludeBacklog: showAll, IncludeIgnored: showAll}
 	candidates := taskTriageCandidates(all, opts)
-	opts.Contexts = loadTaskTriageContexts(s.cfg.Vault, candidates, "")
-	html := renderTaskTriage(all, r.URL.Query().Get("path"), opts, s.base())
+	selectedPath := selectedTaskTriagePath(candidates, r.URL.Query().Get("path"))
+	opts.Contexts, opts.Versions = loadTaskTriageContexts(s.cfg.Vault, candidates, selectedPath)
+	html := renderTaskTriage(all, selectedPath, opts, s.base())
 	s.renderPage(w, pageData{
 		SiteName:    s.cfg.SiteName,
 		Base:        s.base(),

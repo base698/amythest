@@ -3,8 +3,6 @@ package server
 import (
 	"html/template"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,7 +15,10 @@ type taskTriageOptions struct {
 	IncludeBacklog bool
 	IncludeIgnored bool
 	Contexts       map[string]string
+	Versions       map[string]string
 }
+
+const taskTriageBatchLimit = 5_000
 
 var taskTriageIgnoredSegments = map[string]struct{}{
 	"Archive":          {},
@@ -50,8 +51,33 @@ func taskTriageContextKey(slug string, line int) string {
 	return slug + "\x00" + strconv.Itoa(line)
 }
 
-func loadTaskTriageContexts(vaultRoot string, candidates []tasks.Task, selectedPath string) map[string]string {
+func selectedTaskTriagePath(candidates []tasks.Task, requested string) string {
+	counts := make(map[string]int)
+	for _, task := range candidates {
+		counts[task.Path]++
+	}
+	if counts[requested] > 0 {
+		return requested
+	}
+	paths := make([]string, 0, len(counts))
+	for path := range counts {
+		paths = append(paths, path)
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		if counts[paths[i]] != counts[paths[j]] {
+			return counts[paths[i]] > counts[paths[j]]
+		}
+		return paths[i] < paths[j]
+	})
+	if len(paths) == 0 {
+		return ""
+	}
+	return paths[0]
+}
+
+func loadTaskTriageContexts(vaultRoot string, candidates []tasks.Task, selectedPath string) (map[string]string, map[string]string) {
 	contexts := make(map[string]string)
+	versions := make(map[string]string)
 	bodies := make(map[string][]string)
 	failed := make(map[string]bool)
 	for _, task := range candidates {
@@ -60,7 +86,7 @@ func loadTaskTriageContexts(vaultRoot string, candidates []tasks.Task, selectedP
 		}
 		bodyLines, loaded := bodies[task.Path]
 		if !loaded && !failed[task.Path] {
-			src, err := os.ReadFile(filepath.Join(vaultRoot, filepath.FromSlash(task.Path)))
+			src, err := tasks.ReadNoteFile(vaultRoot, task.Path)
 			if err != nil {
 				failed[task.Path] = true
 				continue
@@ -68,6 +94,7 @@ func loadTaskTriageContexts(vaultRoot string, candidates []tasks.Task, selectedP
 			_, body := vault.ParseFrontmatter(src)
 			bodyLines = strings.Split(string(body), "\n")
 			bodies[task.Path] = bodyLines
+			versions[task.Path] = tasks.FileVersion(src)
 		}
 		if failed[task.Path] {
 			continue
@@ -88,7 +115,7 @@ func loadTaskTriageContexts(vaultRoot string, candidates []tasks.Task, selectedP
 		}
 		contexts[taskTriageContextKey(task.Slug, task.Line)] = snippet.String()
 	}
-	return contexts
+	return contexts, versions
 }
 
 func renderTaskTriage(all []tasks.Task, selectedPath string, opts taskTriageOptions, base string) string {
@@ -143,12 +170,25 @@ func renderTaskTriage(all []tasks.Task, selectedPath string, opts taskTriageOpti
 		}
 		b.WriteString(`<a class="` + cls + `" data-triage-file data-search="` + template.HTMLEscapeString(searchable) + `" href="` + template.HTMLEscapeString(href) + `"><span>` + template.HTMLEscapeString(path) + `</span><strong>` + strconv.Itoa(len(byPath[path])) + `</strong></a>`)
 	}
-	b.WriteString(`</nav></aside><section class="triage-panel"><div class="triage-panel-heading"><div><p class="eyebrow">Current file</p><h3>` + template.HTMLEscapeString(selectedPath) + `</h3></div>`)
 	selected := byPath[selectedPath]
+	panelAttrs := ` class="triage-panel"`
+	if len(selected) > 0 {
+		panelAttrs += ` data-selected-file data-file-slug="` + template.HTMLEscapeString(selected[0].Slug) + `" data-file-path="` + template.HTMLEscapeString(selectedPath) + `" data-file-version="` + template.HTMLEscapeString(opts.Versions[selectedPath]) + `"`
+	}
+	b.WriteString(`</nav></aside><section` + panelAttrs + `><div class="triage-panel-heading"><div><p class="eyebrow">Current file</p><h3>` + template.HTMLEscapeString(selectedPath) + `</h3></div>`)
 	if len(selected) > 0 {
 		b.WriteString(`<div class="triage-file-actions"><a class="triage-source" href="` + template.HTMLEscapeString(base+selected[0].Slug) + `">Open note ↗</a>`)
-		b.WriteString(`<button type="button" data-file-action="backlog">Backlog entire file</button>`)
-		b.WriteString(`<button type="button" data-file-action="reference">Make file a reference list</button></div>`)
+		if len(selected) <= taskTriageBatchLimit {
+			b.WriteString(`<button type="button" data-file-action="backlog">Backlog entire file</button>`)
+			b.WriteString(`<button type="button" data-file-action="reference">Make file a reference list</button>`)
+		} else {
+			b.WriteString(`<span class="muted">File actions unavailable for more than 5000 tasks</span>`)
+		}
+		if opts.Versions[selectedPath] != "" && !isTaskTriageIgnoredPath(selectedPath) {
+			b.WriteString(`<button type="button" data-file-disposition="archive">Archive file</button>`)
+			b.WriteString(`<button type="button" class="danger" data-file-disposition="trash">Move file to trash</button>`)
+		}
+		b.WriteString(`</div>`)
 	}
 	b.WriteString(`</div><div class="triage-cards">`)
 	for _, task := range selected {
@@ -174,7 +214,7 @@ func renderTaskTriageCard(b *strings.Builder, task tasks.Task, context string) {
 	}
 	b.WriteString(`<p class="triage-task-meta">Line ` + strconv.Itoa(task.Line) + `</p><div class="triage-actions">`)
 	b.WriteString(`<button type="button" data-action="backlog">Keep as backlog</button>`)
-	b.WriteString(`<span class="triage-due"><input type="date" data-triage-due aria-label="Due date"><button type="button" data-action="due">Set due</button></span>`)
+	b.WriteString(`<span class="triage-due"><span class="triage-due-label">Due date</span><input type="date" data-triage-due aria-label="Due date"><button type="button" data-action="due">Set due</button></span>`)
 	b.WriteString(`<button type="button" data-action="reference">Make reference</button>`)
 	b.WriteString(`<button type="button" class="danger" data-action="cancel">Cancel task</button>`)
 	b.WriteString(`</div></article>`)

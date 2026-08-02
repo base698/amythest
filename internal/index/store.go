@@ -228,7 +228,7 @@ func buildFTSQuery(q string) string {
 // AllTasks returns every indexed task with its source path.
 func (d *DB) AllTasks() ([]tasks.Task, error) {
 	rows, err := d.r.Query(`SELECT t.slug, n.path, t.line, t.text, t.status,
-		t.due, t.scheduled, t.start, t.recurrence, t.priority, t.done_date, t.tags
+		t.due, t.scheduled, t.start, t.recurrence, t.priority, t.done_date, t.tags, t.version
 		FROM tasks t JOIN notes n ON n.slug = t.slug`)
 	if err != nil {
 		return nil, err
@@ -240,7 +240,7 @@ func (d *DB) AllTasks() ([]tasks.Task, error) {
 		var tagsJSON string
 		var due, sched, start, rec, done sql.NullString
 		if err := rows.Scan(&t.Slug, &t.Path, &t.Line, &t.Text, &t.Status,
-			&due, &sched, &start, &rec, &t.Priority, &done, &tagsJSON); err != nil {
+			&due, &sched, &start, &rec, &t.Priority, &done, &tagsJSON, &t.Version); err != nil {
 			return nil, err
 		}
 		t.Due, t.Scheduled, t.Start, t.Recurrence, t.DoneDate =

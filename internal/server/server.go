@@ -24,6 +24,7 @@ import (
 	"github.com/base698/amythest/internal/markdown"
 	"github.com/base698/amythest/internal/mcp"
 	"github.com/base698/amythest/internal/share"
+	"github.com/base698/amythest/internal/tasks"
 	"github.com/base698/amythest/internal/vault"
 	"github.com/base698/amythest/web"
 )
@@ -53,8 +54,12 @@ type Server struct {
 const kanbanSessionCookie = httpapi.SessionCookie
 
 func jsonDecode(r *http.Request, into any) error {
+	return jsonDecodeLimit(r, into, 1<<20)
+}
+
+func jsonDecodeLimit(r *http.Request, into any, limit int64) error {
 	defer r.Body.Close()
-	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20))
+	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, limit))
 	return dec.Decode(into)
 }
 
@@ -108,7 +113,9 @@ func New(cfg config.Config) (*Server, error) {
 	s.mux.HandleFunc("GET /api/contentIndex", s.handleContentIndex)
 	s.mux.HandleFunc("GET /api/tasks", s.handleTasksAPI)
 	s.mux.HandleFunc("POST /api/tasks/toggle", s.handleTaskToggle)
+	s.mux.HandleFunc("POST /api/tasks/due", s.handleTaskDue)
 	s.mux.HandleFunc("POST /api/tasks/triage", s.handleTaskTriage)
+	s.mux.HandleFunc("POST /api/tasks/file", s.handleTaskFileDisposition)
 	s.mux.HandleFunc("GET /tasks", s.handleTasksPage)
 	s.mux.HandleFunc("GET /tasks/triage", s.handleTasksTriagePage)
 	s.mux.HandleFunc("GET /share", s.handleSharePage)
@@ -138,7 +145,7 @@ func New(cfg config.Config) (*Server, error) {
 		Kanban:  s.kanban,
 		Vault:   func() *vault.Vault { return s.vault.Load() },
 		BaseURL: s.base(),
-		Rescan:  s.Rescan,
+		Rescan:  s.rescanWhileVaultLocked,
 	}); h != nil {
 		s.mux.Handle("/mcp", h)
 		s.mux.Handle("/mcp/", h)
@@ -156,9 +163,16 @@ func (s *Server) Close() error {
 	return s.db.Close()
 }
 
-// Rescan rebuilds the vault snapshot and reconciles the index. Safe to call
-// concurrently; runs are serialized.
-func (s *Server) Rescan() (err error) {
+// Rescan rebuilds the vault snapshot and reconciles the index. The shared vault
+// lock serializes snapshots and commits across Amythest processes.
+func (s *Server) Rescan() error {
+	return tasks.WithVaultWriteLock(s.cfg.Vault, s.rescanWhileVaultLocked)
+}
+
+// rescanWhileVaultLocked is used by mutation helpers that already hold the
+// shared vault lock, avoiding lock reentrancy while keeping their write and
+// synchronous index commit in one critical section.
+func (s *Server) rescanWhileVaultLocked() (err error) {
 	s.rescanMu.Lock()
 	defer s.rescanMu.Unlock()
 	start := time.Now()

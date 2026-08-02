@@ -2,11 +2,31 @@ package markdown_test
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/base698/amythest/internal/markdown"
 	"github.com/base698/amythest/internal/vault"
 )
+
+func TestRenderedTaskCheckboxCarriesExactFileVersion(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "Task.md"), []byte("- [ ] Ship it\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := markdown.New("/").Render(v, v.Notes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `data-version="` + v.Notes[0].Hash + `"`; !strings.Contains(string(res.HTML), want) {
+		t.Fatalf("rendered checkbox missing %s: %s", want, res.HTML)
+	}
+}
 
 // TestFullVaultSmoke renders every note in a real vault. Run with:
 //

@@ -79,6 +79,7 @@ func (e *Engine) resolve(v *vault.Vault, n *vault.Note, doc ast.Node, source []b
 				if line, ok := checkboxLine(t, source); ok {
 					t.SetAttributeString("slug", n.Slug)
 					t.SetAttributeString("line", line)
+					t.SetAttributeString("version", n.Hash)
 				}
 			}
 		}
@@ -212,9 +213,10 @@ func (r *nodeRenderer) renderTaskCheckbox(w util.BufWriter, source []byte, node 
 	}
 	slug, sok := cb.AttributeString("slug")
 	line, lok := cb.AttributeString("line")
-	if sok && lok {
-		fmt.Fprintf(w, `<input type="checkbox" class="task-toggle" data-slug="%s" data-line="%d"%s> `,
-			template.HTMLEscapeString(fmt.Sprint(slug)), line, checked)
+	version, vok := cb.AttributeString("version")
+	if sok && lok && vok {
+		fmt.Fprintf(w, `<input type="checkbox" class="task-toggle" data-slug="%s" data-line="%d" data-version="%s"%s> `,
+			template.HTMLEscapeString(fmt.Sprint(slug)), line, template.HTMLEscapeString(fmt.Sprint(version)), checked)
 	} else {
 		fmt.Fprintf(w, `<input type="checkbox" disabled%s> `, checked)
 	}

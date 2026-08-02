@@ -1,46 +1,505 @@
 package tasks
 
 import (
+	"bytes"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/base698/amythest/internal/vault"
+	"golang.org/x/sys/unix"
 )
 
+var taskFileWriteMu sync.Mutex
+
+// openVaultRoot resolves the configured root in one kernel path walk and
+// rejects symlinks in every component. This avoids validating one pathname and
+// then reopening a different directory after an ancestor swap.
+func openVaultRoot(vaultRoot string) (int, error) {
+	root, err := filepath.Abs(vaultRoot)
+	if err != nil {
+		return -1, err
+	}
+	how := &unix.OpenHow{
+		Flags:   uint64(unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC),
+		Resolve: uint64(unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS),
+	}
+	return unix.Openat2(unix.AT_FDCWD, root, how)
+}
+
+// The root directory inode is the stable cross-process lock. Unlike a lock file
+// in TMPDIR, all Amythest processes using the same resolved vault necessarily
+// contend on the same object and no artifact is left in the vault.
+func acquireTaskVaultWriteLockFD(vaultRoot string) (int, func(), error) {
+	taskFileWriteMu.Lock()
+	fd, err := openVaultRoot(vaultRoot)
+	if err != nil {
+		taskFileWriteMu.Unlock()
+		return -1, nil, err
+	}
+	if err := unix.Flock(fd, unix.LOCK_EX); err != nil {
+		_ = unix.Close(fd)
+		taskFileWriteMu.Unlock()
+		return -1, nil, err
+	}
+	release := func() {
+		_ = unix.Flock(fd, unix.LOCK_UN)
+		_ = unix.Close(fd)
+		taskFileWriteMu.Unlock()
+	}
+	return fd, release, nil
+}
+
+func acquireTaskVaultWriteLock(vaultRoot string) (func(), error) {
+	_, release, err := acquireTaskVaultWriteLockFD(vaultRoot)
+	return release, err
+}
+
+func cleanVaultRelativePath(relPath string) (string, error) {
+	if relPath == "" || filepath.IsAbs(relPath) || strings.ContainsRune(relPath, '\x00') {
+		return "", fmt.Errorf("invalid vault path %q", relPath)
+	}
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(relPath)))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", fmt.Errorf("vault path %q escapes the vault", relPath)
+	}
+	for _, part := range strings.Split(clean, "/") {
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("invalid vault path %q", relPath)
+		}
+	}
+	return clean, nil
+}
+
+// openParentAt walks directory components without following symlinks. The
+// returned descriptor pins the actual directory through the final operation,
+// eliminating pathname re-resolution between validation and rename.
+func openParentAt(rootFD int, relPath string, create bool) (int, string, error) {
+	clean, err := cleanVaultRelativePath(relPath)
+	if err != nil {
+		return -1, "", err
+	}
+	parts := strings.Split(clean, "/")
+	leaf := parts[len(parts)-1]
+	fd, err := unix.Dup(rootFD)
+	if err != nil {
+		return -1, "", err
+	}
+	for _, part := range parts[:len(parts)-1] {
+		next, openErr := unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if errors.Is(openErr, unix.ENOENT) && create {
+			if mkdirErr := unix.Mkdirat(fd, part, 0o755); mkdirErr != nil && !errors.Is(mkdirErr, unix.EEXIST) {
+				_ = unix.Close(fd)
+				return -1, "", mkdirErr
+			}
+			next, openErr = unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		}
+		_ = unix.Close(fd)
+		if openErr != nil {
+			return -1, "", openErr
+		}
+		fd = next
+	}
+	return fd, leaf, nil
+}
+
+func readRegularAt(parentFD int, leaf string) ([]byte, os.FileMode, error) {
+	fd, err := unix.Openat(parentFD, leaf, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, 0, err
+	}
+	file := os.NewFile(uintptr(fd), leaf)
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, 0, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, 0, fmt.Errorf("%s is not a regular file", leaf)
+	}
+	content, err := io.ReadAll(file)
+	return content, info.Mode().Perm(), err
+}
+
+// ReadNoteFile reads a regular vault-relative file without following any path
+// component symlink. It is used to render stale-state versions for file-wide
+// controls without exposing files outside the configured vault.
+func ReadNoteFile(vaultRoot, relPath string) ([]byte, error) {
+	rootFD, err := openVaultRoot(vaultRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(rootFD)
+	parentFD, leaf, err := openParentAt(rootFD, relPath, false)
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(parentFD)
+	content, _, err := readRegularAt(parentFD, leaf)
+	return content, err
+}
+
+func createTempAt(parentFD int, leaf string, content []byte, mode os.FileMode) (string, error) {
+	for attempt := 0; attempt < 32; attempt++ {
+		var nonce [12]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
+			return "", err
+		}
+		name := fmt.Sprintf(".%s.amythest-%x", leaf, nonce[:])
+		fd, err := unix.Openat(parentFD, name, unix.O_CREAT|unix.O_EXCL|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, uint32(mode.Perm()))
+		if errors.Is(err, unix.EEXIST) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if err := unix.Fchmod(fd, uint32(mode.Perm())); err != nil {
+			_ = unix.Close(fd)
+			_ = unix.Unlinkat(parentFD, name, 0)
+			return "", err
+		}
+		file := os.NewFile(uintptr(fd), name)
+		ok := false
+		defer func() {
+			if !ok {
+				_ = unix.Unlinkat(parentFD, name, 0)
+			}
+		}()
+		if _, err := file.Write(content); err != nil {
+			_ = file.Close()
+			return "", err
+		}
+		if err := file.Sync(); err != nil {
+			_ = file.Close()
+			return "", err
+		}
+		if err := file.Close(); err != nil {
+			return "", err
+		}
+		ok = true
+		return name, nil
+	}
+	return "", fmt.Errorf("could not allocate a unique temporary file")
+}
+
+func renameat2(parentFrom int, from string, parentTo int, to string, flags uint) error {
+	err := unix.Renameat2(parentFrom, from, parentTo, to, flags)
+	if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EOPNOTSUPP) {
+		return fmt.Errorf("vault filesystem does not support the required safe atomic rename operation: %w", err)
+	}
+	return err
+}
+
+// rollbackTaskExchangeAt restores the version displaced by the first exchange.
+// The second exchange can itself race with an uncooperative external editor, so
+// it inspects (rather than blindly deletes) the file displaced by the rollback.
+// A second external version is left at its random temporary name and surfaced
+// to the caller instead of being silently lost.
+func rollbackTaskExchangeAt(parentFD int, leaf, tmp string, updated []byte) (string, error) {
+	if err := renameat2(parentFD, tmp, parentFD, leaf, unix.RENAME_EXCHANGE); err != nil {
+		return tmp, fmt.Errorf("rollback exchange failed: %w", err)
+	}
+	displaced, _, err := readRegularAt(parentFD, tmp)
+	if err != nil {
+		return tmp, fmt.Errorf("rollback restored the prior file but could not inspect %s: %w", tmp, err)
+	}
+	if !bytes.Equal(displaced, updated) {
+		_ = unix.Fsync(parentFD)
+		return tmp, fmt.Errorf("file changed again during rollback; concurrent version preserved as %s", tmp)
+	}
+	if err := unix.Unlinkat(parentFD, tmp, 0); err != nil {
+		return tmp, fmt.Errorf("rollback restored the prior file but could not remove %s: %w", tmp, err)
+	}
+	_ = unix.Fsync(parentFD)
+	return "", nil
+}
+
+// replaceTaskFileAt atomically exchanges the prepared replacement with the
+// target, then compares the exact file displaced by that exchange. This closes
+// the check-then-rename window: if an external editor won the race, its version
+// is exchanged back into place before an error is returned.
+func replaceTaskFileAt(parentFD int, leaf string, expected, updated []byte, mode os.FileMode) error {
+	tmp, err := createTempAt(parentFD, leaf, updated, mode)
+	if err != nil {
+		return err
+	}
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = unix.Unlinkat(parentFD, tmp, 0)
+		}
+	}()
+	if err := renameat2(parentFD, tmp, parentFD, leaf, unix.RENAME_EXCHANGE); err != nil {
+		return err
+	}
+	old, _, readErr := readRegularAt(parentFD, tmp)
+	if readErr == nil && bytes.Equal(old, expected) {
+		if err := unix.Unlinkat(parentFD, tmp, 0); err != nil {
+			return err
+		}
+		removeTemp = false
+		_ = unix.Fsync(parentFD)
+		return nil
+	}
+	removeTemp = false
+	preserved, rollbackErr := rollbackTaskExchangeAt(parentFD, leaf, tmp, updated)
+	if rollbackErr != nil {
+		return fmt.Errorf("task file changed; %v (original read error: %v; preserved path: %s)", rollbackErr, readErr, preserved)
+	}
+	if readErr != nil {
+		return fmt.Errorf("task file changed during update; restored original: %w", readErr)
+	}
+	return fmt.Errorf("task file changed during update; reload and retry")
+}
+
+func replaceExistingNoteFileAt(parentFD int, leaf string, expected, updated []byte, mode os.FileMode) error {
+	return replaceTaskFileAt(parentFD, leaf, expected, updated, mode)
+}
+
+// WithVaultWriteLock runs fn while holding the shared in-process and
+// cross-process vault critical section. Callers already inside a mutation must
+// use their operation's AndReindex callback instead of re-entering this lock.
+func WithVaultWriteLock(vaultRoot string, fn func() error) error {
+	_, release, err := acquireTaskVaultWriteLockFD(vaultRoot)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return fn()
+}
+
+func mutateTaskFileAndReindex(vaultRoot, relPath string, mutate func([]byte) ([]byte, error), reindex func() error) error {
+	rootFD, release, err := acquireTaskVaultWriteLockFD(vaultRoot)
+	if err != nil {
+		return err
+	}
+	defer release()
+	parentFD, leaf, err := openParentAt(rootFD, relPath, false)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(parentFD)
+	src, mode, err := readRegularAt(parentFD, leaf)
+	if err != nil {
+		return err
+	}
+	updated, err := mutate(src)
+	if err != nil {
+		return err
+	}
+	if err := replaceTaskFileAt(parentFD, leaf, src, updated, mode); err != nil {
+		return err
+	}
+	if reindex != nil {
+		return reindex()
+	}
+	return nil
+}
+
+func mutateTaskFile(vaultRoot, relPath string, mutate func([]byte) ([]byte, error)) error {
+	return mutateTaskFileAndReindex(vaultRoot, relPath, mutate, nil)
+}
+
+// FileVersion is the stable content identity rendered with destructive file
+// controls and checked again while holding the vault writer lock.
+func FileVersion(content []byte) string {
+	return fmt.Sprintf("%x", sha256.Sum256(content))
+}
+
+type FileDisposition string
+
+const (
+	FileDispositionArchive FileDisposition = "archive"
+	FileDispositionTrash   FileDisposition = "trash"
+)
+
+func dispositionDestination(source string, disposition FileDisposition) (string, error) {
+	source, err := cleanVaultRelativePath(source)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasSuffix(strings.ToLower(source), ".md") {
+		return "", fmt.Errorf("only markdown notes may be moved")
+	}
+	switch disposition {
+	case FileDispositionArchive:
+		return "Archive/Deleted/" + source, nil
+	case FileDispositionTrash:
+		return ".trash/Amythest/" + source, nil
+	default:
+		return "", fmt.Errorf("unsupported file disposition %q", disposition)
+	}
+}
+
+// MoveFileInVault performs a recoverable same-filesystem move. It never
+// overwrites a destination and verifies the exact source version after rename;
+// a stale source is atomically restored whenever the original path is free.
+func MoveFileInVault(vaultRoot, source string, disposition FileDisposition, expectedVersion string) (string, error) {
+	return MoveFileInVaultAndReindex(vaultRoot, source, disposition, expectedVersion, nil)
+}
+
+func MoveFileInVaultAndReindex(vaultRoot, source string, disposition FileDisposition, expectedVersion string, reindex func() error) (string, error) {
+	destination, err := dispositionDestination(source, disposition)
+	if err != nil {
+		return "", err
+	}
+	decodedVersion, decodeErr := hex.DecodeString(expectedVersion)
+	if decodeErr != nil || len(decodedVersion) != sha256.Size {
+		return "", fmt.Errorf("file version is required; refresh and retry")
+	}
+	rootFD, release, err := acquireTaskVaultWriteLockFD(vaultRoot)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	sourceFD, sourceLeaf, err := openParentAt(rootFD, source, false)
+	if err != nil {
+		return "", err
+	}
+	defer unix.Close(sourceFD)
+	before, _, err := readRegularAt(sourceFD, sourceLeaf)
+	if err != nil {
+		return "", err
+	}
+	if FileVersion(before) != expectedVersion {
+		return "", fmt.Errorf("file changed; refresh before moving it")
+	}
+	destFD, destLeaf, err := openParentAt(rootFD, destination, true)
+	if err != nil {
+		return "", err
+	}
+	defer unix.Close(destFD)
+	if err := renameat2(sourceFD, sourceLeaf, destFD, destLeaf, unix.RENAME_NOREPLACE); err != nil {
+		if errors.Is(err, unix.EEXIST) {
+			return "", fmt.Errorf("destination %q already exists", destination)
+		}
+		return "", err
+	}
+	moved, _, verifyErr := readRegularAt(destFD, destLeaf)
+	if verifyErr == nil && FileVersion(moved) == expectedVersion {
+		_ = unix.Fsync(sourceFD)
+		if destFD != sourceFD {
+			_ = unix.Fsync(destFD)
+		}
+		if reindex != nil {
+			if err := reindex(); err != nil {
+				return "", err
+			}
+		}
+		return destination, nil
+	}
+	if rollbackErr := renameat2(destFD, destLeaf, sourceFD, sourceLeaf, unix.RENAME_NOREPLACE); rollbackErr != nil {
+		return "", fmt.Errorf("source changed during move and rollback failed: %v", rollbackErr)
+	}
+	if verifyErr != nil {
+		return "", fmt.Errorf("source changed during move; restored original: %w", verifyErr)
+	}
+	return "", fmt.Errorf("file changed during move; restored original")
+}
+
+// WriteNoteFile is the shared atomic note-creation path used by MCP. It
+// participates in the same in-process and cross-process vault lock as task and
+// disposition writes and never follows path-component symlinks.
+func WriteNoteFile(vaultRoot, relPath string, content []byte, overwrite bool) error {
+	return WriteNoteFileAndReindex(vaultRoot, relPath, content, overwrite, nil)
+}
+
+func WriteNoteFileAndReindex(vaultRoot, relPath string, content []byte, overwrite bool, reindex func() error) error {
+	rootFD, release, err := acquireTaskVaultWriteLockFD(vaultRoot)
+	if err != nil {
+		return err
+	}
+	defer release()
+	parentFD, leaf, err := openParentAt(rootFD, relPath, true)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(parentFD)
+	existing, mode, existingErr := readRegularAt(parentFD, leaf)
+	exists := existingErr == nil
+	if existingErr != nil && !errors.Is(existingErr, unix.ENOENT) {
+		return existingErr
+	}
+	if exists && !overwrite {
+		return fmt.Errorf("%s already exists (set overwrite to replace)", relPath)
+	}
+	if !exists {
+		mode = 0o644
+	}
+	if exists {
+		if err := replaceExistingNoteFileAt(parentFD, leaf, existing, content, mode); err != nil {
+			return err
+		}
+	} else {
+		tmp, err := createTempAt(parentFD, leaf, content, mode)
+		if err != nil {
+			return err
+		}
+		defer unix.Unlinkat(parentFD, tmp, 0)
+		if err := renameat2(parentFD, tmp, parentFD, leaf, unix.RENAME_NOREPLACE); err != nil {
+			return err
+		}
+	}
+	_ = unix.Fsync(parentFD)
+	if reindex != nil {
+		return reindex()
+	}
+	return nil
+}
+
 // ToggleInFile checks or unchecks the task on the given 1-based line of the
-// note at vaultRoot/relPath, writing atomically (temp + rename) and leaving any
-// frontmatter block untouched. Reports whether completing a recurring task also
-// inserted its next occurrence.
-//
-// Shared by the HTTP write path and the MCP toggle_task tool so an agent and
-// the web UI apply identical recurrence and file-safety semantics.
-func ToggleInFile(vaultRoot, relPath string, line int, done bool, now time.Time) (bool, error) {
-	abs := filepath.Join(vaultRoot, filepath.FromSlash(relPath))
-	src, err := os.ReadFile(abs)
-	if err != nil {
-		return false, err
-	}
-	_, body := vault.ParseFrontmatter(src)
-	prefix := src[:len(src)-len(body)]
+// note at vaultRoot/relPath, preserving frontmatter and using an atomic,
+// stale-safe replacement shared by HTTP and MCP.
+func ToggleInFile(vaultRoot, relPath string, line int, expectedVersion string, done bool, now time.Time) (bool, error) {
+	return ToggleInFileAndReindex(vaultRoot, relPath, line, expectedVersion, done, now, nil)
+}
 
-	newBody, recurred, err := ToggleLine(body, line, done, now)
-	if err != nil {
-		return false, err
-	}
+// ToggleInFileAndReindex keeps the exact-file check, atomic mutation, and
+// synchronous index refresh in one shared vault critical section.
+func ToggleInFileAndReindex(vaultRoot, relPath string, line int, expectedVersion string, done bool, now time.Time, reindex func() error) (bool, error) {
+	var recurred bool
+	err := mutateTaskFileAndReindex(vaultRoot, relPath, func(src []byte) ([]byte, error) {
+		decoded, decodeErr := hex.DecodeString(expectedVersion)
+		if decodeErr != nil || len(decoded) != sha256.Size {
+			return nil, fmt.Errorf("task version is required; refresh and retry")
+		}
+		if FileVersion(src) != expectedVersion {
+			return nil, fmt.Errorf("task file changed; refresh and retry")
+		}
+		_, body := vault.ParseFrontmatter(src)
+		prefix := src[:len(src)-len(body)]
+		newBody, didRecur, err := ToggleLine(body, line, done, now)
+		if err != nil {
+			return nil, err
+		}
+		recurred = didRecur
+		return append(append([]byte{}, prefix...), newBody...), nil
+	}, reindex)
+	return recurred, err
+}
 
-	info, err := os.Stat(abs)
-	if err != nil {
-		return false, err
-	}
-	tmp := abs + ".amythest-tmp"
-	out := append(append([]byte{}, prefix...), newBody...)
-	if err := os.WriteFile(tmp, out, info.Mode().Perm()); err != nil {
-		return false, err
-	}
-	if err := os.Rename(tmp, abs); err != nil {
-		_ = os.Remove(tmp)
-		return false, err
-	}
-	return recurred, nil
+// UpdateDueDateInFile sets, changes, or clears one task due date while
+// preserving frontmatter and using the shared stale-safe atomic writer.
+func UpdateDueDateInFile(vaultRoot, relPath string, line int, expectedText, expectedStatus, expectedDue, due string) error {
+	return UpdateDueDateInFileAndReindex(vaultRoot, relPath, line, expectedText, expectedStatus, expectedDue, due, nil)
+}
+
+func UpdateDueDateInFileAndReindex(vaultRoot, relPath string, line int, expectedText, expectedStatus, expectedDue, due string, reindex func() error) error {
+	return mutateTaskFileAndReindex(vaultRoot, relPath, func(src []byte) ([]byte, error) {
+		_, body := vault.ParseFrontmatter(src)
+		prefix := src[:len(src)-len(body)]
+		newBody, err := UpdateDueDateLine(body, line, expectedText, expectedStatus, expectedDue, due)
+		if err != nil {
+			return nil, err
+		}
+		return append(append([]byte{}, prefix...), newBody...), nil
+	}, reindex)
 }

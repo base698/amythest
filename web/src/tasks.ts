@@ -2,7 +2,20 @@
 // through /api/tasks/toggle (recurring tasks roll forward server-side),
 // then the page refreshes in place to show the result.
 import { refreshCurrent } from "./spa"
-import { buildTriagePayload, type TriageAction } from "./taskTriage"
+import { buildTaskTogglePayload } from "./taskToggle"
+import {
+  buildFileDispositionPayload,
+  buildFileDispositionPrompt,
+  buildTriagePayload,
+  type FileDispositionAction,
+  type TriageAction,
+} from "./taskTriage"
+import {
+  buildTaskDuePayload,
+  taskDueClearSelector,
+  taskDueEndpoint,
+  taskDueSaveSelector,
+} from "./taskDue"
 
 let bound = false
 
@@ -15,6 +28,13 @@ export function setupTaskToggles() {
     if (!box.matches?.("input.task-toggle")) return
     void toggle(box)
   })
+
+  document.addEventListener("click", (e) => {
+    const target = e.target as Element
+    const button = target.closest?.<HTMLButtonElement>(`${taskDueSaveSelector}, ${taskDueClearSelector}`)
+    if (!button) return
+    void updateDueDate(button, button.matches(taskDueClearSelector))
+  })
 }
 
 let triageBound = false
@@ -25,6 +45,11 @@ export function setupTaskTriage() {
 
   document.addEventListener("click", (e) => {
     const target = e.target as Element
+    const dispositionButton = target.closest?.<HTMLButtonElement>("[data-task-triage] button[data-file-disposition]")
+    if (dispositionButton) {
+      void disposeFile(dispositionButton)
+      return
+    }
     const fileButton = target.closest?.<HTMLButtonElement>("[data-task-triage] button[data-file-action]")
     if (fileButton) {
       void triageFile(fileButton)
@@ -43,6 +68,36 @@ export function setupTaskTriage() {
       file.hidden = query !== "" && !searchable.toLowerCase().includes(query)
     })
   })
+}
+
+async function disposeFile(button: HTMLButtonElement) {
+  const panel = button.closest<HTMLElement>("[data-selected-file]")
+  if (!panel) return
+  const action = button.dataset.fileDisposition as FileDispositionAction
+  const path = panel.dataset.filePath || "this file"
+  const prompt = buildFileDispositionPrompt(path, action)
+  if (!window.confirm(prompt)) return
+
+  const allButtons = document.querySelectorAll<HTMLButtonElement>("[data-task-triage] button")
+  try {
+    const payload = buildFileDispositionPayload(
+      panel.dataset.fileSlug || "",
+      action,
+      panel.dataset.fileVersion || "",
+    )
+    allButtons.forEach((el) => { el.disabled = true })
+    const res = await fetch(`${baseURL()}api/tasks/file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) throw new Error((await res.text()) || `file move failed (${res.status})`)
+    await refreshCurrent()
+  } catch (err) {
+    allButtons.forEach((el) => { el.disabled = false })
+    showToast(err instanceof Error ? err.message : "Couldn't move the file")
+  }
 }
 
 async function triageFile(button: HTMLButtonElement) {
@@ -118,15 +173,15 @@ async function triage(button: HTMLButtonElement) {
 async function toggle(box: HTMLInputElement) {
   const slug = box.dataset.slug
   const line = Number(box.dataset.line)
-  if (!slug || !line) return
   const done = box.checked
   box.disabled = true
   try {
+    const payload = buildTaskTogglePayload(slug || "", line, box.dataset.version || "", done)
     const res = await fetch(`${baseURL()}api/tasks/toggle`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
-      body: JSON.stringify({ slug, line, done }),
+      body: JSON.stringify(payload),
     })
     if (!res.ok) {
       throw new Error((await res.text()) || `toggle failed (${res.status})`)
@@ -139,6 +194,36 @@ async function toggle(box: HTMLInputElement) {
     return
   }
   box.disabled = false
+}
+
+async function updateDueDate(button: HTMLButtonElement, clear: boolean) {
+  const editor = button.closest<HTMLElement>("[data-task-due-editor]")
+  const input = editor?.querySelector<HTMLInputElement>("[data-task-due-input]")
+  if (!editor || !input) return
+  if (clear && editor.dataset.expectedDue && !window.confirm("Clear this task's due date?")) return
+
+  const controls = editor.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button")
+  try {
+    const payload = buildTaskDuePayload({
+      slug: editor.dataset.slug || "",
+      line: Number(editor.dataset.line),
+      expectedText: editor.dataset.expectedText || "",
+      expectedStatus: editor.dataset.expectedStatus || "",
+      expectedDue: editor.dataset.expectedDue || "",
+    }, clear ? "" : input.value)
+    controls.forEach((el) => { el.disabled = true })
+    const res = await fetch(`${baseURL()}${taskDueEndpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) throw new Error((await res.text()) || `due-date update failed (${res.status})`)
+    await refreshCurrent()
+  } catch (err) {
+    controls.forEach((el) => { el.disabled = false })
+    showToast(err instanceof Error ? err.message : "Couldn't update the due date")
+  }
 }
 
 let toastTimer: number | undefined

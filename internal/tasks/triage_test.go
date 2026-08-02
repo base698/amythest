@@ -1,8 +1,10 @@
 package tasks
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,6 +24,20 @@ func TestTriageLineMarksIntentionalBacklog(t *testing.T) {
 	want := "# Project\n- [ ] Investigate options #backlog\n"
 	if string(out) != want {
 		t.Fatalf("out = %q, want %q", out, want)
+	}
+}
+
+func TestTriageLineBacklogTagIsCaseInsensitive(t *testing.T) {
+	body := []byte("- [ ] Investigate options #Backlog\n")
+
+	out, err := TriageLine(body, 1, TriageMutation{
+		Action: TriageBacklog, ExpectedText: "Investigate options #Backlog",
+	}, triageNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != string(body) {
+		t.Fatalf("duplicate backlog tag appended: %q", out)
 	}
 }
 
@@ -86,6 +102,92 @@ func TestTriageLineRejectsTaskThatGainedDueDate(t *testing.T) {
 	}
 }
 
+func TestTriageInFileRejectsPathOutsideVault(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "vault")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(parent, "outside.md")
+	original := "- [ ] Keep safe\n"
+	if err := os.WriteFile(outside, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := TriageInFile(root, "../outside.md", 1, TriageMutation{
+		Action: TriageBacklog, ExpectedText: "Keep safe",
+	}, triageNow)
+	if err == nil {
+		t.Fatal("expected traversal outside the vault to be rejected")
+	}
+	got, readErr := os.ReadFile(outside)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != original {
+		t.Fatalf("outside file changed: %q", got)
+	}
+}
+
+func TestTriageInFileRejectsNoteSymlinkOutsideVault(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "vault")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(parent, "outside.md")
+	original := "- [ ] Keep safe\n"
+	if err := os.WriteFile(outside, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "linked.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := TriageInFile(root, "linked.md", 1, TriageMutation{
+		Action: TriageBacklog, ExpectedText: "Keep safe",
+	}, triageNow)
+	if err == nil {
+		t.Fatal("expected a note symlink outside the vault to be rejected")
+	}
+	got, readErr := os.ReadFile(outside)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != original {
+		t.Fatalf("outside symlink target changed: %q", got)
+	}
+}
+
+func TestTriageInFileDoesNotFollowPredictableTempSymlink(t *testing.T) {
+	root := t.TempDir()
+	note := filepath.Join(root, "Project.md")
+	victim := filepath.Join(root, "victim.txt")
+	if err := os.WriteFile(note, []byte("- [ ] Ship it\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(victim, []byte("do not overwrite"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, note+".amythest-tmp"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := TriageInFile(root, "Project.md", 1, TriageMutation{
+		Action: TriageBacklog, ExpectedText: "Ship it",
+	}, triageNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "do not overwrite" {
+		t.Fatalf("predictable temp symlink target was overwritten: %q", got)
+	}
+}
+
 func TestTriageInFilePreservesFrontmatter(t *testing.T) {
 	root := t.TempDir()
 	rel := "Project.md"
@@ -108,6 +210,27 @@ func TestTriageInFilePreservesFrontmatter(t *testing.T) {
 	want := "---\ntitle: Project\n---\n\n- [ ] Ship prototype #backlog\n"
 	if string(out) != want {
 		t.Fatalf("out = %q, want %q", out, want)
+	}
+}
+
+func TestTriageBatchBodyProcessesFiveThousandItemsInOnePass(t *testing.T) {
+	var body strings.Builder
+	items := make([]TriageItem, 0, 5_000)
+	for i := 1; i <= 5_000; i++ {
+		text := fmt.Sprintf("Item %d", i)
+		body.WriteString("- [ ] " + text + "\n")
+		items = append(items, TriageItem{Line: i, Mutation: TriageMutation{Action: TriageReference, ExpectedText: text}})
+	}
+	started := time.Now()
+	out, err := triageBatchBody([]byte(body.String()), items, triageNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "[ ]") {
+		t.Fatal("batch left task checkboxes behind")
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("5000-item batch took %s; expected linear processing", elapsed)
 	}
 }
 

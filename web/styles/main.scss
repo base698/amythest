@@ -570,6 +570,33 @@ blockquote.transclude {
     white-space: nowrap;
   }
 
+  .task-due-editor {
+    display: inline-block;
+    margin-left: 0.3rem;
+    vertical-align: middle;
+
+    > summary { cursor: pointer; list-style: none; margin-left: 0; }
+    > summary::-webkit-details-marker { display: none; }
+    &[open] { display: block; margin: 0.35rem 0 0.55rem 1.6rem; }
+  }
+
+  .task-due-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 0.4rem;
+    margin-top: 0.35rem;
+    padding: 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-alt);
+
+    label { display: grid; gap: 0.15rem; color: var(--fg-muted); font-size: 0.72rem; font-weight: 600; }
+    input, button { min-height: 2rem; }
+    input { padding: 0.25rem 0.4rem; }
+    button { padding: 0.25rem 0.6rem; }
+  }
+
   .task-src {
     margin-left: 0.3rem;
     font-size: 0.8rem;
@@ -788,6 +815,7 @@ input.task-toggle:disabled { cursor: wait; opacity: 0.6; }
   .triage-file-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.4rem; }
   .triage-file-actions button { padding: 0.28rem 0.55rem; border: 1px solid var(--border); border-radius: 8px; color: var(--fg-muted); background: var(--bg); font: inherit; font-size: 0.72rem; cursor: pointer; }
   .triage-file-actions button:hover { border-color: var(--accent); color: var(--accent); }
+  .triage-file-actions button.danger { border-color: color-mix(in srgb, #c64f4f 55%, var(--border)); color: #c64f4f; }
   .triage-file-actions button:disabled { opacity: 0.5; cursor: wait; }
   .triage-cards { display: grid; gap: 0.75rem; margin-top: 0.9rem; }
   .triage-card { padding: 0.9rem; border: 1px solid var(--border); border-radius: 11px; background: var(--bg); }
@@ -800,7 +828,8 @@ input.task-toggle:disabled { cursor: wait; opacity: 0.6; }
   .triage-actions button:hover { border-color: var(--accent); color: var(--accent); }
   .triage-actions button:disabled { opacity: 0.5; cursor: wait; }
   .triage-actions button.danger:hover { border-color: #c64f4f; color: #c64f4f; }
-  .triage-due { display: inline-flex; gap: 0.25rem; }
+  .triage-due { display: inline-flex; gap: 0.25rem; align-items: center; }
+  .triage-due-label { color: var(--fg-muted); font-size: 0.72rem; font-weight: 600; white-space: nowrap; }
   .triage-due input { padding: 0.25rem 0.4rem; }
   .triage-empty { padding: 2rem; border: 1px dashed var(--border); border-radius: 14px; text-align: center; }
 }
@@ -809,6 +838,8 @@ input.task-toggle:disabled { cursor: wait; opacity: 0.6; }
   .task-triage {
     .triage-layout { grid-template-columns: 1fr; }
     .triage-files { position: static; max-height: 18rem; }
+    .triage-panel-heading { display: block; }
+    .triage-file-actions { justify-content: flex-start; margin-top: 0.75rem; }
   }
 }
 
