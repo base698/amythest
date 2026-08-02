@@ -6,27 +6,18 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/base698/amythest/internal/kanban/board"
 	"github.com/base698/amythest/internal/tasks"
 )
 
 func (s *Server) handleTaskMoveToBoard(w http.ResponseWriter, r *http.Request) {
+	if !s.requireKanbanSession(w, r, "edit tasks") {
+		return
+	}
 	if s.kanban == nil {
 		http.Error(w, "kanban is unavailable", http.StatusServiceUnavailable)
 		return
-	}
-	if s.kanbanAuth != nil {
-		cookie, err := r.Cookie(kanbanSessionCookie)
-		if err != nil {
-			http.Error(w, "sign in to the kanban to edit tasks", http.StatusUnauthorized)
-			return
-		}
-		if _, err := s.kanbanAuth.Verify(cookie.Value, time.Now()); err != nil {
-			http.Error(w, "session expired: sign in to the kanban again", http.StatusUnauthorized)
-			return
-		}
 	}
 	var req struct {
 		Board           string `json:"board"`

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -115,7 +116,7 @@ func (s *Store) Load(name string) (Board, error) {
 		return Board{}, errors.New("invalid board name")
 	}
 	var loaded Board
-	err := s.withLock(name, func() error {
+	err := s.withReadLock(name, func() error {
 		var err error
 		loaded, err = readBoard(s.boardPath(name))
 		return err
@@ -547,7 +548,7 @@ func (s *Store) ListArchived(name, query string, limit int) ([]Card, error) {
 		return nil, errors.New("archive query must be at most 200 characters")
 	}
 	cards := []Card{}
-	err := s.withLock(name, func() error {
+	err := s.withReadLock(name, func() error {
 		value, err := readBoard(s.donePath(name))
 		if err != nil {
 			return err
@@ -735,7 +736,7 @@ func (s *Store) AddAttachment(name, cardID, filename, contentType string, source
 
 func (s *Store) ListAttachments(name, cardID string) ([]Attachment, error) {
 	attachments := []Attachment{}
-	err := s.withLock(name, func() error {
+	err := s.withReadLock(name, func() error {
 		value, err := readBoard(s.boardPath(name))
 		if err != nil {
 			return err
@@ -803,7 +804,7 @@ func (s *Store) DeleteAttachment(name, cardID, attachmentID string) error {
 func (s *Store) OpenAttachment(name, cardID, attachmentID string) (*os.File, Attachment, error) {
 	var file *os.File
 	var found Attachment
-	err := s.withLock(name, func() error {
+	err := s.withReadLock(name, func() error {
 		value, err := readBoard(s.boardPath(name))
 		if err != nil {
 			return err
@@ -903,14 +904,32 @@ func validObjectID(id string) bool {
 }
 
 func (s *Store) withLock(name string, fn func() error) error {
+	return s.withLockMode(name, true, fn)
+}
+
+// withReadLock is the read-path variant: it never creates the board
+// directory, so probing arbitrary names (GET /api/boards/...) leaves no
+// directories or lock files behind.
+func (s *Store) withReadLock(name string, fn func() error) error {
+	return s.withLockMode(name, false, fn)
+}
+
+func (s *Store) withLockMode(name string, create bool, fn func() error) error {
 	if !validBoardName(name) {
 		return errors.New("invalid board name")
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	dir := filepath.Join(s.root, name)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return err
+	if create {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return err
+		}
+	} else if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return os.ErrNotExist
 	}
 	lock, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -1018,12 +1037,25 @@ func (s *Store) recoverArchiveUnlocked(name string) error {
 	}
 	var journal archiveJournal
 	if err := json.Unmarshal(payload, &journal); err != nil {
-		return fmt.Errorf("parse archive journal: %w", err)
+		return s.quarantineArchiveJournalUnlocked(name, fmt.Errorf("parse archive journal: %w", err))
 	}
 	if len(journal.BoardImage) == 0 || len(journal.DoneImage) == 0 {
-		return errors.New("archive journal is incomplete")
+		return s.quarantineArchiveJournalUnlocked(name, errors.New("archive journal is incomplete"))
 	}
 	return s.applyArchiveJournalUnlocked(name, journal)
+}
+
+// quarantineArchiveJournalUnlocked sidelines a corrupt WAL so it stops
+// blocking every operation on the board; the last committed board/done
+// images stay authoritative and the renamed file is kept for forensics.
+func (s *Store) quarantineArchiveJournalUnlocked(name string, cause error) error {
+	quarantined := fmt.Sprintf("%s.corrupt-%d", s.journalPath(name), s.now().UTC().Unix())
+	if err := os.Rename(s.journalPath(name), quarantined); err != nil {
+		return fmt.Errorf("quarantine corrupt archive journal (%v): %w", cause, err)
+	}
+	slog.Warn("kanban archive journal corrupt; quarantined",
+		"board", name, "quarantined", quarantined, "err", cause)
+	return syncDir(filepath.Dir(s.journalPath(name)))
 }
 
 func (s *Store) applyArchiveJournalUnlocked(name string, journal archiveJournal) error {

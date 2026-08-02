@@ -6,10 +6,13 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"html"
 	"html/template"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -64,6 +67,13 @@ func jsonDecodeLimit(r *http.Request, into any, limit int64) error {
 }
 
 func New(cfg config.Config) (*Server, error) {
+	// Canonicalize once so every consumer — the vault scanner, the no-follow
+	// task writer, the kanban store, share — agrees on one symlink-free root.
+	resolvedVault, err := filepath.EvalSymlinks(cfg.Vault)
+	if err != nil {
+		return nil, fmt.Errorf("resolve vault path %q: %w", cfg.Vault, err)
+	}
+	cfg.Vault = resolvedVault
 	tmpl, err := template.ParseFS(web.FS, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -118,6 +128,8 @@ func New(cfg config.Config) (*Server, error) {
 	s.mux.HandleFunc("POST /api/tasks/file", s.handleTaskFileDisposition)
 	s.mux.HandleFunc("POST /api/tasks/file/hide", s.handleTaskFileHide)
 	s.mux.HandleFunc("POST /api/tasks/move-to-board", s.handleTaskMoveToBoard)
+	s.mux.HandleFunc("POST /api/tasks/cancel", s.handleTaskCancel)
+	s.mux.HandleFunc("POST /api/tasks/purge", s.handleTaskPurge)
 	s.mux.HandleFunc("GET /tasks", s.handleTasksPage)
 	s.mux.HandleFunc("GET /tasks/triage", s.handleTasksTriagePage)
 	s.mux.HandleFunc("GET /share", s.handleSharePage)
@@ -243,7 +255,18 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if results == nil {
 		results = []index.SearchResult{}
 	}
+	for i := range results {
+		results[i].Excerpt = snippetHTML(results[i].Excerpt)
+	}
 	s.writeJSON(w, results)
+}
+
+// snippetHTML escapes the raw FTS excerpt (note content is untrusted) and
+// only then turns the store's control-character markers into highlights.
+func snippetHTML(excerpt string) string {
+	escaped := html.EscapeString(excerpt)
+	escaped = strings.ReplaceAll(escaped, "\x02", "<b>")
+	return strings.ReplaceAll(escaped, "\x03", "</b>")
 }
 
 // parseBoolParam accepts the common truthy query-string spellings; anything

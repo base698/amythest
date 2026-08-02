@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -468,6 +469,9 @@ func (s *server) spa(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
+	if name == "index.html" {
+		data = rewriteIndexBase(data, r.Header.Get("X-Forwarded-Prefix"))
+	}
 	if contentType := mime.TypeByExtension(path.Ext(name)); contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	}
@@ -567,6 +571,26 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
+// rewriteIndexBase repoints the SPA's absolute /kanban asset URLs at the
+// public mount when a reverse proxy serves the app under a deeper prefix
+// (e.g. /notes/kanban). The proxy declares the prefix via X-Forwarded-Prefix;
+// a prefix that already ends in /kanban is the mount itself.
+func rewriteIndexBase(index []byte, forwardedPrefix string) []byte {
+	prefix := strings.TrimSuffix(strings.TrimSpace(forwardedPrefix), "/")
+	if prefix == "" || !strings.HasPrefix(prefix, "/") || strings.Contains(prefix, "//") ||
+		strings.ContainsAny(prefix, "\"'<>\\ ") {
+		return index
+	}
+	base := prefix
+	if !strings.HasSuffix(base, "/kanban") {
+		base += "/kanban"
+	}
+	if base == "/kanban" {
+		return index
+	}
+	return bytes.ReplaceAll(index, []byte(`"/kanban/`), []byte(`"`+base+`/`))
+}
+
 func methodNotAllowed(w http.ResponseWriter, methods ...string) {
 	w.Header().Set("Allow", strings.Join(methods, ", "))
 	writeError(w, http.StatusMethodNotAllowed, "method not allowed")

@@ -68,6 +68,18 @@ func ParseFile(slug, path string, body []byte) ([]Task, []InlineField) {
 	return out, fields
 }
 
+// ParseLine parses one raw checkbox line into a Task carrying the given
+// vault coordinates. ok is false when the line is not a task checkbox.
+func ParseLine(line, slug, path string, lineNo int, version string) (Task, bool) {
+	m := taskLineRe.FindStringSubmatch(strings.TrimSuffix(line, "\r"))
+	if m == nil {
+		return Task{}, false
+	}
+	t := parseTask(m[1][0], m[2])
+	t.Slug, t.Path, t.Line, t.Version = slug, path, lineNo, version
+	return t, true
+}
+
 func parseTask(statusChar byte, rest string) Task {
 	t := Task{Priority: 3}
 	switch statusChar {

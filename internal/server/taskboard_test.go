@@ -49,10 +49,11 @@ func TestHandleTaskMoveToBoardCreatesTriageCardConvertsSourceAndReindexes(t *tes
 	s.vault.Store(v)
 	s.tree.Store(buildTree(v, "/notes/"))
 
+	auth := withSession(t, s)
 	payload := fmt.Sprintf(`{"board":"product","slug":"Project","line":3,"expectedText":"Ship release","expectedStatus":"open","expectedVersion":%q}`, tasks.FileVersion(content))
 	request := func() *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		s.handleTaskMoveToBoard(rec, httptest.NewRequest(http.MethodPost, "/notes/api/tasks/move-to-board", bytes.NewBufferString(payload)))
+		s.handleTaskMoveToBoard(rec, auth(httptest.NewRequest(http.MethodPost, "/notes/api/tasks/move-to-board", bytes.NewBufferString(payload))))
 		return rec
 	}
 	if rec := request(); rec.Code != http.StatusOK {
@@ -96,9 +97,10 @@ func TestHandleTaskMoveToBoardRejectsUnavailableAndMissingBoard(t *testing.T) {
 		"missing":     {kanban: board.NewStore(t.TempDir(), time.Now)},
 	} {
 		t.Run(name, func(t *testing.T) {
+			auth := withSession(t, server)
 			rec := httptest.NewRecorder()
 			body := `{"board":"missing","slug":"Project","line":1,"expectedText":"Task","expectedStatus":"open","expectedVersion":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
-			server.handleTaskMoveToBoard(rec, httptest.NewRequest(http.MethodPost, "/api/tasks/move-to-board", bytes.NewBufferString(body)))
+			server.handleTaskMoveToBoard(rec, auth(httptest.NewRequest(http.MethodPost, "/api/tasks/move-to-board", bytes.NewBufferString(body))))
 			if rec.Code != http.StatusServiceUnavailable && rec.Code != http.StatusBadRequest {
 				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 			}

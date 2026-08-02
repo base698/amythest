@@ -23,35 +23,41 @@ test("task due-date UI contract names both controls and its endpoint", () => {
 })
 
 test("buildTaskDuePayload serializes a stale-safe due-date change", () => {
+  const version = "b".repeat(64)
   assert.deepEqual(buildTaskDuePayload({
     slug: "Projects/Launch",
     line: 7,
     expectedText: "Ship release",
     expectedStatus: "open",
     expectedDue: "2026-08-15",
+    expectedVersion: version,
   }, "2026-08-20"), {
     slug: "Projects/Launch",
     line: 7,
     expectedText: "Ship release",
     expectedStatus: "open",
     expectedDue: "2026-08-15",
+    expectedVersion: version,
     due: "2026-08-20",
   })
 })
 
 test("buildTaskDuePayload represents clearing as an empty due date", () => {
+  const version = "b".repeat(64)
   assert.deepEqual(buildTaskDuePayload({
     slug: "Projects/Launch",
     line: 7,
     expectedText: "Ship release",
     expectedStatus: "open",
     expectedDue: "2026-08-15",
+    expectedVersion: version,
   }, ""), {
     slug: "Projects/Launch",
     line: 7,
     expectedText: "Ship release",
     expectedStatus: "open",
     expectedDue: "2026-08-15",
+    expectedVersion: version,
     due: "",
   })
 })
@@ -63,6 +69,18 @@ test("buildTaskDuePayload requires the rendered task status", () => {
     expectedText: "Ship release",
     expectedStatus: "",
     expectedDue: "2026-08-15",
+    expectedVersion: "b".repeat(64),
+  }, "2026-08-20"), /refresh/)
+})
+
+test("buildTaskDuePayload requires the exact rendered file version", () => {
+  assert.throws(() => buildTaskDuePayload({
+    slug: "Projects/Launch",
+    line: 7,
+    expectedText: "Ship release",
+    expectedStatus: "open",
+    expectedDue: "2026-08-15",
+    expectedVersion: "not-a-version",
   }, "2026-08-20"), /refresh/)
 })
 

@@ -92,7 +92,10 @@ func TestSelectedTaskTriagePathUsesRequestedOrLargestFile(t *testing.T) {
 }
 
 func TestLoadTaskTriageContextsShowsSurroundingBodyLines(t *testing.T) {
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	rel := "Projects/Work.md"
 	src := "---\ntitle: Work\n---\n# Work\n## Options\n- [ ] Choose a direction\nDecision notes live here.\n"
 	if err := os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755); err != nil {

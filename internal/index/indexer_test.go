@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/base698/amythest/internal/index"
@@ -147,6 +148,54 @@ func TestReconcileRefreshesArchivedStatusOnFrontmatterChange(t *testing.T) {
 	}
 	if len(afterIncluded) != 1 || !afterIncluded[0].Archived || afterIncluded[0].ArchivedReason != "frontmatter:status" {
 		t.Fatalf("after archiving, include-archived result = %#v, want archived via frontmatter:status", afterIncluded)
+	}
+}
+
+func TestReconcileReRendersTranscludingNoteWhenEmbeddedNoteChanges(t *testing.T) {
+	root := t.TempDir()
+	writeNote(t, root, "A.md", "# A\n\n![[B]]\n")
+	writeNote(t, root, "B.md", "Original embedded body.\n")
+
+	v, err := vault.Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	e := markdown.New("/")
+	if err := db.Reconcile(v, e); err != nil {
+		t.Fatal(err)
+	}
+	before, err := db.Page("A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(before.HTML), "Original embedded body.") {
+		t.Fatalf("A does not inline B: %s", before.HTML)
+	}
+
+	// A itself is untouched; only the transcluded note changes. The
+	// dependency fingerprint must still invalidate A's cached HTML.
+	writeNote(t, root, "B.md", "Updated embedded body.\n")
+	v2, err := vault.Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Reconcile(v2, e); err != nil {
+		t.Fatal(err)
+	}
+	after, err := db.Page("A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after.HTML) == string(before.HTML) {
+		t.Fatal("A's rendered HTML is stale after its transcluded note changed")
+	}
+	if !strings.Contains(string(after.HTML), "Updated embedded body.") {
+		t.Fatalf("A does not inline B's new content: %s", after.HTML)
 	}
 }
 

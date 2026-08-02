@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,10 +32,28 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Routes are registered unprefixed; base_url only decorates emitted
+	// links. Accepting the prefixed form too means the server works whether
+	// or not the fronting proxy strips the prefix.
+	var handler http.Handler = srv
+	if prefix := strings.TrimSuffix(cfg.BaseURL, "/"); prefix != "" {
+		unprefixed := handler
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == prefix || strings.HasPrefix(r.URL.Path, prefix+"/") {
+				http.StripPrefix(prefix, unprefixed).ServeHTTP(w, r)
+				return
+			}
+			unprefixed.ServeHTTP(w, r)
+		})
+	}
+
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           srv,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		// Generous: share uploads up to 100MB pass through this server.
+		WriteTimeout: 5 * time.Minute,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -54,4 +73,9 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(shutdownCtx)
+	// In-flight requests are done (or timed out); close the server so the
+	// SQLite databases checkpoint cleanly.
+	if err := srv.Close(); err != nil {
+		slog.Error("close", "err", err)
+	}
 }

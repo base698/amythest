@@ -21,21 +21,6 @@ import (
 
 var taskFileWriteMu sync.Mutex
 
-// openVaultRoot resolves the configured root in one kernel path walk and
-// rejects symlinks in every component. This avoids validating one pathname and
-// then reopening a different directory after an ancestor swap.
-func openVaultRoot(vaultRoot string) (int, error) {
-	root, err := filepath.Abs(vaultRoot)
-	if err != nil {
-		return -1, err
-	}
-	how := &unix.OpenHow{
-		Flags:   uint64(unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC),
-		Resolve: uint64(unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS),
-	}
-	return unix.Openat2(unix.AT_FDCWD, root, how)
-}
-
 // The root directory inode is the stable cross-process lock. Unlike a lock file
 // in TMPDIR, all Amythest processes using the same resolved vault necessarily
 // contend on the same object and no artifact is left in the vault.
@@ -191,21 +176,13 @@ func createTempAt(parentFD int, leaf string, content []byte, mode os.FileMode) (
 	return "", fmt.Errorf("could not allocate a unique temporary file")
 }
 
-func renameat2(parentFrom int, from string, parentTo int, to string, flags uint) error {
-	err := unix.Renameat2(parentFrom, from, parentTo, to, flags)
-	if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EOPNOTSUPP) {
-		return fmt.Errorf("vault filesystem does not support the required safe atomic rename operation: %w", err)
-	}
-	return err
-}
-
 // rollbackTaskExchangeAt restores the version displaced by the first exchange.
 // The second exchange can itself race with an uncooperative external editor, so
 // it inspects (rather than blindly deletes) the file displaced by the rollback.
 // A second external version is left at its random temporary name and surfaced
 // to the caller instead of being silently lost.
 func rollbackTaskExchangeAt(parentFD int, leaf, tmp string, updated []byte) (string, error) {
-	if err := renameat2(parentFD, tmp, parentFD, leaf, unix.RENAME_EXCHANGE); err != nil {
+	if err := renameExchangeAt(parentFD, tmp, parentFD, leaf); err != nil {
 		return tmp, fmt.Errorf("rollback exchange failed: %w", err)
 	}
 	displaced, _, err := readRegularAt(parentFD, tmp)
@@ -238,7 +215,7 @@ func replaceTaskFileAtResult(parentFD int, leaf string, expected, updated []byte
 			_ = unix.Unlinkat(parentFD, tmp, 0)
 		}
 	}()
-	if err := renameat2(parentFD, tmp, parentFD, leaf, unix.RENAME_EXCHANGE); err != nil {
+	if err := renameExchangeAt(parentFD, tmp, parentFD, leaf); err != nil {
 		return false, err
 	}
 	old, _, readErr := readRegularAt(parentFD, tmp)
@@ -497,7 +474,7 @@ func MoveFileInVaultAndReindex(vaultRoot, source string, disposition FileDisposi
 		return "", err
 	}
 	defer unix.Close(destFD)
-	if err := renameat2(sourceFD, sourceLeaf, destFD, destLeaf, unix.RENAME_NOREPLACE); err != nil {
+	if err := renameNoReplaceAt(sourceFD, sourceLeaf, destFD, destLeaf); err != nil {
 		if errors.Is(err, unix.EEXIST) {
 			return "", fmt.Errorf("destination %q already exists", destination)
 		}
@@ -516,7 +493,7 @@ func MoveFileInVaultAndReindex(vaultRoot, source string, disposition FileDisposi
 		}
 		return destination, nil
 	}
-	if rollbackErr := renameat2(destFD, destLeaf, sourceFD, sourceLeaf, unix.RENAME_NOREPLACE); rollbackErr != nil {
+	if rollbackErr := renameNoReplaceAt(destFD, destLeaf, sourceFD, sourceLeaf); rollbackErr != nil {
 		return "", fmt.Errorf("source changed during move and rollback failed: %v", rollbackErr)
 	}
 	if verifyErr != nil {
@@ -564,7 +541,7 @@ func WriteNoteFileAndReindex(vaultRoot, relPath string, content []byte, overwrit
 			return err
 		}
 		defer unix.Unlinkat(parentFD, tmp, 0)
-		if err := renameat2(parentFD, tmp, parentFD, leaf, unix.RENAME_NOREPLACE); err != nil {
+		if err := renameNoReplaceAt(parentFD, tmp, parentFD, leaf); err != nil {
 			return err
 		}
 	}
@@ -608,12 +585,19 @@ func ToggleInFileAndReindex(vaultRoot, relPath string, line int, expectedVersion
 
 // UpdateDueDateInFile sets, changes, or clears one task due date while
 // preserving frontmatter and using the shared stale-safe atomic writer.
-func UpdateDueDateInFile(vaultRoot, relPath string, line int, expectedText, expectedStatus, expectedDue, due string) error {
-	return UpdateDueDateInFileAndReindex(vaultRoot, relPath, line, expectedText, expectedStatus, expectedDue, due, nil)
+func UpdateDueDateInFile(vaultRoot, relPath string, line int, expectedText, expectedStatus, expectedDue, due, expectedVersion string) error {
+	return UpdateDueDateInFileAndReindex(vaultRoot, relPath, line, expectedText, expectedStatus, expectedDue, due, expectedVersion, nil)
 }
 
-func UpdateDueDateInFileAndReindex(vaultRoot, relPath string, line int, expectedText, expectedStatus, expectedDue, due string, reindex func() error) error {
+func UpdateDueDateInFileAndReindex(vaultRoot, relPath string, line int, expectedText, expectedStatus, expectedDue, due, expectedVersion string, reindex func() error) error {
 	return mutateTaskFileAndReindex(vaultRoot, relPath, func(src []byte) ([]byte, error) {
+		decoded, decodeErr := hex.DecodeString(expectedVersion)
+		if decodeErr != nil || len(decoded) != sha256.Size {
+			return nil, fmt.Errorf("task version is required; refresh and retry")
+		}
+		if FileVersion(src) != expectedVersion {
+			return nil, fmt.Errorf("task file changed; refresh and retry")
+		}
 		_, body := vault.ParseFrontmatter(src)
 		prefix := src[:len(src)-len(body)]
 		newBody, err := UpdateDueDateLine(body, line, expectedText, expectedStatus, expectedDue, due)

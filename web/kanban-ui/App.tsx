@@ -9,6 +9,7 @@ import {
   type FilterMode,
 } from './labels'
 import { searchCards } from './cardSearch'
+import { KANBAN_MOUNT, NOTES_BASE } from './mount.ts'
 import './styles.css'
 
 interface Session { user: string; csrf: string }
@@ -36,13 +37,23 @@ const statusOptions: Array<{ value: Status; label: string }> = [
   { value: 'verify', label: 'Verify' }, { value: 'done', label: 'Done — archive' },
 ]
 
-const API_BASE = '/kanban/api'
+const API_BASE = `${KANBAN_MOUNT}/api`
 
 async function api<T>(url: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(url, { credentials: 'same-origin', ...options })
-  const value = response.status === 204 ? null : await response.json()
-  if (!response.ok) throw new Error(value?.error || `Request failed (${response.status})`)
-  return value as T
+  if (!response.ok) {
+    // Error bodies are usually {error}, but proxies and empty 401s can
+    // return non-JSON; those must not surface as JSON parse errors.
+    let message = `Request failed (${response.status})`
+    try {
+      const value = await response.json()
+      if (value?.error) message = value.error
+    } catch {
+      // keep the status-based message
+    }
+    throw new Error(message)
+  }
+  return (response.status === 204 ? null : await response.json()) as T
 }
 
 type Navigate = (path: string) => void
@@ -66,7 +77,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
   const [cardQuery, setCardQuery] = useState('')
 
   useEffect(() => {
-    api<Session>(`${API_BASE}/session`).then(async (value) => {
+    api<Session>(`${API_BASE}/session`).then((value) => {
 	  const next = safeNextPath(window.location.search)
 	  if (next) {
 		navigate(next)
@@ -74,7 +85,9 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
 	  }
       setSession(value)
       void api<AgentCatalog>(`${API_BASE}/dispatch/agents`).then(setAgents).catch(() => setAgents(NO_AGENTS))
-      await loadBoards(value)
+      // A transient board-list failure must not read as "logged out":
+      // keep the session and surface it in the error banner instead.
+      void loadBoards(value).catch((err) => setError(err instanceof Error ? err.message : 'Failed to load boards'))
     }).catch(() => setSession(null))
   }, [])
 
@@ -221,7 +234,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
         </nav>
         <div className="top-actions">
           <button className="quiet" onClick={() => setNewBoardOpen(true)} type="button">New board</button>
-          <a href="/">Notes</a>
+          <a href={NOTES_BASE}>Notes</a>
           <button className="quiet" onClick={logout} type="button">Sign out</button>
         </div>
       </header>
@@ -269,7 +282,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
         setEditor(null)
         setArchiveOpen(false)
         setJobsOpen(false)
-        window.history.pushState({}, '', `/kanban/${encodeURIComponent(created.name)}`)
+        window.history.pushState({}, '', boardPath(created.name))
         setNewBoardOpen(false)
       }} />}
       {editor && (
@@ -647,17 +660,22 @@ function formatBytes(size: number) {
   return `${(size / (1024 * 1024)).toFixed(size % (1024 * 1024) === 0 ? 0 : 1)} MB`
 }
 
-// A board URL is /kanban/<board>, optionally followed by one label per path
+// A board URL is <mount>/<board>, optionally followed by one label per path
 // segment: /kanban/proof/1.0/bug shows only cards carrying both labels.
-const BOARD_PATH = /^\/kanban\/([a-z0-9-]+)(?:\/(.*))?$/
+const BOARD_SUFFIX = /^\/([a-z0-9-]+)(?:\/(.*))?$/
+
+function boardSuffix(pathname: string): RegExpMatchArray | null {
+  if (!pathname.startsWith(`${KANBAN_MOUNT}/`)) return null
+  return pathname.slice(KANBAN_MOUNT.length).match(BOARD_SUFFIX)
+}
 
 export function boardNameFromPath(pathname: string): string | null {
-  const match = pathname.match(BOARD_PATH)
+  const match = boardSuffix(pathname)
   return match ? match[1] : null
 }
 
 export function labelsFromPath(pathname: string): string[] {
-  const match = pathname.match(BOARD_PATH)
+  const match = boardSuffix(pathname)
   if (!match || !match[2]) return []
   const seen = new Set<string>()
   for (const segment of match[2].split('/')) {
@@ -673,7 +691,7 @@ export function labelsFromPath(pathname: string): string[] {
 
 export function boardPath(name: string, labels: string[] = []): string {
   const segments = [encodeURIComponent(name), ...labels.map((label) => encodeURIComponent(label))]
-  return `/kanban/${segments.join('/')}`
+  return `${KANBAN_MOUNT}/${segments.join('/')}`
 }
 
 export function safeNextPath(search: string): string | null {

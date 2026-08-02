@@ -20,7 +20,10 @@ import (
 )
 
 func TestServerRescanWaitsForSharedVaultCriticalSection(t *testing.T) {
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(root, "Project.md"), []byte("- [ ] Task\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -59,10 +62,11 @@ func TestServerRescanWaitsForSharedVaultCriticalSection(t *testing.T) {
 
 func TestHandleTaskToggleRequiresExpectedVersion(t *testing.T) {
 	s := &Server{}
+	auth := withSession(t, s)
 	rec := httptest.NewRecorder()
-	s.handleTaskToggle(rec, httptest.NewRequest(http.MethodPost, "/api/tasks/toggle", bytes.NewBufferString(
+	s.handleTaskToggle(rec, auth(httptest.NewRequest(http.MethodPost, "/api/tasks/toggle", bytes.NewBufferString(
 		`{"slug":"Project","line":1,"done":true}`,
-	)))
+	))))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -84,10 +88,11 @@ func TestHandleTaskToggleRejectsStaleVersionAfterLineShift(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &Server{cfg: config.Config{Vault: root}}
+	auth := withSession(t, s)
 	s.vault.Store(v)
 	body := fmt.Sprintf(`{"slug":"Project","line":1,"expectedVersion":%q,"done":true}`, tasks.FileVersion(original))
 	rec := httptest.NewRecorder()
-	s.handleTaskToggle(rec, httptest.NewRequest(http.MethodPost, "/api/tasks/toggle", bytes.NewBufferString(body)))
+	s.handleTaskToggle(rec, auth(httptest.NewRequest(http.MethodPost, "/api/tasks/toggle", bytes.NewBufferString(body))))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -99,7 +104,8 @@ func TestHandleTaskToggleRejectsStaleVersionAfterLineShift(t *testing.T) {
 func TestHandleTaskDueChangesAndReindexesVaultTask(t *testing.T) {
 	root := t.TempDir()
 	rel := "Project.md"
-	if err := os.WriteFile(filepath.Join(root, rel), []byte("# Project\n\n- [ ] Ship release 📅 2026-08-15\n"), 0o644); err != nil {
+	content := []byte("# Project\n\n- [ ] Ship release 📅 2026-08-15\n")
+	if err := os.WriteFile(filepath.Join(root, rel), content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	v, err := vault.Scan(root)
@@ -116,12 +122,14 @@ func TestHandleTaskDueChangesAndReindexesVaultTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &Server{cfg: config.Config{Vault: root, BaseURL: "/"}, db: db, engine: engine}
+	auth := withSession(t, s)
 	s.vault.Store(v)
 	s.tree.Store(buildTree(v, "/"))
 
-	req := httptest.NewRequest(http.MethodPost, "/api/tasks/due", bytes.NewBufferString(
-		`{"slug":"Project","line":3,"expectedText":"Ship release","expectedStatus":"open","expectedDue":"2026-08-15","due":"2026-08-20"}`,
-	))
+	req := auth(httptest.NewRequest(http.MethodPost, "/api/tasks/due", bytes.NewBufferString(fmt.Sprintf(
+		`{"slug":"Project","line":3,"expectedText":"Ship release","expectedStatus":"open","expectedDue":"2026-08-15","expectedVersion":%q,"due":"2026-08-20"}`,
+		tasks.FileVersion(content),
+	))))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	s.handleTaskDue(rec, req)
@@ -139,7 +147,8 @@ func TestHandleTaskDueChangesAndReindexesVaultTask(t *testing.T) {
 
 func TestHandleTaskDueClearsDueDate(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "Project.md"), []byte("- [ ] Ship release 📅 2026-08-15\n"), 0o644); err != nil {
+	content := []byte("- [ ] Ship release 📅 2026-08-15\n")
+	if err := os.WriteFile(filepath.Join(root, "Project.md"), content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	v, err := vault.Scan(root)
@@ -156,12 +165,14 @@ func TestHandleTaskDueClearsDueDate(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &Server{cfg: config.Config{Vault: root, BaseURL: "/"}, db: db, engine: engine}
+	auth := withSession(t, s)
 	s.vault.Store(v)
 	s.tree.Store(buildTree(v, "/"))
 
-	req := httptest.NewRequest(http.MethodPost, "/api/tasks/due", bytes.NewBufferString(
-		`{"slug":"Project","line":1,"expectedText":"Ship release","expectedStatus":"open","expectedDue":"2026-08-15","due":""}`,
-	))
+	req := auth(httptest.NewRequest(http.MethodPost, "/api/tasks/due", bytes.NewBufferString(fmt.Sprintf(
+		`{"slug":"Project","line":1,"expectedText":"Ship release","expectedStatus":"open","expectedDue":"2026-08-15","expectedVersion":%q,"due":""}`,
+		tasks.FileVersion(content),
+	))))
 	rec := httptest.NewRecorder()
 	s.handleTaskDue(rec, req)
 	if rec.Code != http.StatusOK {
@@ -173,6 +184,52 @@ func TestHandleTaskDueClearsDueDate(t *testing.T) {
 	}
 	if len(all) != 1 || all[0].Due != "" {
 		t.Fatalf("reindexed task = %#v", all)
+	}
+}
+
+func TestHandleTaskDueRequiresExpectedVersion(t *testing.T) {
+	s := &Server{}
+	auth := withSession(t, s)
+	rec := httptest.NewRecorder()
+	s.handleTaskDue(rec, auth(httptest.NewRequest(http.MethodPost, "/api/tasks/due", bytes.NewBufferString(
+		`{"slug":"Project","line":1,"expectedText":"Ship release","expectedStatus":"open","expectedDue":"","due":"2026-08-20"}`,
+	))))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleTaskDueRejectsStaleVersionWithoutMutating(t *testing.T) {
+	root := t.TempDir()
+	original := []byte("- [ ] Ship release 📅 2026-08-15\n")
+	path := filepath.Join(root, "Project.md")
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The file changes after the page rendered; the whole-file version guard
+	// must reject the edit even though text/status/due still match.
+	edited := []byte("- [ ] Ship release 📅 2026-08-15\n- [ ] Added later\n")
+	if err := os.WriteFile(path, edited, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{cfg: config.Config{Vault: root}}
+	auth := withSession(t, s)
+	s.vault.Store(v)
+	body := fmt.Sprintf(
+		`{"slug":"Project","line":1,"expectedText":"Ship release","expectedStatus":"open","expectedDue":"2026-08-15","expectedVersion":%q,"due":"2026-08-20"}`,
+		tasks.FileVersion(original),
+	)
+	rec := httptest.NewRecorder()
+	s.handleTaskDue(rec, auth(httptest.NewRequest(http.MethodPost, "/api/tasks/due", bytes.NewBufferString(body))))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != string(edited) {
+		t.Fatalf("stale due edit mutated the file: %q err=%v", got, readErr)
 	}
 }
 
@@ -200,9 +257,10 @@ func TestHandleTaskFileHideAddsFrontmatterAndReindexes(t *testing.T) {
 	s.vault.Store(v)
 	s.tree.Store(buildTree(v, "/"))
 
+	auth := withSession(t, s)
 	body := fmt.Sprintf(`{"slug":"Project","expectedVersion":%q}`, tasks.FileVersion(content))
 	rec := httptest.NewRecorder()
-	s.handleTaskFileHide(rec, httptest.NewRequest(http.MethodPost, "/api/tasks/file/hide", bytes.NewBufferString(body)))
+	s.handleTaskFileHide(rec, auth(httptest.NewRequest(http.MethodPost, "/api/tasks/file/hide", bytes.NewBufferString(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -247,9 +305,10 @@ func TestHandleTaskFileDispositionArchivesAndReindexes(t *testing.T) {
 	s.vault.Store(v)
 	s.tree.Store(buildTree(v, "/"))
 
+	auth := withSession(t, s)
 	body := fmt.Sprintf(`{"slug":"Projects/Old","action":"archive","expectedVersion":%q}`, tasks.FileVersion(content))
 	rec := httptest.NewRecorder()
-	s.handleTaskFileDisposition(rec, httptest.NewRequest(http.MethodPost, "/api/tasks/file", bytes.NewBufferString(body)))
+	s.handleTaskFileDisposition(rec, auth(httptest.NewRequest(http.MethodPost, "/api/tasks/file", bytes.NewBufferString(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -275,8 +334,9 @@ func TestHandleTaskFileDispositionRequiresVersionAndKnownAction(t *testing.T) {
 		`{"slug":"Project","action":"delete","expectedVersion":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
 	} {
 		s := &Server{}
+		auth := withSession(t, s)
 		rec := httptest.NewRecorder()
-		s.handleTaskFileDisposition(rec, httptest.NewRequest(http.MethodPost, "/api/tasks/file", bytes.NewBufferString(body)))
+		s.handleTaskFileDisposition(rec, auth(httptest.NewRequest(http.MethodPost, "/api/tasks/file", bytes.NewBufferString(body))))
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("body=%s status=%d response=%s", body, rec.Code, rec.Body.String())
 		}
@@ -306,9 +366,10 @@ func TestHandleTaskTriageMutatesAndReindexesVaultTask(t *testing.T) {
 	s.vault.Store(v)
 	s.tree.Store(buildTree(v, "/"))
 
-	req := httptest.NewRequest(http.MethodPost, "/api/tasks/triage", bytes.NewBufferString(
+	auth := withSession(t, s)
+	req := auth(httptest.NewRequest(http.MethodPost, "/api/tasks/triage", bytes.NewBufferString(
 		`{"slug":"Project","line":3,"action":"backlog","expectedText":"Choose a direction"}`,
-	))
+	)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	s.handleTaskTriage(rec, req)
@@ -380,9 +441,10 @@ func TestHandleTaskTriageAppliesFileBatch(t *testing.T) {
 	s.vault.Store(v)
 	s.tree.Store(buildTree(v, "/"))
 
+	auth := withSession(t, s)
 	body := `{"slug":"Checklist","items":[{"line":2,"action":"reference","expectedText":"First"},{"line":3,"action":"reference","expectedText":"Second"}]}`
 	rec := httptest.NewRecorder()
-	s.handleTaskTriage(rec, httptest.NewRequest(http.MethodPost, "/api/tasks/triage", bytes.NewBufferString(body)))
+	s.handleTaskTriage(rec, auth(httptest.NewRequest(http.MethodPost, "/api/tasks/triage", bytes.NewBufferString(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -397,9 +459,10 @@ func TestHandleTaskTriageAppliesFileBatch(t *testing.T) {
 
 func TestHandleTaskTriageRejectsUnknownActionAtContractBoundary(t *testing.T) {
 	s := &Server{}
+	auth := withSession(t, s)
 	rec := httptest.NewRecorder()
 	body := `{"slug":"Project","line":1,"action":"delete","expectedText":"Task"}`
-	s.handleTaskTriage(rec, httptest.NewRequest(http.MethodPost, "/api/tasks/triage", bytes.NewBufferString(body)))
+	s.handleTaskTriage(rec, auth(httptest.NewRequest(http.MethodPost, "/api/tasks/triage", bytes.NewBufferString(body))))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -441,8 +504,9 @@ func TestHandleTaskTriageSupportsFiveThousandRealisticTasks(t *testing.T) {
 	if len(payload) <= 1<<20 {
 		t.Fatalf("regression payload must exceed old 1 MiB limit, got %d bytes", len(payload))
 	}
+	auth := withSession(t, s)
 	rec := httptest.NewRecorder()
-	s.handleTaskTriage(rec, httptest.NewRequest(http.MethodPost, "/api/tasks/triage", bytes.NewReader(payload)))
+	s.handleTaskTriage(rec, auth(httptest.NewRequest(http.MethodPost, "/api/tasks/triage", bytes.NewReader(payload))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}

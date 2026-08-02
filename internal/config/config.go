@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -89,6 +90,14 @@ func Load(args []string) (Config, error) {
 	if cfg.Vault == "" {
 		return cfg, fmt.Errorf("no vault configured: pass -vault, set AMYTHEST_VAULT, or set vault: in %s", *cfgPath)
 	}
+	vaultPath, err := expandHome(cfg.Vault)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.Vault = vaultPath
+	if cfg.DataDir, err = expandHome(cfg.DataDir); err != nil {
+		return cfg, err
+	}
 	abs, err := filepath.Abs(cfg.Vault)
 	if err != nil {
 		return cfg, err
@@ -113,6 +122,22 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("AMYTHEST_DATA_DIR"); v != "" {
 		cfg.DataDir = v
 	}
+}
+
+// expandHome resolves a leading "~" or "~/" to the user's home directory so
+// YAML configs can ship portable paths like "vault: ~/notes".
+func expandHome(p string) (string, error) {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("expand %s: %w", p, err)
+	}
+	if p == "~" {
+		return home, nil
+	}
+	return filepath.Join(home, p[2:]), nil
 }
 
 func envOr(key, fallback string) string {

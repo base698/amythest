@@ -103,7 +103,7 @@ func TestTriageLineRejectsTaskThatGainedDueDate(t *testing.T) {
 }
 
 func TestTriageInFileRejectsPathOutsideVault(t *testing.T) {
-	parent := t.TempDir()
+	parent := tempVaultDir(t)
 	root := filepath.Join(parent, "vault")
 	if err := os.Mkdir(root, 0o755); err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestTriageInFileRejectsPathOutsideVault(t *testing.T) {
 }
 
 func TestTriageInFileRejectsNoteSymlinkOutsideVault(t *testing.T) {
-	parent := t.TempDir()
+	parent := tempVaultDir(t)
 	root := filepath.Join(parent, "vault")
 	if err := os.Mkdir(root, 0o755); err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestTriageInFileRejectsNoteSymlinkOutsideVault(t *testing.T) {
 }
 
 func TestTriageInFileDoesNotFollowPredictableTempSymlink(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	note := filepath.Join(root, "Project.md")
 	victim := filepath.Join(root, "victim.txt")
 	if err := os.WriteFile(note, []byte("- [ ] Ship it\n"), 0o644); err != nil {
@@ -189,7 +189,7 @@ func TestTriageInFileDoesNotFollowPredictableTempSymlink(t *testing.T) {
 }
 
 func TestTriageInFilePreservesFrontmatter(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	rel := "Project.md"
 	original := "---\ntitle: Project\n---\n\n- [ ] Ship prototype\n"
 	if err := os.WriteFile(filepath.Join(root, rel), []byte(original), 0o640); err != nil {
@@ -235,7 +235,7 @@ func TestTriageBatchBodyProcessesFiveThousandItemsInOnePass(t *testing.T) {
 }
 
 func TestTriageBatchInFileAppliesOneAtomicFileDecision(t *testing.T) {
-	root := t.TempDir()
+	root := tempVaultDir(t)
 	rel := "Checklist.md"
 	original := "# Checklist\n- [ ] First item\n- [ ] Second item\n"
 	if err := os.WriteFile(filepath.Join(root, rel), []byte(original), 0o644); err != nil {

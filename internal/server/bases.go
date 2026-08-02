@@ -156,9 +156,21 @@ func (s *Server) handleDB(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		title = name
+		tables, err := s.catalog.Tables()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if _, known := tables[name]; !known {
+			s.notFound(w, r)
+			return
+		}
 		query := r.URL.Query().Get("sql")
 		if query == "" {
-			query = `SELECT * FROM "` + name + `" LIMIT 100`
+			query = `SELECT * FROM "` + strings.ReplaceAll(name, `"`, `""`) + `" LIMIT 100`
+		} else if !s.requireKanbanSession(w, r, "run catalog queries") {
+			// Browsing a table is open; arbitrary SQL needs a session.
+			return
 		}
 		b.WriteString(`<form class="db-query" method="GET" action="` + template.HTMLEscapeString(s.base()+"db/"+name) + `">`)
 		b.WriteString(`<textarea name="sql" rows="3" spellcheck="false">` + template.HTMLEscapeString(query) + `</textarea>`)
@@ -196,6 +208,9 @@ func (s *Server) handleDB(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDBQueryAPI(w http.ResponseWriter, r *http.Request) {
 	if s.catalog == nil {
 		http.Error(w, "catalog not configured", http.StatusNotFound)
+		return
+	}
+	if !s.requireKanbanSession(w, r, "run catalog queries") {
 		return
 	}
 	var req struct {

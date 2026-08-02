@@ -152,7 +152,7 @@ func (d *DB) ContentIndex() (map[string]*ContentEntry, error) {
 type SearchResult struct {
 	Slug           string  `json:"slug"`
 	Title          string  `json:"title"`
-	Excerpt        string  `json:"excerpt"` // HTML with <b> highlights
+	Excerpt        string  `json:"excerpt"` // plain text; \x02/\x03 bracket each match highlight
 	Archived       bool    `json:"archived"`
 	ArchivedReason string  `json:"archived_reason,omitempty"` // provenance, e.g. "tag:archive"
 	Score          float64 `json:"-"`
@@ -175,7 +175,7 @@ func (d *DB) Search(q string, limit int, includeArchived bool) ([]SearchResult, 
 		where += ` AND n.archived = 0`
 	}
 	rows, err := d.r.Query(`SELECT notes_fts.slug, notes_fts.title,
-			snippet(notes_fts, 2, '<b>', '</b>', '…', 12),
+			snippet(notes_fts, 2, char(2), char(3), '…', 12),
 			bm25(notes_fts, 0, 10.0, 1.0, 5.0),
 			n.archived, n.archived_reason
 		FROM notes_fts JOIN notes n ON n.slug = notes_fts.slug

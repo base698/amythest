@@ -1,3 +1,5 @@
+import { KANBAN_MOUNT } from './mount.ts'
+
 export type FilterMode = 'or' | 'and'
 
 export interface LabelledCard {
@@ -64,12 +66,12 @@ export function boardFilterURL(
   mode: FilterMode = 'or',
   excluded: string[] = [],
 ): string {
-  const segments = ['kanban', encodeURIComponent(board), ...included.map((label) => encodeURIComponent(label))]
+  const segments = [encodeURIComponent(board), ...included.map((label) => encodeURIComponent(label))]
   const params = new URLSearchParams()
   if (mode === 'and') params.set('mode', 'and')
   for (const label of excluded) params.append('exclude', label)
   const query = params.toString()
-  return `/${segments.join('/')}${query ? `?${query}` : ''}`
+  return `${KANBAN_MOUNT}/${segments.join('/')}${query ? `?${query}` : ''}`
 }
 
 function normalizeLabel(value: string): string {

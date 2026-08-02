@@ -104,6 +104,19 @@ func TestExpressions(t *testing.T) {
 	}
 }
 
+func TestNumberRequiresOneArgument(t *testing.T) {
+	n, err := Parse(`number()`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Eval(n, &testEnv{}); err == nil {
+		t.Fatal("number() with no arguments should error, not panic")
+	}
+	if got := eval(t, `number("42") + 1`).Text(); got != "43" {
+		t.Errorf(`number("42") + 1 = %q, want "43"`, got)
+	}
+}
+
 func TestParseErrors(t *testing.T) {
 	for _, src := range []string{`1 +`, `"unclosed`, `foo(`, `a = b`, `..`} {
 		if _, err := Parse(src); err == nil {

@@ -7,21 +7,24 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
 
 type Note struct {
-	Path  string // vault-relative, forward slashes
-	Slug  string
-	Title string
-	FM    Frontmatter
-	MTime time.Time
-	Size  int64
-	Hash  string // sha256 of the file contents, for change detection
+	Path   string // vault-relative, forward slashes
+	Slug   string
+	Title  string
+	FM     Frontmatter
+	MTime  time.Time
+	Size   int64
+	Hash   string   // sha256 of the file contents, for change detection
+	Embeds []string // transclusion targets (![[...]]), for dependency fingerprints
 }
 
 // Vault is an immutable snapshot of the vault's file set with resolution
@@ -119,19 +122,52 @@ func (v *Vault) addNote(abs, rel string, d fs.DirEntry) {
 	}
 	sum := sha256.Sum256(src)
 	v.Notes = append(v.Notes, &Note{
-		Path:  rel,
-		Slug:  Slugify(rel),
-		Title: title,
-		FM:    fm,
-		MTime: info.ModTime(),
-		Size:  info.Size(),
-		Hash:  hex.EncodeToString(sum[:]),
+		Path:   rel,
+		Slug:   Slugify(rel),
+		Title:  title,
+		FM:     fm,
+		MTime:  info.ModTime(),
+		Size:   info.Size(),
+		Hash:   hex.EncodeToString(sum[:]),
+		Embeds: extractEmbeds(src),
 	})
+}
+
+var embedRe = regexp.MustCompile(`!\[\[([^\[\]]+)\]\]`)
+
+// extractEmbeds collects a note's transclusion targets so the indexer can
+// fingerprint the note against the notes it inlines. A false positive (e.g.
+// inside a code fence) only costs a spurious re-render, never a stale one.
+func extractEmbeds(src []byte) []string {
+	matches := embedRe.FindAllSubmatch(src, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range matches {
+		target := string(m[1])
+		if i := strings.IndexAny(target, "|#"); i >= 0 {
+			target = target[:i]
+		}
+		target = strings.TrimSpace(target)
+		if target == "" || seen[target] {
+			continue
+		}
+		seen[target] = true
+		out = append(out, target)
+	}
+	return out
 }
 
 func (v *Vault) buildIndexes() {
 	sort.Slice(v.Notes, func(i, j int) bool { return v.Notes[i].Path < v.Notes[j].Path })
 	for _, n := range v.Notes {
+		// Slugs collide ("Foo Bar.md" vs "Foo-Bar.md"): the path-sorted later
+		// note wins deterministically, but surface it — one note is shadowed.
+		if prev, ok := v.bySlug[n.Slug]; ok {
+			slog.Warn("vault slug collision", "slug", n.Slug, "shadowed", prev.Path, "wins", n.Path)
+		}
 		v.bySlug[n.Slug] = n
 		v.byPath[strings.ToLower(strings.TrimSuffix(n.Path, ".md"))] = n
 		base := strings.ToLower(strings.TrimSuffix(filepath.Base(n.Path), ".md"))
@@ -185,6 +221,15 @@ func (v *Vault) AssetPath(rel string) (string, bool) {
 		return "", false
 	}
 	return filepath.Join(v.Root, clean), true
+}
+
+// HasAsset reports whether rel names exactly a file recorded by the scan, so
+// serving can refuse everything the scan deliberately skipped (.git,
+// .obsidian, dotfiles, lock files).
+func (v *Vault) HasAsset(rel string) bool {
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(rel)))
+	got, ok := v.asset[strings.ToLower(clean)]
+	return ok && got == clean
 }
 
 // ReadBody reads a note's markdown body (frontmatter stripped).
