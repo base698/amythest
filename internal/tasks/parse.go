@@ -7,6 +7,7 @@ import (
 
 var (
 	taskLineRe    = regexp.MustCompile(`^\s*[-*+]\s+\[(.)\]\s+(.*)$`)
+	bulletRe      = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)])\s`)
 	dateRe        = regexp.MustCompile(`^\s*(\d{4}-\d{2}-\d{2})`)
 	tagRe         = regexp.MustCompile(`#([\p{L}\p{N}_/-]+)`)
 	inlineFieldRe = regexp.MustCompile(`\[([^\[\]():]{1,64})::\s*([^\]]*)\]`)
@@ -39,6 +40,7 @@ func ParseFile(slug, path string, body []byte) ([]Task, []InlineField) {
 	var fields []InlineField
 	inFence := false
 	lineNo := 0
+	itemLine := 0 // bullet line of the list item continuation lines belong to
 	for rawLine := range strings.Lines(string(body)) {
 		lineNo++
 		// strings.Lines keeps the newline, which defeats the $ anchor.
@@ -50,9 +52,21 @@ func ParseFile(slug, path string, body []byte) ([]Task, []InlineField) {
 		if inFence {
 			continue
 		}
+		switch {
+		case strings.TrimSpace(line) == "":
+			itemLine = 0
+		case bulletRe.MatchString(line):
+			itemLine = lineNo
+		}
+		// Fields on a list item's indented continuation lines anchor to the
+		// bullet line, so multi-line items group as one row.
+		anchor := lineNo
+		if itemLine > 0 {
+			anchor = itemLine
+		}
 		for _, m := range inlineFieldRe.FindAllStringSubmatch(line, -1) {
 			fields = append(fields, InlineField{
-				Line: lineNo, Key: strings.TrimSpace(m[1]), Value: strings.TrimSpace(m[2]),
+				Line: anchor, Key: strings.TrimSpace(m[1]), Value: strings.TrimSpace(m[2]),
 			})
 		}
 		m := taskLineRe.FindStringSubmatch(line)

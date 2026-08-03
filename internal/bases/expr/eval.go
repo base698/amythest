@@ -111,13 +111,20 @@ func evalBinary(b *Binary, env Env) (Value, error) {
 		return BoolV(Equal(l, r)), nil
 	case "!=":
 		return BoolV(!Equal(l, r)), nil
-	case "<":
-		return BoolV(Compare(l, r) < 0), nil
-	case "<=":
-		return BoolV(Compare(l, r) <= 0), nil
-	case ">":
-		return BoolV(Compare(l, r) > 0), nil
-	case ">=":
+	case "<", "<=", ">", ">=":
+		// Relational comparisons with null are always false (Obsidian
+		// semantics); Compare's nulls-last ordering is for sorting only.
+		if l.Kind == Null || r.Kind == Null {
+			return BoolV(false), nil
+		}
+		switch b.Op {
+		case "<":
+			return BoolV(Compare(l, r) < 0), nil
+		case "<=":
+			return BoolV(Compare(l, r) <= 0), nil
+		case ">":
+			return BoolV(Compare(l, r) > 0), nil
+		}
 		return BoolV(Compare(l, r) >= 0), nil
 	case "+":
 		if l.Kind == Str || r.Kind == Str {

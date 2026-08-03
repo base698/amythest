@@ -16,6 +16,12 @@ import (
 
 // Base is a parsed .base file (or inline ```base block).
 type Base struct {
+	// Source selects what a row is: "notes" (default) — one row per note;
+	// "tasks" — one row per indexed checkbox task; "items" — one row per
+	// list line carrying [Key:: value] inline fields. Task and item rows
+	// expose their data as note.* properties and inherit file.* from the
+	// note they live in.
+	Source     string               `yaml:"source"`
 	Filters    *FilterNode          `yaml:"filters"`
 	Formulas   map[string]string    `yaml:"formulas"`
 	Properties map[string]PropMeta  `yaml:"properties"`

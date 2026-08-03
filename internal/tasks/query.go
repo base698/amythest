@@ -18,18 +18,24 @@ import (
 //	path includes <text> | path does not include <text>
 //	description includes <text>
 //	tags include <#tag> | tag includes <#tag>
+//	tags do not include <#tag> | tag does not include <#tag>
 //	priority is (high|medium|low|none)
-//	sort by <field>[, <field>...]     (field: due|priority|path|description|done)
+//	sort by <field>[ reverse][, ...]  (field: due|priority|path|description|done)
 //	group by <field>                  (field: due|path|priority|status)
 //	limit <n>
 //
 // Dates: YYYY-MM-DD, today, tomorrow, yesterday.
 type Query struct {
 	filters []func(*Task, queryEnv) bool
-	sortBy  []string
+	sortBy  []sortKey
 	groupBy string
 	limit   int
 	err     error
+}
+
+type sortKey struct {
+	field   string
+	reverse bool
 }
 
 type queryEnv struct {
@@ -88,17 +94,12 @@ func (q *Query) parseLine(line string) error {
 	case strings.HasPrefix(l, "description includes "):
 		needle := strings.ToLower(strings.TrimSpace(line[len("description includes "):]))
 		q.add(func(t *Task, _ queryEnv) bool { return strings.Contains(strings.ToLower(t.Text), needle) })
+	case strings.HasPrefix(l, "tags do not include "), strings.HasPrefix(l, "tag does not include "):
+		needle := tagNeedle(l)
+		q.add(func(t *Task, _ queryEnv) bool { return !hasTag(t, needle) })
 	case strings.HasPrefix(l, "tags include "), strings.HasPrefix(l, "tag includes "):
-		needle := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(l[strings.Index(l, "include")+len("include"):]), "s "))
-		needle = strings.TrimPrefix(strings.TrimSpace(needle), "#")
-		q.add(func(t *Task, _ queryEnv) bool {
-			for _, tag := range t.Tags {
-				if strings.Contains(tag, needle) {
-					return true
-				}
-			}
-			return false
-		})
+		needle := tagNeedle(l)
+		q.add(func(t *Task, _ queryEnv) bool { return hasTag(t, needle) })
 	case strings.HasPrefix(l, "priority is "):
 		want, err := priorityLevel(strings.TrimPrefix(l, "priority is "))
 		if err != nil {
@@ -111,11 +112,18 @@ func (q *Query) parseLine(line string) error {
 			if len(field) == 0 {
 				continue
 			}
-			switch field[0] {
+			key := sortKey{field: field[0]}
+			switch {
+			case len(field) == 2 && field[1] == "reverse":
+				key.reverse = true
+			case len(field) > 1:
+				return fmt.Errorf("unsupported sort modifier %q", strings.Join(field[1:], " "))
+			}
+			switch key.field {
 			case "due", "priority", "path", "description", "done", "scheduled":
-				q.sortBy = append(q.sortBy, field[0])
+				q.sortBy = append(q.sortBy, key)
 			default:
-				return fmt.Errorf("unsupported sort field %q", field[0])
+				return fmt.Errorf("unsupported sort field %q", key.field)
 			}
 		}
 	case strings.HasPrefix(l, "group by "):
@@ -142,6 +150,22 @@ func (q *Query) parseLine(line string) error {
 }
 
 func (q *Query) add(f func(*Task, queryEnv) bool) { q.filters = append(q.filters, f) }
+
+// tagNeedle extracts the tag from an (already lowercased) tags include /
+// tags do not include line: everything after the final "include(s)".
+func tagNeedle(l string) string {
+	needle := strings.TrimPrefix(strings.TrimSpace(l[strings.Index(l, "include")+len("include"):]), "s ")
+	return strings.TrimPrefix(strings.TrimSpace(needle), "#")
+}
+
+func hasTag(t *Task, needle string) bool {
+	for _, tag := range t.Tags {
+		if strings.Contains(tag, needle) {
+			return true
+		}
+	}
+	return false
+}
 
 func (q *Query) dateFilter(rest string, get func(*Task) string) error {
 	fields := strings.Fields(rest)
@@ -275,13 +299,13 @@ func (q *Query) Run(all []Task) []Group {
 
 	sortBy := q.sortBy
 	if len(sortBy) == 0 {
-		sortBy = []string{"due", "priority"}
+		sortBy = []sortKey{{field: "due"}, {field: "priority"}}
 	}
 	sort.SliceStable(matched, func(i, j int) bool {
 		a, b := matched[i], matched[j]
 		for _, f := range sortBy {
 			var cmp int
-			switch f {
+			switch f.field {
 			case "due":
 				cmp = compareDate(a.Due, b.Due)
 			case "scheduled":
@@ -294,6 +318,9 @@ func (q *Query) Run(all []Task) []Group {
 				cmp = strings.Compare(a.Path, b.Path)
 			case "description":
 				cmp = strings.Compare(strings.ToLower(a.Text), strings.ToLower(b.Text))
+			}
+			if f.reverse {
+				cmp = -cmp
 			}
 			if cmp != 0 {
 				return cmp < 0

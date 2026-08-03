@@ -16,9 +16,11 @@ type viewGroup struct {
 
 // RenderContext carries site context into view rendering.
 type RenderContext struct {
-	BaseURL  string // site base url ("/")
-	SelfURL  string // URL of the page hosting the view (for tab links)
+	BaseURL  string   // site base url ("/")
+	SelfURL  string   // URL of the page hosting the view (for tab links)
 	ViewIdx  int
+	Cols     []string // when set, overrides the view's column order
+	Picker   bool     // render the column picker (full-page bases only)
 }
 
 type column struct {
@@ -195,6 +197,9 @@ func (b *Base) Render(rows []*Row, ctx RenderContext) string {
 
 	switch view.Type {
 	case "", "table":
+		if ctx.Picker {
+			b.renderColumnPicker(&sb, view, ctx)
+		}
 		b.renderTable(&sb, view, groups, ctx)
 	case "list":
 		b.renderList(&sb, groups, ctx)
@@ -230,7 +235,19 @@ func (b *Base) renderTabs(sb *strings.Builder, ctx RenderContext) {
 }
 
 func (b *Base) columns(view View) []column {
-	refs := view.Order
+	return b.buildColumns(view.Order, view)
+}
+
+// columnsFor applies the RenderContext column override, falling back to the
+// view's own order.
+func (b *Base) columnsFor(view View, ctx RenderContext) []column {
+	if len(ctx.Cols) > 0 {
+		return b.buildColumns(ctx.Cols, view)
+	}
+	return b.columns(view)
+}
+
+func (b *Base) buildColumns(refs []string, view View) []column {
 	if len(refs) == 0 {
 		refs = []string{"file.name"}
 	}
@@ -244,6 +261,66 @@ func (b *Base) columns(view View) []column {
 	return cols
 }
 
+// availableRefs lists every column ref the base knows about: refs used by any
+// view, declared properties, and formulas.
+func (b *Base) availableRefs() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(r string) {
+		if r != "" && !seen[r] {
+			seen[r] = true
+			out = append(out, r)
+		}
+	}
+	add("file.name")
+	for _, v := range b.Views {
+		for _, r := range v.Order {
+			add(r)
+		}
+	}
+	props := make([]string, 0, len(b.Properties))
+	for k := range b.Properties {
+		props = append(props, k)
+	}
+	sort.Strings(props)
+	for _, k := range props {
+		add(k)
+	}
+	formulas := make([]string, 0, len(b.Formulas))
+	for k := range b.Formulas {
+		formulas = append(formulas, k)
+	}
+	sort.Strings(formulas)
+	for _, k := range formulas {
+		add("formula." + k)
+	}
+	return out
+}
+
+// renderColumnPicker emits a plain GET form of column checkboxes so table
+// views work with any column set — no JS required.
+func (b *Base) renderColumnPicker(sb *strings.Builder, view View, ctx RenderContext) {
+	selected := map[string]bool{}
+	for _, c := range b.columnsFor(view, ctx) {
+		selected[c.ref] = true
+	}
+	sb.WriteString(`<details class="base-cols"><summary>Columns</summary>`)
+	fmt.Fprintf(sb, `<form method="get" action="%s">`, template.HTMLEscapeString(ctx.SelfURL))
+	fmt.Fprintf(sb, `<input type="hidden" name="view" value="%d">`, ctx.ViewIdx)
+	for _, ref := range b.availableRefs() {
+		checked := ""
+		if selected[ref] {
+			checked = " checked"
+		}
+		fmt.Fprintf(sb, `<label><input type="checkbox" name="cols" value="%s"%s> %s</label>`,
+			template.HTMLEscapeString(ref), checked, template.HTMLEscapeString(b.displayName(ref)))
+	}
+	sb.WriteString(`<div class="base-cols-actions"><button type="submit">Apply</button>`)
+	fmt.Fprintf(sb, `<a href="%s?view=%d">Reset</a></div>`,
+		template.HTMLEscapeString(ctx.SelfURL), ctx.ViewIdx)
+	sb.WriteString(`</form></details>`)
+}
+
 func (b *Base) displayName(ref string) string {
 	if p, ok := b.Properties[ref]; ok && p.DisplayName != "" {
 		return p.DisplayName
@@ -255,14 +332,15 @@ func (b *Base) displayName(ref string) string {
 }
 
 func (b *Base) renderTable(sb *strings.Builder, view View, groups []viewGroup, ctx RenderContext) {
-	cols := b.columns(view)
+	cols := b.columnsFor(view, ctx)
 	sb.WriteString(`<div class="base-table-wrap"><table class="base-table"><thead><tr>`)
 	for _, c := range cols {
 		style := ""
 		if c.width > 0 {
 			style = fmt.Sprintf(` style="min-width:%dpx"`, c.width)
 		}
-		fmt.Fprintf(sb, `<th%s>%s</th>`, style, template.HTMLEscapeString(c.label))
+		fmt.Fprintf(sb, `<th%s data-ref="%s">%s</th>`, style,
+			template.HTMLEscapeString(c.ref), template.HTMLEscapeString(c.label))
 	}
 	sb.WriteString(`</tr></thead><tbody>`)
 	for _, g := range groups {
