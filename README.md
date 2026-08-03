@@ -131,8 +131,9 @@ reindexes. Schema and renderer changes invalidate it automatically.
 
 ```sh
 make test      # unit + golden tests
-make compat    # boots the server and drives the original kanban.py client
-               # through the full card lifecycle (wire compatibility gate)
+make compat    # boots the server and drives the bundled kanban.py client
+               # (.claude/skills/kanban) through the full card lifecycle
+               # (wire compatibility gate)
 AMYTHEST_SMOKE_VAULT=~/notes go test ./internal/markdown -run Smoke  # full-vault render
 ```
 
