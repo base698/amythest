@@ -149,6 +149,20 @@ function updateBulkBar() {
   if (purgeButton) purgeButton.disabled = cancelled === 0
 }
 
+// A 409 means the file changed under the rendered page — a background rescan,
+// another device, or an earlier edit in the same file. That is recoverable and
+// common, so refresh the view (which restamps every version) and tell the user
+// to retry, instead of leaving a dead-looking row behind a vanishing toast.
+async function throwIfFailed(res: Response, fallback: string) {
+  if (res.ok) return
+  const text = (await res.text()).trim()
+  if (res.status === 409) {
+    await refreshCurrent()
+    throw new Error("That task changed on disk — the list has been refreshed. Try again.")
+  }
+  throw new Error(text || fallback)
+}
+
 async function postTaskAction(endpoint: string, payload: unknown) {
   const res = await fetch(`${baseURL()}${endpoint}`, {
     method: "POST",
@@ -156,7 +170,7 @@ async function postTaskAction(endpoint: string, payload: unknown) {
     credentials: "same-origin",
     body: JSON.stringify(payload),
   })
-  if (!res.ok) throw new Error((await res.text()) || `request failed (${res.status})`)
+  await throwIfFailed(res, `request failed (${res.status})`)
 }
 
 async function setPriority(button: HTMLButtonElement) {
@@ -319,7 +333,7 @@ async function hideFileFromTasks(button: HTMLButtonElement) {
       credentials: "same-origin",
       body: JSON.stringify(payload),
     })
-    if (!res.ok) throw new Error((await res.text()) || `file hide failed (${res.status})`)
+    await throwIfFailed(res, `file hide failed (${res.status})`)
     await refreshCurrent()
   } catch (err) {
     allButtons.forEach((el) => { el.disabled = false })
@@ -349,7 +363,7 @@ async function disposeFile(button: HTMLButtonElement) {
       credentials: "same-origin",
       body: JSON.stringify(payload),
     })
-    if (!res.ok) throw new Error((await res.text()) || `file move failed (${res.status})`)
+    await throwIfFailed(res, `file move failed (${res.status})`)
     await refreshCurrent()
   } catch (err) {
     allButtons.forEach((el) => { el.disabled = false })
@@ -387,7 +401,7 @@ async function triageFile(button: HTMLButtonElement) {
       credentials: "same-origin",
       body: JSON.stringify({ slug, items }),
     })
-    if (!res.ok) throw new Error((await res.text()) || `file triage failed (${res.status})`)
+    await throwIfFailed(res, `file triage failed (${res.status})`)
     await refreshCurrent()
   } catch (err) {
     allButtons.forEach((el) => { el.disabled = false })
@@ -419,7 +433,7 @@ async function triage(button: HTMLButtonElement) {
       credentials: "same-origin",
       body: JSON.stringify(payload),
     })
-    if (!res.ok) throw new Error((await res.text()) || `triage failed (${res.status})`)
+    await throwIfFailed(res, `triage failed (${res.status})`)
     await refreshCurrent()
   } catch (err) {
     card.querySelectorAll<HTMLButtonElement>("button").forEach((el) => { el.disabled = false })
@@ -476,7 +490,7 @@ async function updateDueDate(button: HTMLButtonElement, clear: boolean) {
       credentials: "same-origin",
       body: JSON.stringify(payload),
     })
-    if (!res.ok) throw new Error((await res.text()) || `due-date update failed (${res.status})`)
+    await throwIfFailed(res, `due-date update failed (${res.status})`)
     await refreshCurrent()
   } catch (err) {
     controls.forEach((el) => { el.disabled = false })
@@ -509,7 +523,7 @@ async function moveTaskToBoard(button: HTMLButtonElement) {
       credentials: "same-origin",
       body: JSON.stringify(payload),
     })
-    if (!res.ok) throw new Error((await res.text()) || `move to board failed (${res.status})`)
+    await throwIfFailed(res, `move to board failed (${res.status})`)
     await refreshCurrent()
   } catch (err) {
     controls.forEach((el) => { el.disabled = false })
