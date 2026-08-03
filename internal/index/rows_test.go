@@ -81,22 +81,51 @@ views:
 	}
 
 	// items source: one row per line of inline fields, numeric values parsed
+	// every bullet is an item row: 3 in Plan.md + 3 in Log.md
 	itemRows, err := db.RowsForSource("items")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(itemRows) != 3 {
-		t.Fatalf("item rows = %d, want 3", len(itemRows))
+	if len(itemRows) != 6 {
+		t.Fatalf("item rows = %d, want 6", len(itemRows))
 	}
-	// fields on indented continuation lines group into one item row
-	var watering map[string]any
+	// fields on indented continuation lines group into one item row,
+	// with the bullet text exposed as note.text
+	var watering *bases.Row
 	for _, r := range itemRows {
 		if r.Frontmatter["Zone"] == "back beds" {
-			watering = r.Frontmatter
+			watering = r
 		}
 	}
-	if watering == nil || watering["Duration"] != 45.0 {
-		t.Errorf("multi-line item row = %#v, want Duration 45 with Zone", watering)
+	if watering == nil || watering.Frontmatter["Duration"] != 45.0 {
+		t.Fatalf("multi-line item row = %#v, want Duration 45 with Zone", watering)
+	}
+	if watering.Frontmatter["text"] != "watering session" || watering.Title != "watering session" {
+		t.Errorf("item text = %q / title %q, want watering session", watering.Frontmatter["text"], watering.Title)
+	}
+
+	// QOTD shape: plain bullets only, random sample of 1
+	base2, err := bases.ParseBase([]byte(`
+source: items
+filters:
+  and:
+    - note.task == ""
+    - note.text != ""
+views:
+  - type: table
+    name: QOTD
+    order: [note.text]
+    sample: 1
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	qdata, err := base2.Data(itemRows, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(qdata.Groups[0].Rows); n != 1 {
+		t.Errorf("sample rows = %d, want 1", n)
 	}
 	base, err = bases.ParseBase([]byte(`
 source: items

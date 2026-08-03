@@ -3,6 +3,7 @@ package bases
 import (
 	"fmt"
 	"html/template"
+	"math/rand"
 	"sort"
 	"strings"
 
@@ -94,6 +95,11 @@ func (b *Base) prepare(rows []*Row, viewIdx int) (View, []viewGroup, []*rowEnv, 
 			}
 			return false
 		})
+	}
+
+	if view.Sample > 0 && len(kept) > view.Sample {
+		rand.Shuffle(len(kept), func(i, j int) { kept[i], kept[j] = kept[j], kept[i] })
+		kept = kept[:view.Sample]
 	}
 
 	if view.Limit > 0 && len(kept) > view.Limit {
@@ -351,7 +357,12 @@ func (b *Base) renderTable(sb *strings.Builder, view View, groups []viewGroup, c
 		for _, env := range g.rows {
 			sb.WriteString("<tr>")
 			for _, c := range cols {
-				sb.WriteString("<td>")
+				if key, ok := b.editableKey(c.ref); ok {
+					fmt.Fprintf(sb, `<td class="base-editable" data-slug="%s" data-key="%s">`,
+						template.HTMLEscapeString(env.row.Slug), template.HTMLEscapeString(key))
+				} else {
+					sb.WriteString("<td>")
+				}
 				sb.WriteString(b.cellHTML(c, env, ctx))
 				sb.WriteString("</td>")
 			}
@@ -453,6 +464,25 @@ func (b *Base) renderBoard(sb *strings.Builder, view View, kept []*rowEnv, ctx R
 		sb.WriteString(`</div>`)
 	}
 	sb.WriteString(`</div>`)
+}
+
+// editableKey reports whether a column ref is a plain note.<key> property
+// on a notes-source base — the cells whose values map 1:1 to a frontmatter
+// key and can be edited in place.
+func (b *Base) editableKey(ref string) (string, bool) {
+	if b.Source != "" && b.Source != "notes" {
+		return "", false
+	}
+	key, ok := strings.CutPrefix(ref, "note.")
+	if !ok || key == "" || key == "title" {
+		return "", false
+	}
+	for _, r := range key {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return "", false
+		}
+	}
+	return key, true
 }
 
 func (b *Base) cellHTML(c column, env *rowEnv, ctx RenderContext) string {

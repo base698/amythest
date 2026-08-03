@@ -68,7 +68,7 @@ func MoveTaskToBoardInFileAndReindex(vaultRoot, relPath string, input MoveTaskIn
 	if fm.Err != nil {
 		return fmt.Errorf("malformed frontmatter: %w", fm.Err)
 	}
-	parsed, _ := ParseFile("", relPath, body)
+	parsed, _, _ := ParseFile("", relPath, body)
 	var current *Task
 	for i := range parsed {
 		if parsed[i].Line == input.Line {

@@ -127,8 +127,8 @@ func (d *DB) Reconcile(v *vault.Vault, e *markdown.Engine) error {
 			slog.Warn("index render", "path", n.Path, "err", err)
 			continue
 		}
-		noteTasks, fields := parseNoteTasks(n, body)
-		if err := upsertNote(tx, v, n, res, noteTasks, fields, salt); err != nil {
+		noteTasks, fields, items := parseNoteTasks(n, body)
+		if err := upsertNote(tx, v, n, res, noteTasks, fields, items, salt); err != nil {
 			return err
 		}
 	}
@@ -147,6 +147,7 @@ func deleteNote(tx *sql.Tx, slug string) error {
 		`DELETE FROM tags WHERE slug=?`,
 		`DELETE FROM tasks WHERE slug=?`,
 		`DELETE FROM inline_fields WHERE slug=?`,
+		`DELETE FROM list_items WHERE slug=?`,
 		`DELETE FROM render_cache WHERE slug=?`,
 		`DELETE FROM notes_fts WHERE slug=?`,
 	} {
@@ -157,7 +158,7 @@ func deleteNote(tx *sql.Tx, slug string) error {
 	return nil
 }
 
-func upsertNote(tx *sql.Tx, v *vault.Vault, n *vault.Note, res *markdown.Result, noteTasks []tasks.Task, fields []tasks.InlineField, salt string) error {
+func upsertNote(tx *sql.Tx, v *vault.Vault, n *vault.Note, res *markdown.Result, noteTasks []tasks.Task, fields []tasks.InlineField, items []tasks.ListItem, salt string) error {
 	if err := deleteNote(tx, n.Slug); err != nil {
 		return err
 	}
@@ -215,6 +216,12 @@ func upsertNote(tx *sql.Tx, v *vault.Vault, n *vault.Note, res *markdown.Result,
 	for _, f := range fields {
 		if _, err := tx.Exec(`INSERT INTO inline_fields(slug,line,key,value) VALUES(?,?,?,?)`,
 			n.Slug, f.Line, f.Key, f.Value); err != nil {
+			return err
+		}
+	}
+	for _, it := range items {
+		if _, err := tx.Exec(`INSERT INTO list_items(slug,line,text,status) VALUES(?,?,?,?)`,
+			n.Slug, it.Line, it.Text, it.Status); err != nil {
 			return err
 		}
 	}

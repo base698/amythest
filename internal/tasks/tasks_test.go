@@ -19,7 +19,7 @@ func TestParseFile(t *testing.T) {
 - [ ] inside a fence, not indexed
 ` + "```" + `
 `
-	got, fields := ParseFile("slug", "path.md", []byte(body))
+	got, fields, items := ParseFile("slug", "path.md", []byte(body))
 	if len(got) != 4 {
 		t.Fatalf("tasks = %d, want 4: %#v", len(got), got)
 	}
@@ -44,6 +44,18 @@ func TestParseFile(t *testing.T) {
 	}
 	if len(fields) != 1 || fields[0].Key != "Weight" || fields[0].Value != "185" {
 		t.Errorf("fields = %+v", fields)
+	}
+	if len(items) != 6 {
+		t.Fatalf("list items = %d, want 6 (fenced bullet excluded): %#v", len(items), items)
+	}
+	if items[4].Text != "normal list item, not a task" || items[4].Status != "" {
+		t.Errorf("plain item = %+v", items[4])
+	}
+	if items[0].Status != StatusOpen || items[1].Status != StatusDone {
+		t.Errorf("item statuses = %+v %+v", items[0], items[1])
+	}
+	if items[5].Text != "on a list line" {
+		t.Errorf("field item text = %q, want fields stripped", items[5].Text)
 	}
 }
 

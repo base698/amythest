@@ -67,6 +67,13 @@ CREATE TABLE IF NOT EXISTS inline_fields(
 );
 CREATE INDEX IF NOT EXISTS inline_fields_key ON inline_fields(key);
 CREATE INDEX IF NOT EXISTS inline_fields_slug ON inline_fields(slug);
+CREATE TABLE IF NOT EXISTS list_items(
+  slug   TEXT NOT NULL,
+  line   INTEGER NOT NULL,
+  text   TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT ''  -- '' plain bullet, else checkbox status
+);
+CREATE INDEX IF NOT EXISTS list_items_slug ON list_items(slug);
 CREATE TABLE IF NOT EXISTS render_cache(
   slug        TEXT PRIMARY KEY,
   hash        TEXT NOT NULL,   -- note hash + dependency fingerprint
@@ -81,7 +88,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
 `
 
 // schemaVersion invalidates the whole database when the DDL changes.
-const schemaVersion = 4
+const schemaVersion = 5
 
 const dsnOpts = "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=mmap_size(268435456)"
 
@@ -106,7 +113,7 @@ func Open(dataDir string) (*DB, error) {
 	var version int
 	_ = w.QueryRow(`PRAGMA user_version`).Scan(&version)
 	if version != schemaVersion {
-		for _, t := range []string{"notes", "links", "tags", "tasks", "inline_fields", "render_cache", "notes_fts"} {
+		for _, t := range []string{"notes", "links", "tags", "tasks", "inline_fields", "list_items", "render_cache", "notes_fts"} {
 			if _, err := w.Exec(`DROP TABLE IF EXISTS ` + t); err != nil {
 				w.Close()
 				return nil, err
