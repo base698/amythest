@@ -96,6 +96,13 @@ func TestExpressions(t *testing.T) {
 		{`"abcdef".slice(1, 3)`, "bc"},
 		{`10 % 3`, "1"},
 		{`-Weight + 200`, "15"},
+		{`missing_prop > 0`, "false"},
+		{`missing_prop >= 0`, "false"},
+		{`missing_prop < 0`, "false"},
+		{`missing_prop <= 0`, "false"},
+		{`0 < missing_prop`, "false"},
+		{`if(missing_prop > 0, "yes", "")`, ""},
+		{`missing_prop == ""`, "true"},
 	}
 	for _, c := range cases {
 		if got := eval(t, c.src).Text(); got != c.want {

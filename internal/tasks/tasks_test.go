@@ -89,3 +89,32 @@ func TestQueryFiltersSortsGroupsLimits(t *testing.T) {
 		t.Error("presentation directives should be accepted")
 	}
 }
+
+func TestQueryReverseSortAndTagExclusion(t *testing.T) {
+	all := []Task{
+		{Text: "a", Status: StatusDone, DoneDate: "2026-01-01", Path: "X/a.md"},
+		{Text: "b", Status: StatusDone, DoneDate: "2026-01-03", Path: "X/b.md"},
+		{Text: "c", Status: StatusDone, DoneDate: "2026-01-02", Path: "X/c.md", Tags: []string{"errand"}},
+	}
+
+	q := ParseQuery("done\nsort by done reverse")
+	if q.Err() != nil {
+		t.Fatal(q.Err())
+	}
+	got := q.Run(all)[0].Tasks
+	if got[0].Text != "b" || got[1].Text != "c" || got[2].Text != "a" {
+		t.Errorf("reverse sort order = %v %v %v", got[0].Text, got[1].Text, got[2].Text)
+	}
+
+	q = ParseQuery("tag does not include #errand")
+	if q.Err() != nil {
+		t.Fatal(q.Err())
+	}
+	if got := q.Run(all)[0].Tasks; len(got) != 2 || got[0].Text == "c" || got[1].Text == "c" {
+		t.Errorf("tag exclusion = %#v", got)
+	}
+
+	if ParseQuery("sort by due backwards").Err() == nil {
+		t.Error("expected error for unknown sort modifier")
+	}
+}

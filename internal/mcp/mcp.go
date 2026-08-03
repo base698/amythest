@@ -391,7 +391,7 @@ func registerBaseTools(server *sdk.Server, deps Deps) {
 			if err != nil {
 				return nil, nil, err
 			}
-			rows, err := deps.DB.AllRows()
+			rows, err := deps.DB.RowsForSource(b.Source)
 			if err != nil {
 				return nil, nil, err
 			}

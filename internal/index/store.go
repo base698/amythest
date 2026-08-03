@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"strconv"
 	"strings"
 	"time"
 
@@ -252,6 +253,113 @@ func (d *DB) AllTasks() ([]tasks.Task, error) {
 }
 
 // ---- bases rows ----
+
+// RowsForSource loads bases rows for a base's declared source.
+func (d *DB) RowsForSource(source string) ([]*bases.Row, error) {
+	switch source {
+	case "", "notes":
+		return d.AllRows()
+	case "tasks":
+		return d.TaskRows()
+	case "items":
+		return d.ItemRows()
+	}
+	return nil, fmt.Errorf("unknown base source %q (want notes, tasks, or items)", source)
+}
+
+// TaskRows exposes every indexed task as a bases row: task metadata becomes
+// note.* properties, file.* comes from the source note.
+func (d *DB) TaskRows() ([]*bases.Row, error) {
+	rows, err := d.r.Query(`SELECT t.slug, n.path, t.line, t.text, t.status,
+		t.due, t.scheduled, t.start, t.recurrence, t.priority, t.done_date, t.tags,
+		n.mtime, n.ctime
+		FROM tasks t JOIN notes n ON n.slug = t.slug`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*bases.Row
+	for rows.Next() {
+		var slug, path, text, status, tagsJSON string
+		var line, priority int
+		var due, sched, start, rec, done sql.NullString
+		var mtime, ctime sql.NullInt64
+		if err := rows.Scan(&slug, &path, &line, &text, &status,
+			&due, &sched, &start, &rec, &priority, &done, &tagsJSON, &mtime, &ctime); err != nil {
+			return nil, err
+		}
+		r := &bases.Row{
+			Slug: slug, Path: path, Title: text,
+			Frontmatter: map[string]any{
+				"text": text, "status": status, "line": line,
+				"due": due.String, "scheduled": sched.String, "start": start.String,
+				"recurrence": rec.String, "priority": priority, "done": done.String,
+			},
+		}
+		_ = json.Unmarshal([]byte(tagsJSON), &r.Tags)
+		if mtime.Valid {
+			r.MTime = time.Unix(mtime.Int64, 0)
+		}
+		if ctime.Valid && ctime.Int64 > 0 {
+			r.CTime = time.Unix(ctime.Int64, 0)
+		} else {
+			r.CTime = r.MTime
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ItemRows exposes each list line carrying [Key:: value] inline fields as a
+// bases row: fields become note.* properties (numeric when they parse as
+// numbers), file.* and tags come from the note.
+func (d *DB) ItemRows() ([]*bases.Row, error) {
+	rows, err := d.r.Query(`SELECT f.slug, f.line, f.key, f.value,
+		n.path, n.title, n.tags, n.mtime, n.ctime
+		FROM inline_fields f JOIN notes n ON n.slug = f.slug
+		ORDER BY f.slug, f.line`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*bases.Row
+	var cur *bases.Row
+	curKey := struct {
+		slug string
+		line int
+	}{}
+	for rows.Next() {
+		var slug, key, value, path, title, tagsJSON string
+		var line int
+		var mtime, ctime sql.NullInt64
+		if err := rows.Scan(&slug, &line, &key, &value, &path, &title, &tagsJSON, &mtime, &ctime); err != nil {
+			return nil, err
+		}
+		if cur == nil || curKey.slug != slug || curKey.line != line {
+			cur = &bases.Row{
+				Slug: slug, Path: path, Title: title,
+				Frontmatter: map[string]any{"line": line},
+			}
+			_ = json.Unmarshal([]byte(tagsJSON), &cur.Tags)
+			if mtime.Valid {
+				cur.MTime = time.Unix(mtime.Int64, 0)
+			}
+			if ctime.Valid && ctime.Int64 > 0 {
+				cur.CTime = time.Unix(ctime.Int64, 0)
+			} else {
+				cur.CTime = cur.MTime
+			}
+			curKey.slug, curKey.line = slug, line
+			out = append(out, cur)
+		}
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			cur.Frontmatter[key] = f
+		} else {
+			cur.Frontmatter[key] = value
+		}
+	}
+	return out, rows.Err()
+}
 
 // AllRows loads every note's metadata for the bases engine.
 func (d *DB) AllRows() ([]*bases.Row, error) {

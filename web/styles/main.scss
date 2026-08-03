@@ -845,6 +845,38 @@ body:not(.tasks-selecting) .tasks-bulkbar .selecting-only { display: none; }
 
 .base-table-wrap { overflow-x: auto; }
 
+.base-cols {
+  margin: 0 0 0.75rem;
+  summary { color: var(--fg-muted); font-size: 0.85rem; cursor: pointer; }
+  form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem 1rem;
+    padding: 0.6rem 0.8rem;
+    margin-top: 0.4rem;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  label { font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.35rem; }
+  .base-cols-actions {
+    width: 100%;
+    display: flex;
+    gap: 0.8rem;
+    align-items: center;
+    margin-top: 0.3rem;
+    button {
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #fff;
+      border-radius: 8px;
+      padding: 0.3rem 0.9rem;
+      cursor: pointer;
+    }
+    a { font-size: 0.85rem; color: var(--fg-muted); }
+  }
+}
+
 .base-table {
   border-collapse: collapse;
   width: 100%;

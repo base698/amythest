@@ -23,10 +23,7 @@ func (s *Server) expandBaseBlocks(html string) string {
 	if !strings.Contains(html, `class="base-block"`) {
 		return html
 	}
-	rows, err := s.db.AllRows()
-	if err != nil {
-		return html
-	}
+	rowCache := map[string][]*bases.Row{}
 	return baseBlockRe.ReplaceAllStringFunc(html, func(m string) string {
 		sub := baseBlockRe.FindStringSubmatch(m)
 		raw, err := base64.StdEncoding.DecodeString(sub[1])
@@ -36,6 +33,14 @@ func (s *Server) expandBaseBlocks(html string) string {
 		b, err := bases.ParseBase(raw)
 		if err != nil {
 			return baseError(err.Error())
+		}
+		rows, ok := rowCache[b.Source]
+		if !ok {
+			rows, err = s.db.RowsForSource(b.Source)
+			if err != nil {
+				return baseError(err.Error())
+			}
+			rowCache[b.Source] = rows
 		}
 		return b.Render(rows, bases.RenderContext{BaseURL: s.base()})
 	})
@@ -99,16 +104,27 @@ func (s *Server) handleBases(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		html = baseError(err.Error())
 	} else {
-		rows, rerr := s.db.AllRows()
+		rows, rerr := s.db.RowsForSource(b.Source)
 		if rerr != nil {
 			http.Error(w, rerr.Error(), http.StatusInternalServerError)
 			return
 		}
-		viewIdx, _ := strconv.Atoi(r.URL.Query().Get("view"))
+		q := r.URL.Query()
+		viewIdx, _ := strconv.Atoi(q.Get("view"))
+		var cols []string
+		for _, v := range q["cols"] {
+			for _, c := range strings.Split(v, ",") {
+				if c = strings.TrimSpace(c); c != "" {
+					cols = append(cols, c)
+				}
+			}
+		}
 		html = b.Render(rows, bases.RenderContext{
 			BaseURL: s.base(),
 			SelfURL: s.base() + "bases/" + name,
 			ViewIdx: viewIdx,
+			Cols:    cols,
+			Picker:  true,
 		})
 	}
 
