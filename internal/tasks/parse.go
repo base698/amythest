@@ -33,11 +33,21 @@ var emojiMarkers = []struct {
 	{"➕", "created"},
 }
 
-// ParseFile extracts tasks and inline fields from a note body. Fenced code
-// blocks are skipped so examples in documentation don't index as tasks.
-func ParseFile(slug, path string, body []byte) ([]Task, []InlineField) {
+// ListItem is one bullet line of a note: the trimmed text with inline
+// fields stripped, and the checkbox status ("" for a plain bullet).
+type ListItem struct {
+	Line   int
+	Text   string
+	Status string
+}
+
+// ParseFile extracts tasks, inline fields, and list items from a note body.
+// Fenced code blocks are skipped so examples in documentation don't index
+// as tasks.
+func ParseFile(slug, path string, body []byte) ([]Task, []InlineField, []ListItem) {
 	var out []Task
 	var fields []InlineField
+	var items []ListItem
 	inFence := false
 	lineNo := 0
 	itemLine := 0 // bullet line of the list item continuation lines belong to
@@ -52,10 +62,11 @@ func ParseFile(slug, path string, body []byte) ([]Task, []InlineField) {
 		if inFence {
 			continue
 		}
+		bullet := bulletRe.FindStringIndex(line)
 		switch {
 		case strings.TrimSpace(line) == "":
 			itemLine = 0
-		case bulletRe.MatchString(line):
+		case bullet != nil:
 			itemLine = lineNo
 		}
 		// Fields on a list item's indented continuation lines anchor to the
@@ -70,6 +81,16 @@ func ParseFile(slug, path string, body []byte) ([]Task, []InlineField) {
 			})
 		}
 		m := taskLineRe.FindStringSubmatch(line)
+		if bullet != nil {
+			content := line[bullet[1]:]
+			status := ""
+			if m != nil {
+				content = m[2]
+				status = parseTask(m[1][0], m[2]).Status
+			}
+			text := strings.TrimSpace(inlineFieldRe.ReplaceAllString(content, ""))
+			items = append(items, ListItem{Line: lineNo, Text: text, Status: status})
+		}
 		if m == nil {
 			continue
 		}
@@ -79,7 +100,7 @@ func ParseFile(slug, path string, body []byte) ([]Task, []InlineField) {
 		t.Line = lineNo
 		out = append(out, t)
 	}
-	return out, fields
+	return out, fields, items
 }
 
 // ParseLine parses one raw checkbox line into a Task carrying the given

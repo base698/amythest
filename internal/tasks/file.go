@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -321,6 +322,54 @@ func HideFileFromTasksAndReindex(vaultRoot, relPath, expectedVersion string, rei
 }
 
 func setTasksDisabledFrontmatter(src []byte) ([]byte, error) {
+	return setFrontmatterScalar(src, "tasks", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"})
+}
+
+// SetNotePropertyAndReindex sets one top-level frontmatter key to a scalar
+// value using the same locked, mode-preserving, no-follow writer as task
+// mutations. rawValue is typed by YAML inference: true/false → bool,
+// integers and floats → numbers, anything else → string.
+func SetNotePropertyAndReindex(vaultRoot, relPath, key, rawValue string, reindex func() error) error {
+	return mutateTaskFileAndReindex(vaultRoot, relPath, func(src []byte) ([]byte, error) {
+		return setFrontmatterScalar(src, key, scalarValueNode(rawValue))
+	}, reindex)
+}
+
+func scalarValueNode(raw string) *yaml.Node {
+	n := &yaml.Node{Kind: yaml.ScalarNode, Value: raw, Tag: "!!str"}
+	switch {
+	case raw == "true", raw == "false":
+		n.Tag = "!!bool"
+	default:
+		if _, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			n.Tag = "!!int"
+		} else if _, err := strconv.ParseFloat(raw, 64); err == nil {
+			n.Tag = "!!float"
+		}
+	}
+	return n
+}
+
+// encodeScalarPair renders `key: value` for appending to comment-only
+// frontmatter, where re-encoding the document would drop the comments.
+func encodeScalarPair(key string, val *yaml.Node) ([]byte, error) {
+	doc := &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{
+		Kind: yaml.MappingNode, Tag: "!!map",
+		Content: []*yaml.Node{{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, val},
+	}}}
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(doc); err != nil {
+		return nil, fmt.Errorf("encode frontmatter: %w", err)
+	}
+	if err := encoder.Close(); err != nil {
+		return nil, fmt.Errorf("encode frontmatter: %w", err)
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
+func setFrontmatterScalar(src []byte, key string, val *yaml.Node) ([]byte, error) {
 	newline := []byte("\n")
 	if bytes.Contains(src, []byte("\r\n")) {
 		newline = []byte("\r\n")
@@ -334,13 +383,17 @@ func setTasksDisabledFrontmatter(src []byte) ([]byte, error) {
 		return nil, fmt.Errorf("malformed frontmatter: %w", fm.Err)
 	}
 	if hasOpeningDelimiter && frontmatterOnlyComments(fm.Raw) {
+		pair, err := encodeScalarPair(key, val)
+		if err != nil {
+			return nil, err
+		}
 		out := append([]byte("---"), newline...)
 		raw := []byte(fm.Raw)
 		out = append(out, raw...)
 		if len(raw) > 0 && !bytes.HasSuffix(raw, newline) {
 			out = append(out, newline...)
 		}
-		out = append(out, []byte("tasks: false")...)
+		out = append(out, pair...)
 		out = append(out, newline...)
 		out = append(out, []byte("---")...)
 		out = append(out, newline...)
@@ -363,21 +416,19 @@ func setTasksDisabledFrontmatter(src []byte) ([]byte, error) {
 	mapping := document.Content[0]
 	found := false
 	for i := 0; i+1 < len(mapping.Content); i += 2 {
-		if mapping.Content[i].Value != "tasks" {
+		if mapping.Content[i].Value != key {
 			continue
 		}
 		found = true
 		value := mapping.Content[i+1]
-		if value.Kind == yaml.ScalarNode && value.Tag == "!!bool" && value.Value == "false" {
+		if value.Kind == yaml.ScalarNode && value.Tag == val.Tag && value.Value == val.Value {
 			return append([]byte(nil), src...), nil
 		}
-		*value = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"}
+		*value = *val
 	}
 	if !found {
 		mapping.Content = append(mapping.Content,
-			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tasks"},
-			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"},
-		)
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, val)
 	}
 	var encoded bytes.Buffer
 	encoder := yaml.NewEncoder(&encoded)

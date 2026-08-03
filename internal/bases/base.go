@@ -42,6 +42,7 @@ type View struct {
 	Sort       []SortSpec     `yaml:"sort"`
 	GroupBy    *SortSpec      `yaml:"groupBy"`
 	Limit      int            `yaml:"limit"`
+	Sample     int            `yaml:"sample"` // pick N random rows after filtering
 	ColumnSize map[string]int `yaml:"columnSize"`
 	Image      string         `yaml:"image"`
 	CardSize   int            `yaml:"cardSize"`

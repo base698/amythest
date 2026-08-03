@@ -891,6 +891,19 @@ body:not(.tasks-selecting) .tasks-bulkbar .selecting-only { display: none; }
 
 .cell-error { color: #e0a030; cursor: help; }
 
+.base-editable { cursor: cell; }
+.base-cell-input {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0.1rem 0.3rem;
+  &.base-cell-error { border-color: #d04040; }
+}
+
 .base-list { list-style: none; padding: 0; li { margin: 0.25rem 0; } }
 .base-group { margin: 1.2rem 0 0.4rem; color: var(--fg-muted); }
 

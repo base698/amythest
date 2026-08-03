@@ -27,14 +27,14 @@ func (d *DB) IndexNote(v *vault.Vault, e *markdown.Engine, n *vault.Note) error 
 	if err != nil {
 		return err
 	}
-	noteTasks, fields := parseNoteTasks(n, body)
+	noteTasks, fields, items := parseNoteTasks(n, body)
 
 	tx, err := d.w.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := upsertNote(tx, v, n, res, noteTasks, fields, e.RenderSalt()); err != nil {
+	if err := upsertNote(tx, v, n, res, noteTasks, fields, items, e.RenderSalt()); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -58,10 +58,10 @@ func (d *DB) InvalidateRenderCache() error {
 // Notes may also opt out with the case-sensitive canonical boolean
 // `tasks: false`; the note itself is still rendered, linked, and indexed for
 // search.
-func parseNoteTasks(n *vault.Note, body []byte) ([]tasks.Task, []tasks.InlineField) {
+func parseNoteTasks(n *vault.Note, body []byte) ([]tasks.Task, []tasks.InlineField, []tasks.ListItem) {
 	enabled, isBool := n.FM.Meta["tasks"].(bool)
 	if (isBool && !enabled) || strings.HasPrefix(n.Path, "kanban/") {
-		return nil, nil
+		return nil, nil, nil
 	}
 	return tasks.ParseFile(n.Slug, n.Path, body)
 }

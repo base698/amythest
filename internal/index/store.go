@@ -310,55 +310,98 @@ func (d *DB) TaskRows() ([]*bases.Row, error) {
 	return out, rows.Err()
 }
 
-// ItemRows exposes each list line carrying [Key:: value] inline fields as a
-// bases row: fields become note.* properties (numeric when they parse as
-// numbers), file.* and tags come from the note.
+// ItemRows exposes each list item as a bases row: note.text is the bullet
+// text, note.task the checkbox status ("" for plain bullets), and any
+// [Key:: value] inline fields on the item (including its indented
+// continuation lines) become note.* properties — numeric when they parse
+// as numbers. file.* and tags come from the note; Title is the item text.
 func (d *DB) ItemRows() ([]*bases.Row, error) {
-	rows, err := d.r.Query(`SELECT f.slug, f.line, f.key, f.value,
+	type key struct {
+		slug string
+		line int
+	}
+	index := map[key]*bases.Row{}
+	var out []*bases.Row
+
+	rows, err := d.r.Query(`SELECT i.slug, i.line, i.text, i.status,
+		n.path, n.title, n.tags, n.mtime, n.ctime
+		FROM list_items i JOIN notes n ON n.slug = i.slug
+		ORDER BY i.slug, i.line`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var slug, text, status, path, title, tagsJSON string
+		var line int
+		var mtime, ctime sql.NullInt64
+		if err := rows.Scan(&slug, &line, &text, &status, &path, &title, &tagsJSON, &mtime, &ctime); err != nil {
+			return nil, err
+		}
+		r := &bases.Row{
+			Slug: slug, Path: path, Title: text,
+			Frontmatter: map[string]any{"line": line, "text": text, "task": status, "note_title": title},
+		}
+		if text == "" {
+			r.Title = title
+		}
+		_ = json.Unmarshal([]byte(tagsJSON), &r.Tags)
+		if mtime.Valid {
+			r.MTime = time.Unix(mtime.Int64, 0)
+		}
+		if ctime.Valid && ctime.Int64 > 0 {
+			r.CTime = time.Unix(ctime.Int64, 0)
+		} else {
+			r.CTime = r.MTime
+		}
+		index[key{slug, line}] = r
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	frows, err := d.r.Query(`SELECT f.slug, f.line, f.key, f.value,
 		n.path, n.title, n.tags, n.mtime, n.ctime
 		FROM inline_fields f JOIN notes n ON n.slug = f.slug
 		ORDER BY f.slug, f.line`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []*bases.Row
-	var cur *bases.Row
-	curKey := struct {
-		slug string
-		line int
-	}{}
-	for rows.Next() {
-		var slug, key, value, path, title, tagsJSON string
+	defer frows.Close()
+	for frows.Next() {
+		var slug, fkey, value, path, title, tagsJSON string
 		var line int
 		var mtime, ctime sql.NullInt64
-		if err := rows.Scan(&slug, &line, &key, &value, &path, &title, &tagsJSON, &mtime, &ctime); err != nil {
+		if err := frows.Scan(&slug, &line, &fkey, &value, &path, &title, &tagsJSON, &mtime, &ctime); err != nil {
 			return nil, err
 		}
-		if cur == nil || curKey.slug != slug || curKey.line != line {
-			cur = &bases.Row{
+		r, ok := index[key{slug, line}]
+		if !ok {
+			// fields outside any list item (paragraph lines) still get a row
+			r = &bases.Row{
 				Slug: slug, Path: path, Title: title,
-				Frontmatter: map[string]any{"line": line},
+				Frontmatter: map[string]any{"line": line, "text": "", "task": "", "note_title": title},
 			}
-			_ = json.Unmarshal([]byte(tagsJSON), &cur.Tags)
+			_ = json.Unmarshal([]byte(tagsJSON), &r.Tags)
 			if mtime.Valid {
-				cur.MTime = time.Unix(mtime.Int64, 0)
+				r.MTime = time.Unix(mtime.Int64, 0)
 			}
 			if ctime.Valid && ctime.Int64 > 0 {
-				cur.CTime = time.Unix(ctime.Int64, 0)
+				r.CTime = time.Unix(ctime.Int64, 0)
 			} else {
-				cur.CTime = cur.MTime
+				r.CTime = r.MTime
 			}
-			curKey.slug, curKey.line = slug, line
-			out = append(out, cur)
+			index[key{slug, line}] = r
+			out = append(out, r)
 		}
 		if f, err := strconv.ParseFloat(value, 64); err == nil {
-			cur.Frontmatter[key] = f
+			r.Frontmatter[fkey] = f
 		} else {
-			cur.Frontmatter[key] = value
+			r.Frontmatter[fkey] = value
 		}
 	}
-	return out, rows.Err()
+	return out, frows.Err()
 }
 
 // AllRows loads every note's metadata for the bases engine.

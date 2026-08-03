@@ -146,6 +146,7 @@ func New(cfg config.Config) (*Server, error) {
 	s.mux.HandleFunc("POST /api/tasks/priority", s.handleTaskPriority)
 	s.mux.HandleFunc("POST /api/tasks/cancel", s.handleTaskCancel)
 	s.mux.HandleFunc("POST /api/tasks/purge", s.handleTaskPurge)
+	s.mux.HandleFunc("POST /api/notes/property", s.handleNoteProperty)
 	s.mux.HandleFunc("GET /tasks", s.handleTasksPage)
 	s.mux.HandleFunc("GET /tasks/triage", s.handleTasksTriagePage)
 	s.mux.HandleFunc("GET /share", s.handleSharePage)
