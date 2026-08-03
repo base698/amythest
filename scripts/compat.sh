@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Kanban wire-compatibility gate: boots amythest on a temp vault (with a copy
-# of the real boards when available) and drives the original kanban.py skill
-# client through the full card lifecycle. Any non-zero exit means the API
-# drifted from the Netexplore Kanban contract.
+# Kanban wire-compatibility gate: boots amythest on a temp vault (optionally
+# seeded from $REAL_BOARDS) and drives the bundled kanban.py skill client
+# through the full card lifecycle. Any non-zero exit means the API drifted
+# from the kanban wire contract.
 set -euo pipefail
 
-KANBAN_PY="${KANBAN_PY:-$HOME/.claude/skills/kanban/scripts/kanban.py}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+KANBAN_PY="${KANBAN_PY:-$REPO_ROOT/.claude/skills/kanban/scripts/kanban.py}"
 if [[ ! -f "$KANBAN_PY" ]]; then
   echo "SKIP: kanban.py not found at $KANBAN_PY"
   exit 0
@@ -15,12 +16,13 @@ TMP=$(mktemp -d)
 trap 'kill $SRV_PID 2>/dev/null || true; rm -rf "$TMP"' EXIT
 
 mkdir -p "$TMP/vault/kanban"
-if [[ -d "${REAL_BOARDS:-$HOME/notes/kanban}" ]]; then
-  cp -RL "${REAL_BOARDS:-$HOME/notes/kanban}/" "$TMP/vault/kanban/" 2>/dev/null || true
+if [[ -n "${REAL_BOARDS:-}" && -d "${REAL_BOARDS:-}" ]]; then
+  cp -RL "$REAL_BOARDS/" "$TMP/vault/kanban/" 2>/dev/null || true
   rm -f "$TMP"/vault/kanban/*/.lock 2>/dev/null || true
 fi
 echo "# compat vault" > "$TMP/vault/index.md"
 
+export KANBAN_BASE_URL="http://127.0.0.1:8641/kanban"
 export KANBAN_USERNAME=compat
 export KANBAN_PASSWORD='compat-password-1'
 export KANBAN_SESSION_SECRET='0123456789abcdef0123456789abcdef'
@@ -51,12 +53,12 @@ CARD_ID=$(echo "$CARD_JSON" | python3 -c 'import json,sys; print(json.load(sys.s
 echo "card: $CARD_ID"
 
 echo "== update + comment =="
-k update compat-suite "$CARD_ID" --assignee Justin --labels compat,suite
+k update compat-suite "$CARD_ID" --assignee compat-user --labels compat,suite
 k comment compat-suite "$CARD_ID" --body "compat comment body"
 k card compat-suite "$CARD_ID" | python3 -c '
 import json,sys
 c=json.load(sys.stdin)
-assert c["assignee"]=="Justin", c
+assert c["assignee"]=="compat-user", c
 assert "suite" in c["labels"], c
 assert any("compat comment body"==x["body"] for x in c["comments"]), c
 print("update+comment ok")'
