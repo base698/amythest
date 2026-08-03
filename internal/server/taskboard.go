@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/base698/amythest/internal/kanban/board"
 	"github.com/base698/amythest/internal/tasks"
@@ -78,8 +79,16 @@ func (s *Server) handleTaskMoveToBoard(w http.ResponseWriter, r *http.Request) {
 			if !strings.ContainsAny(n.Slug, "[]|\r\n") {
 				description = fmt.Sprintf("Source note: [[%s]] (%s)", n.Slug, n.Path)
 			}
+			title, truncated := cardTitleFromTask(task.Text)
+			if truncated {
+				// Nothing is lost: the full wording goes in the description,
+				// which allows 10000 bytes.
+				if full := "Full task: " + task.Text + "\n\n" + description; len(full) <= 10000 {
+					description = full
+				}
+			}
 			card, cardCommitted, createErr := tx.Create(board.CardInput{
-				Title: task.Text, Description: description, DueDate: task.Due, Status: board.Triage,
+				Title: title, Description: description, DueDate: task.Due, Status: board.Triage,
 			})
 			if createErr != nil && !cardCommitted {
 				return tasks.CreatedTaskReference{}, createErr
@@ -88,8 +97,10 @@ func (s *Server) handleTaskMoveToBoard(w http.ResponseWriter, r *http.Request) {
 				return tasks.CreatedTaskReference{}, fmt.Errorf("kanban card write did not commit")
 			}
 			moved = card
-			alias := sanitizeWikilinkAlias(task.Text)
-			reference := fmt.Sprintf("[[kanban/%s/board#^card-%s|%s (%s)]]", req.Board, card.ID, alias, card.ID)
+			// The link text is just the card id: the task description sits
+			// right beside it on the same line, so repeating it only made the
+			// source line long and hard to read.
+			reference := fmt.Sprintf("[[kanban/%s/board#^card-%s|%s]]", req.Board, card.ID, card.ID)
 			return tasks.CreatedTaskReference{
 				Reference: reference,
 				Rollback: func() error {
@@ -113,11 +124,26 @@ func (s *Server) handleTaskMoveToBoard(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, map[string]any{"ok": true, "card": moved})
 }
 
-func sanitizeWikilinkAlias(value string) string {
-	value = strings.NewReplacer("[", "(", "]", ")", "|", "-", "\r", " ", "\n", " ").Replace(value)
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "Moved task"
+// cardTitleLimit mirrors the board store's card-title rule, which counts
+// bytes — so accented characters cost more than one. Long task descriptions
+// are common, and a move must not fail just because the wording is verbose.
+const cardTitleLimit = 200
+
+// cardTitleFromTask fits a task description into a card title: whitespace is
+// collapsed to one line, and an over-long title is cut at a word boundary
+// without splitting a multi-byte rune. Callers keep the full text elsewhere.
+func cardTitleFromTask(text string) (string, bool) {
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) <= cardTitleLimit {
+		return text, false
 	}
-	return value
+	const ellipsis = "…"
+	cut := cardTitleLimit - len(ellipsis)
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	if space := strings.LastIndexByte(text[:cut], ' '); space > cut/2 {
+		cut = space
+	}
+	return strings.TrimRight(text[:cut], " ") + ellipsis, true
 }

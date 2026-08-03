@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -144,6 +145,11 @@ func (e *Engine) resolveWikilink(v *vault.Vault, wl *obsidian.Wikilink, res *Res
 		wl.Broken = true
 		return
 	}
+	if dest, ok := e.kanbanBoardURL(n.Slug, wl.Fragment); ok {
+		wl.Dest = dest
+		res.Links = append(res.Links, Link{Slug: n.Slug, Kind: "link"})
+		return
+	}
 	wl.Dest = e.slugURL(n.Slug)
 	if wl.Fragment != "" {
 		wl.Dest += "#" + HeadingID(wl.Fragment)
@@ -200,6 +206,32 @@ func (e *Engine) resolveEmbed(v *vault.Vault, wl *obsidian.Wikilink, res *Result
 	b.WriteString(string(sub.HTML))
 	b.WriteString(`</blockquote>`)
 	wl.EmbedHTML = b.Bytes()
+}
+
+var kanbanBoardSlugRe = regexp.MustCompile(`^kanban/([a-z0-9-]+)(?:/[^/]+)?$`)
+
+// kanbanBoardURL rewrites a link to a board's markdown note into a link to the
+// board UI. The wikilink a task move leaves behind
+// ([[kanban/ops/board#^card-<id>]]) is correct for Obsidian, but its slug URL
+// (/kanban/ops/board) lands in the SPA, which reads every segment after the
+// board name as a label filter — so "board" filtered the view down to nothing.
+// The card id rides along as a fragment the board UI can act on.
+func (e *Engine) kanbanBoardURL(slug, fragment string) (string, bool) {
+	return KanbanBoardURL(e.base, slug, fragment)
+}
+
+// KanbanBoardURL is exported so every surface that links to notes — wikilinks,
+// backlinks, search — sends board notes to the same working place.
+func KanbanBoardURL(base, slug, fragment string) (string, bool) {
+	m := kanbanBoardSlugRe.FindStringSubmatch(slug)
+	if m == nil {
+		return "", false
+	}
+	dest := (&url.URL{Path: base + "kanban/" + m[1]}).EscapedPath()
+	if id, ok := strings.CutPrefix(strings.TrimPrefix(fragment, "^"), "card-"); ok && id != "" {
+		dest += "#card-" + url.PathEscape(id)
+	}
+	return dest, true
 }
 
 func (e *Engine) slugURL(slug string) string {

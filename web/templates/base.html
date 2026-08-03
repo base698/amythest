@@ -74,7 +74,7 @@
       <nav class="backlinks" aria-label="Backlinks">
         <h2 class="panel-title">Backlinks</h2>
         <ul>
-          {{range .Backlinks}}<li><a class="internal" href="{{$.Base}}{{.Slug}}">{{.Title}}</a></li>{{end}}
+          {{range .Backlinks}}<li><a class="internal" href="{{.URL}}">{{.Title}}</a></li>{{end}}
         </ul>
       </nav>
       {{end}}

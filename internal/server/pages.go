@@ -17,6 +17,21 @@ import (
 	"github.com/base698/amythest/internal/vault"
 )
 
+// kanbanAwareURL is noteURL for callers that only have the base string.
+func kanbanAwareURL(base, slug string) string {
+	if dest, ok := markdown.KanbanBoardURL(base, slug, ""); ok {
+		return dest
+	}
+	return base + slug
+}
+
+// noteLink is a link to a note with its URL already resolved (board notes
+// need a different destination than their slug).
+type noteLink struct {
+	Title string
+	URL   string
+}
+
 type crumb struct {
 	Name string
 	URL  string
@@ -32,7 +47,7 @@ type pageData struct {
 	Breadcrumbs []crumb
 	Tree        *treeNode
 	Slug        string
-	Backlinks   []index.NoteRef
+	Backlinks   []noteLink
 	HasKanban   bool
 }
 
@@ -81,9 +96,13 @@ func (s *Server) handleNote(w http.ResponseWriter, r *http.Request) {
 		page = &index.Page{Slug: n.Slug, Title: n.Title, HTML: res.HTML, TOC: res.TOC}
 	}
 
-	backlinks, err := s.db.Backlinks(n.Slug)
+	refs, err := s.db.Backlinks(n.Slug)
 	if err != nil {
-		backlinks = nil
+		refs = nil
+	}
+	backlinks := make([]noteLink, 0, len(refs))
+	for _, ref := range refs {
+		backlinks = append(backlinks, noteLink{Title: ref.Title, URL: s.noteURL(ref.Slug)})
 	}
 
 	s.renderPage(w, pageData{
@@ -121,7 +140,7 @@ func (s *Server) tryFolderPage(w http.ResponseWriter, v *vault.Vault, slug strin
 		if i := strings.Index(rest, "/"); i >= 0 {
 			folders[rest[:i]] = true
 		} else {
-			notes = append(notes, entry{Name: n.Title, URL: s.base() + n.Slug})
+			notes = append(notes, entry{Name: n.Title, URL: s.noteURL(n.Slug)})
 		}
 	}
 	if len(notes) == 0 && len(folders) == 0 {
@@ -193,7 +212,7 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 		}
 		b.WriteString(`<ul class="listing">`)
 		for _, ref := range refs {
-			b.WriteString(`<li><a class="internal" href="` + template.HTMLEscapeString(s.base()+ref.Slug) + `">` +
+			b.WriteString(`<li><a class="internal" href="` + template.HTMLEscapeString(s.noteURL(ref.Slug)) + `">` +
 				template.HTMLEscapeString(ref.Title) + `</a></li>`)
 		}
 		b.WriteString("</ul>")
@@ -287,6 +306,13 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, abs)
 }
 
+// noteURL is the canonical link to a note. Board notes go to the board UI:
+// their markdown path lands in the SPA, which reads trailing segments as
+// label filters and would show an empty board.
+func (s *Server) noteURL(slug string) string {
+	return kanbanAwareURL(s.base(), slug)
+}
+
 func (s *Server) base() string {
 	b := s.cfg.BaseURL
 	if !strings.HasSuffix(b, "/") {
@@ -336,10 +362,10 @@ func buildTree(v *vault.Vault, base string) *treeNode {
 		node := mkdir(parentPath(n.Path))
 		name := strings.TrimSuffix(path.Base(n.Path), ".md")
 		if name == "index" {
-			node.URL = base + n.Slug
+			node.URL = kanbanAwareURL(base, n.Slug)
 			continue
 		}
-		node.Children = append(node.Children, &treeNode{Name: n.Title, URL: base + n.Slug})
+		node.Children = append(node.Children, &treeNode{Name: n.Title, URL: kanbanAwareURL(base, n.Slug)})
 	}
 	sortTree(root)
 	return root

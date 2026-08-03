@@ -17,7 +17,7 @@ import (
 // renderVersion participates in change detection: bump it whenever the
 // renderer's HTML output changes shape, and every note re-renders on the
 // next reconcile without anyone having to delete the data dir.
-const renderVersion = "9"
+const renderVersion = "11"
 
 // versionedHash is a note's change-detection identity: its own content hash
 // plus a fingerprint of the notes it directly transcludes, so a note's

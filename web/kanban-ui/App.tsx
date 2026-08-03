@@ -9,7 +9,7 @@ import {
   type FilterMode,
 } from './labels'
 import { searchCards } from './cardSearch'
-import { KANBAN_MOUNT, NOTES_BASE } from './mount.ts'
+import { KANBAN_MOUNT, NOTES_BASE, cardIdFromHash } from './mount.ts'
 import './styles.css'
 
 interface Session { user: string; csrf: string }
@@ -75,6 +75,9 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
   const [newBoardOpen, setNewBoardOpen] = useState(false)
   const [agents, setAgents] = useState<AgentCatalog>(NO_AGENTS)
   const [cardQuery, setCardQuery] = useState('')
+  // A #card-<id> fragment (from the reference link a task move leaves in the
+  // source note) opens that card once its board has loaded.
+  const [pendingCardId, setPendingCardId] = useState('')
 
   useEffect(() => {
     api<Session>(`${API_BASE}/session`).then((value) => {
@@ -92,8 +95,19 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
       // A transient board-list failure must not read as "logged out":
       // keep the session and surface it in the error banner instead.
       void loadBoards(value).catch((err) => setError(err instanceof Error ? err.message : 'Failed to load boards'))
+      setPendingCardId(cardIdFromHash(window.location.hash))
     }).catch(() => setSession(null))
   }, [])
+
+  // Open the card named by #card-<id> once its board is loaded. Clearing the
+  // id afterwards keeps a later manual close from reopening it.
+  useEffect(() => {
+    if (!pendingCardId || !board) return
+    const card = board.cards.find((item) => item.id === pendingCardId)
+    if (card) setEditor(card)
+    else setError(`Card ${pendingCardId} is not on this board — it may have been archived or moved.`)
+    setPendingCardId('')
+  }, [board, pendingCardId])
 
   useEffect(() => {
     if (!session || boards.length === 0) return
