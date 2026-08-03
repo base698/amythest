@@ -84,6 +84,33 @@ func (s *Store) CreateBoard(name string) (Board, error) {
 	return created, err
 }
 
+// BoardNames lists board names without taking the store mutex or any board
+// lock. It exists for callers that can run *inside* a board's critical
+// section: moving a task to a board holds that board's lock across the
+// reindex, and the reindex fingerprints the board set — going through
+// ListBoards there would re-enter the non-reentrant mutex and deadlock.
+//
+// Directory names are the board names, so no file needs to be parsed; a
+// name list that is a moment stale is harmless to its callers.
+func (s *Store) BoardNames() []string {
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, entry := range entries {
+		if !entry.IsDir() || !validBoardName(entry.Name()) {
+			continue
+		}
+		if _, err := os.Stat(s.boardPath(entry.Name())); err != nil {
+			continue // a directory without board.md is not a board yet
+		}
+		out = append(out, entry.Name())
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (s *Store) ListBoards() ([]BoardSummary, error) {
 	entries, err := os.ReadDir(s.root)
 	if errors.Is(err, os.ErrNotExist) {

@@ -153,20 +153,14 @@ func (s *Server) handleTasksTriagePage(w http.ResponseWriter, r *http.Request) {
 }
 
 // boardNames lists kanban boards for the move-to-board controls, empty when
-// kanban is disabled or the store cannot be read (the control then hides).
+// kanban is disabled. It must stay lock-free: the renderer calls it during
+// reindex, which can run while a board lock is already held (see
+// board.Store.BoardNames).
 func (s *Server) boardNames() []string {
 	if s.kanban == nil {
 		return nil
 	}
-	summaries, err := s.kanban.ListBoards()
-	if err != nil {
-		return nil
-	}
-	names := make([]string, 0, len(summaries))
-	for _, summary := range summaries {
-		names = append(names, summary.Name)
-	}
-	return names
+	return s.kanban.BoardNames()
 }
 
 // tasksToolbar renders the status/sort/group controls as plain links. An

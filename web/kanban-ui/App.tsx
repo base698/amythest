@@ -84,7 +84,11 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
 		return
 	  }
       setSession(value)
-      void api<AgentCatalog>(`${API_BASE}/dispatch/agents`).then(setAgents).catch(() => setAgents(NO_AGENTS))
+      // The dispatcher was retired and Amythest serves no /dispatch routes,
+      // so asking only produced a 404 in the console on every sign-in. The
+      // dispatch UI below is gated on a non-empty catalog and stays hidden;
+      // restore this fetch if dispatch ever comes back.
+      setAgents(NO_AGENTS)
       // A transient board-list failure must not read as "logged out":
       // keep the session and surface it in the error banner instead.
       void loadBoards(value).catch((err) => setError(err instanceof Error ? err.message : 'Failed to load boards'))
