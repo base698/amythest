@@ -9,6 +9,8 @@ import {
   type FilterMode,
 } from './labels'
 import { searchCards } from './cardSearch'
+import { Markdown } from './MarkdownView'
+import { toggleTaskLine } from './markdown'
 import { KANBAN_MOUNT, NOTES_BASE, cardIdFromHash } from './mount.ts'
 import './styles.css'
 
@@ -326,6 +328,12 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
               setEditor(null); await refresh()
             } catch (caught) { setError(message(caught)) } finally { setBusy(false) }
           }}
+          onSaveDescription={editor === 'new' ? undefined : async (description) => {
+            try {
+              await mutate(`${API_BASE}/boards/${activeBoard}/cards/${editor.id}`, 'PUT', { description })
+              await refresh()
+            } catch (caught) { setError(message(caught)) }
+          }}
           onComment={editor === 'new' ? undefined : async (body) => {
             setBusy(true)
             try {
@@ -568,11 +576,13 @@ function Login({ onLogin }: { onLogin: (session: Session) => Promise<void> }) {
 }
 
 interface EditorInput { title: string; description: string; dueDate: string; milestone: string; status: Status; assignee: string; agent: string; blocked: boolean; labels: string[] }
-function CardEditor({ card, board, busy, agents, onClose, onSave, onDelete, onComment, onUpload, onDeleteAttachment, moveBoards, onMoveBoard }: {
-  card?: Card; board: string; busy: boolean; agents: AgentCatalog; onClose: () => void; onSave: (input: EditorInput) => Promise<void>; onDelete?: () => Promise<void>; onComment?: (body: string) => Promise<void>; onUpload?: (file: File) => Promise<Attachment>; onDeleteAttachment?: (attachment: Attachment) => Promise<void>; moveBoards: BoardSummary[]; onMoveBoard?: (destinationBoard: string) => Promise<void>
+function CardEditor({ card, board, busy, agents, onClose, onSave, onDelete, onComment, onUpload, onDeleteAttachment, onSaveDescription, moveBoards, onMoveBoard }: {
+  card?: Card; board: string; busy: boolean; agents: AgentCatalog; onClose: () => void; onSave: (input: EditorInput) => Promise<void>; onDelete?: () => Promise<void>; onComment?: (body: string) => Promise<void>; onUpload?: (file: File) => Promise<Attachment>; onDeleteAttachment?: (attachment: Attachment) => Promise<void>; onSaveDescription?: (description: string) => Promise<void>; moveBoards: BoardSummary[]; onMoveBoard?: (destinationBoard: string) => Promise<void>
 }) {
   const [title, setTitle] = useState(card?.title || '')
   const [description, setDescription] = useState(card?.description || '')
+  // Existing cards open on the rendered view; a new card starts in the editor.
+  const [descriptionView, setDescriptionView] = useState<'preview' | 'write'>(card?.description ? 'preview' : 'write')
   const [dueDate, setDueDate] = useState(card?.dueDate || '')
   const [milestone, setMilestone] = useState(card?.milestone || '')
   const [status, setStatus] = useState<Status>(card?.status || 'triage')
@@ -598,11 +608,40 @@ function CardEditor({ card, board, busy, agents, onClose, onSave, onDelete, onCo
             <h2 id="card-editor-title">{card ? 'Edit card' : 'New card'}</h2>
             {card && <p className="card-meta">Created {new Date(card.createdAt).toLocaleDateString()} · Updated {new Date(card.updatedAt).toLocaleString()}</p>}
           </div>
-          <button className="icon-button" onClick={onClose} aria-label="Close" type="button">×</button>
+          <div className="header-actions">
+            <button
+              aria-pressed={blocked}
+              className={`blocked-chip${blocked ? ' on' : ''}`}
+              onClick={() => setBlocked((current) => !current)}
+              title="Blocked cards show a red border; automation skips them. Applies on save."
+              type="button"
+            ><span aria-hidden="true">⛔</span> Blocked</button>
+            <button className="icon-button" onClick={onClose} aria-label="Close" type="button">×</button>
+          </div>
         </header>
         <form onSubmit={(event) => { event.preventDefault(); void onSave({ title, description, dueDate, milestone, status, assignee, agent, blocked, labels: labels.split(',').map((value) => value.trim()).filter(Boolean) }) }}>
           <label className="title-field">Title<input autoFocus={!card} className="title-input" maxLength={200} placeholder="What needs doing?" required value={title} onChange={(event) => setTitle(event.target.value)} /></label>
-          <label>Description<textarea maxLength={10000} placeholder="Details, links, acceptance criteria… markdown welcome" rows={6} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+          <div className="description-field">
+            <div className="description-head">
+              <span className="description-label">Description</span>
+              <div className="view-toggle" role="group" aria-label="Description view">
+                <button aria-pressed={descriptionView === 'preview'} onClick={() => setDescriptionView('preview')} type="button">Preview</button>
+                <button aria-pressed={descriptionView === 'write'} onClick={() => setDescriptionView('write')} type="button">Edit</button>
+              </div>
+            </div>
+            {descriptionView === 'write'
+              ? <textarea aria-label="Description" autoFocus={Boolean(card)} maxLength={10000} placeholder="Details, links, acceptance criteria… markdown welcome" rows={6} value={description} onChange={(event) => setDescription(event.target.value)} />
+              : description.trim()
+                ? <div className="description-preview"><Markdown text={description} onToggleTask={(line, done) => {
+                  // Checking a task stamps a ✅ done-date; unchecking clears it.
+                  // On existing cards the change persists immediately, so ticking
+                  // a checklist item doesn't require a separate Save.
+                  const next = toggleTaskLine(description, line, done, localDateStamp())
+                  setDescription(next)
+                  if (onSaveDescription) void onSaveDescription(next)
+                }} /></div>
+                : <p className="description-empty muted">No description yet — switch to Edit to add one. Markdown and <code>- [ ]</code> task lists are supported.</p>}
+          </div>
           <div className="form-grid">
             <label>Status<select value={status} onChange={(event) => setStatus(event.target.value as Status)}>{statusOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
             <label>Due date<input aria-label="Due date" type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></label>
@@ -623,24 +662,13 @@ function CardEditor({ card, board, busy, agents, onClose, onSave, onDelete, onCo
               {agents.agents.map((name) => <option key={name} value={name}>{name}</option>)}
             </select>
           </label>}
-          <label className="blocked-toggle"><input aria-label="Blocked" checked={blocked} onChange={(event) => setBlocked(event.target.checked)} type="checkbox" /> Blocked <small>Shown with a red border; automation skips it.</small></label>
           <div className="modal-actions">
-            {onDelete && <button className="danger-link" disabled={busy} onClick={() => void onDelete()} type="button">Delete card</button>}
-            <span className="actions-spacer" />
             <button className="quiet" onClick={onClose} type="button">Cancel</button>
             <button className="primary" disabled={busy} type="submit">{busy ? 'Saving…' : card ? 'Save card' : 'Create card'}</button>
           </div>
         </form>
-        {card && onMoveBoard && moveBoards.length > 0 && <section className="editor-section move-board" aria-labelledby="move-board-title">
-          <h3 id="move-board-title">Move to another board</h3>
-          <p className="hint">The card ID, content, attachments, timestamps, and history are preserved.</p>
-          <div className="move-board-row">
-            <select aria-label="Destination board" value={destinationBoard} onChange={(event) => setDestinationBoard(event.target.value)}><option value="">Select a board…</option>{moveBoards.map((item) => <option key={item.name} value={item.name}>{displayName(item.name)}</option>)}</select>
-            <button className="quiet" disabled={busy || !destinationBoard} onClick={() => void onMoveBoard(destinationBoard)} type="button">Move card</button>
-          </div>
-        </section>}
         {card && <section className="attachments" aria-labelledby="attachments-title">
-          <h3 id="attachments-title">Attachments</h3>
+          <h3 id="attachments-title">Attachments{attachments.length > 0 ? ` (${attachments.length})` : ''}</h3>
           {attachments.length === 0 ? <p className="muted">No attachments yet.</p> : <ul>{attachments.map((attachment) => <li key={attachment.id}>
             <div><a aria-label={`Download ${attachment.filename}`} href={`${API_BASE}/boards/${board}/cards/${card.id}/attachments/${attachment.id}`}>{attachment.filename}</a><span>{formatBytes(attachment.size)}</span></div>
             {onDeleteAttachment && <button aria-label={`Delete ${attachment.filename}`} className="quiet" disabled={attachmentBusy === attachment.id} onClick={async () => {
@@ -664,13 +692,28 @@ function CardEditor({ card, board, busy, agents, onClose, onSave, onDelete, onCo
             <p className="hint">Up to 10 files per card, 10 MiB each.</p>
           </form>}
         </section>}
-        {card && <div className="comments"><h3>Comments</h3>{card.comments.length === 0 ? <p className="muted">No comments yet.</p> : card.comments.map((item) => <article key={item.id}><strong>{item.author}</strong><time>{new Date(item.createdAt).toLocaleString()}</time><p>{item.body}</p></article>)}{onComment && <form className="comment-form" onSubmit={async (event) => { event.preventDefault(); if (!comment.trim()) return; await onComment(comment); setComment('') }}><textarea aria-label="Add comment" maxLength={2000} placeholder="Add a comment…" rows={3} value={comment} onChange={(event) => setComment(event.target.value)} /><button className="quiet" disabled={busy || !comment.trim()} type="submit">Comment</button></form>}</div>}
+        {card && <div className="comments"><h3>Comments{card.comments.length > 0 ? ` (${card.comments.length})` : ''}</h3>{card.comments.length === 0 ? <p className="muted">No comments yet.</p> : card.comments.map((item) => <article key={item.id}><strong>{item.author}</strong><time>{new Date(item.createdAt).toLocaleString()}</time><p>{item.body}</p></article>)}{onComment && <form className="comment-form" onSubmit={async (event) => { event.preventDefault(); if (!comment.trim()) return; await onComment(comment); setComment('') }}><textarea aria-label="Add comment" maxLength={2000} placeholder="Add a comment…" rows={3} value={comment} onChange={(event) => setComment(event.target.value)} /><button className="quiet" disabled={busy || !comment.trim()} type="submit">Comment</button></form>}</div>}
+        {card && (onDelete || (onMoveBoard && moveBoards.length > 0)) && <section className="editor-section card-actions" aria-labelledby="card-actions-title">
+          <h3 id="card-actions-title">Card actions</h3>
+          {onMoveBoard && moveBoards.length > 0 && <div className="move-board-row">
+            <select aria-label="Destination board" value={destinationBoard} onChange={(event) => setDestinationBoard(event.target.value)}><option value="">Move to another board…</option>{moveBoards.map((item) => <option key={item.name} value={item.name}>{displayName(item.name)}</option>)}</select>
+            <button className="quiet" disabled={busy || !destinationBoard} onClick={() => void onMoveBoard(destinationBoard)} type="button">Move card</button>
+          </div>}
+          {onMoveBoard && moveBoards.length > 0 && <p className="hint">Moving preserves the card ID, content, attachments, and history.</p>}
+          {onDelete && <button className="danger-link" disabled={busy} onClick={() => void onDelete()} type="button">Delete card…</button>}
+        </section>}
       </section>
     </div>
   )
 }
 
 function displayName(name: string) { return name.charAt(0).toUpperCase() + name.slice(1).replaceAll('-', ' ') }
+// The done-date uses the browser's local calendar day, matching what the user
+// sees; toISOString() would shift the date near midnight for non-UTC users.
+function localDateStamp() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
 function message(error: unknown) { return error instanceof Error ? error.message : 'Something went wrong' }
 function formatBytes(size: number) {
   if (size < 1024) return `${size} B`
