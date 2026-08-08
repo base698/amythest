@@ -2,6 +2,7 @@ import type { DragEvent } from 'react'
 import { formatCreatedDate, formatDueDate } from './dates'
 
 export type Status = 'triage' | 'backlog' | 'ready' | 'in_progress' | 'verify' | 'done'
+export type Priority = 'p0' | 'p1' | 'p2' | 'p3'
 
 export interface Comment {
   id: string
@@ -24,6 +25,7 @@ export interface Card {
 	description: string
 	dueDate?: string
 	milestone?: string
+	priority: Priority
 	status: Status
   assignee: string
   agent?: string
@@ -41,6 +43,9 @@ interface BoardViewProps {
   onMove: (card: Card, status: Status, beforeId?: string) => void
   onOpen: (card: Card) => void
   onBlockedChange: (card: Card, blocked: boolean) => void
+  focusCardId?: string
+  onFocus: (card: Card) => void
+  readOnly?: boolean
 }
 
 const columns: Array<{ status: Exclude<Status, 'done'>; label: string }> = [
@@ -56,7 +61,7 @@ const moveOptions: Array<{ status: Status; label: string }> = [
   { status: 'done', label: 'Done — archive' },
 ]
 
-export function BoardView({ cards, onMove, onOpen, onBlockedChange }: BoardViewProps) {
+export function BoardView({ cards, focusCardId, onMove, onOpen, onBlockedChange, onFocus, readOnly = false }: BoardViewProps) {
   function startDrag(event: DragEvent, card: Card) {
     event.dataTransfer.setData('text/card-id', card.id)
     event.dataTransfer.effectAllowed = 'move'
@@ -75,8 +80,9 @@ export function BoardView({ cards, onMove, onOpen, onBlockedChange }: BoardViewP
             className="column"
             key={status}
             data-status={status}
-            onDragOver={(event) => event.preventDefault()}
+            onDragOver={(event) => { if (!readOnly) event.preventDefault() }}
             onDrop={(event) => {
+              if (readOnly) return
               event.preventDefault()
               const card = draggedCard(event)
               if (card) onMove(card, status, undefined)
@@ -89,15 +95,17 @@ export function BoardView({ cards, onMove, onOpen, onBlockedChange }: BoardViewP
             <div className="card-list">
               {matching.map((card) => (
                 <article
-                  className={card.blocked ? 'card blocked' : 'card'}
-                  draggable
+                  className={`card${card.blocked ? ' blocked' : ''}${focusCardId === card.id ? ' focused' : ''}`}
+                  draggable={!readOnly}
                   key={card.id}
                   onDragStart={(event) => startDrag(event, card)}
                   onDragOver={(event) => {
+                    if (readOnly) return
                     event.preventDefault()
                     event.stopPropagation()
                   }}
                   onDrop={(event) => {
+                    if (readOnly) return
                     event.preventDefault()
                     event.stopPropagation()
                     const dragged = draggedCard(event)
@@ -105,7 +113,7 @@ export function BoardView({ cards, onMove, onOpen, onBlockedChange }: BoardViewP
                   }}
                 >
                   <button className="card-open" aria-label={`Open ${card.title}`} onClick={() => onOpen(card)} type="button">
-                    <span className="card-title">{card.blocked && <span className="blocked-flag">Blocked</span>}{card.title}</span>
+                    <span className="card-title">{card.blocked && <span className="blocked-flag">Blocked</span>}<span className={`priority-badge ${card.priority || 'p2'}`}>{(card.priority || 'p2').toUpperCase()}</span>{card.title}</span>
                     {card.description && <span className="card-description">{card.description}</span>}
                     {card.milestone && <span className="card-milestone">Milestone {card.milestone}</span>}
                     {card.dueDate && <span className="card-due">Due {formatDueDate(card.dueDate)}</span>}
@@ -120,7 +128,8 @@ export function BoardView({ cards, onMove, onOpen, onBlockedChange }: BoardViewP
                       {card.comments.length > 0 && <span>{card.comments.length} comment{card.comments.length === 1 ? '' : 's'}</span>}
                     </span>
                   </button>
-                  <div className="card-move">
+                  {!readOnly && <button aria-label={`${focusCardId === card.id ? 'Clear focus from' : 'Focus'} ${card.title}`} aria-pressed={focusCardId === card.id} className="card-focus-button" onClick={() => onFocus(card)} title={focusCardId === card.id ? 'Clear current focus' : 'Make this the current focus'} type="button">◎</button>}
+                  {!readOnly && <div className="card-move">
                     <label className="card-blocked">
                       <input
                         aria-label={`Blocked: ${card.title}`}
@@ -140,7 +149,7 @@ export function BoardView({ cards, onMove, onOpen, onBlockedChange }: BoardViewP
                     >
                       {moveOptions.map((option) => <option key={option.status} value={option.status}>{option.label}</option>)}
                     </select>
-                  </div>
+                  </div>}
                 </article>
               ))}
               {matching.length === 0 && <p className="empty-column">No cards</p>}

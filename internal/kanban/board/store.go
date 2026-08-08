@@ -31,21 +31,51 @@ const (
 )
 
 var boardNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+var boardColorPattern = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
 
 var ErrBoardExists = errors.New("board already exists")
 var ErrCardExists = errors.New("card already exists on destination board")
 
 type Store struct {
-	root        string
-	now         func() time.Time
-	mutex       sync.Mutex
-	writeFile   func(string, []byte) error
-	writeResult func(string, []byte) (bool, error)
+	root           string
+	now            func() time.Time
+	mutex          sync.Mutex
+	writeFile      func(string, []byte) error
+	writeResult    func(string, []byte) (bool, error)
+	moveCheckpoint func(string)
 }
 
 type archiveJournal struct {
 	BoardImage []byte `json:"board_image"`
 	DoneImage  []byte `json:"done_image"`
+}
+
+const (
+	crossBoardMoveVersion = 1
+	moveStateCommit       = "commit"
+	moveStateRollback     = "rollback"
+	moveKindActive        = "active"
+	moveKindArchive       = "archive"
+)
+
+type crossBoardMoveJournal struct {
+	Version           int    `json:"version"`
+	State             string `json:"state"`
+	Kind              string `json:"kind"`
+	Source            string `json:"source"`
+	Destination       string `json:"destination"`
+	CardID            string `json:"card_id"`
+	HasAttachments    bool   `json:"has_attachments"`
+	SourceBefore      []byte `json:"source_before"`
+	SourceAfter       []byte `json:"source_after"`
+	DestinationBefore []byte `json:"destination_before"`
+	DestinationAfter  []byte `json:"destination_after"`
+}
+
+type crossBoardMoveDescriptor struct {
+	path   string
+	first  string
+	second string
 }
 
 func NewStore(root string, clock func() time.Time) *Store {
@@ -62,8 +92,16 @@ func (s *Store) EnsureBoard(name string) error {
 // CreateBoard creates both canonical notes while holding the board lock. Unlike
 // EnsureBoard, it never adopts or overwrites an existing board.
 func (s *Store) CreateBoard(name string) (Board, error) {
-	created := Board{Version: 1, Name: name, Cards: []Card{}}
-	err := s.withLock(name, func() error {
+	return s.CreateBoardWithInput(BoardInput{Name: name})
+}
+
+func (s *Store) CreateBoardWithInput(input BoardInput) (Board, error) {
+	created, err := boardFromInput(input)
+	if err != nil {
+		return Board{}, err
+	}
+	name := created.Name
+	err = s.withLock(name, func() error {
 		for _, file := range []string{s.boardPath(name), s.donePath(name)} {
 			if _, err := os.Stat(file); err == nil {
 				return ErrBoardExists
@@ -132,9 +170,22 @@ func (s *Store) ListBoards() ([]BoardSummary, error) {
 		for _, card := range board.Cards {
 			counts[card.Status]++
 		}
-		out = append(out, BoardSummary{Name: board.Name, Counts: counts})
+		out = append(out, BoardSummary{
+			Name: board.Name, DisplayName: board.DisplayName, Description: board.Description,
+			Icon: board.Icon, Color: board.Color, SortOrder: board.SortOrder, Pinned: board.Pinned,
+			Archived: board.Archived, FocusCardID: board.FocusCardID,
+			DispatchEnabled: board.DispatchEnabled, Counts: counts,
+		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SortOrder != out[j].SortOrder {
+			return out[i].SortOrder < out[j].SortOrder
+		}
+		if out[i].DisplayName != out[j].DisplayName {
+			return strings.ToLower(out[i].DisplayName) < strings.ToLower(out[j].DisplayName)
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out, nil
 }
 
@@ -152,6 +203,10 @@ func (s *Store) Load(name string) (Board, error) {
 }
 
 func (s *Store) UpdateBoardSettings(name string, dispatchEnabled bool) (Board, error) {
+	return s.PatchBoardSettings(name, BoardSettingsPatch{DispatchEnabled: &dispatchEnabled})
+}
+
+func (s *Store) PatchBoardSettings(name string, patch BoardSettingsPatch) (Board, error) {
 	var updated Board
 	err := s.withLock(name, func() error {
 		var err error
@@ -159,8 +214,22 @@ func (s *Store) UpdateBoardSettings(name string, dispatchEnabled bool) (Board, e
 		if err != nil {
 			return err
 		}
-		updated.DispatchEnabled = dispatchEnabled
-		return s.writeActive(name, updated)
+		if err := applyBoardSettingsPatch(&updated, patch); err != nil {
+			return err
+		}
+		if updated.FocusCardID != "" && cardIndex(updated.Cards, updated.FocusCardID) < 0 {
+			return errors.New("focus card must be active on this board")
+		}
+		done, err := readBoard(s.donePath(name))
+		if err != nil {
+			return err
+		}
+		copyBoardMetadata(&done, updated)
+		now := s.now().UTC()
+		return s.commitArchiveUnlocked(name, archiveJournal{
+			BoardImage: renderBoard(updated, false, now),
+			DoneImage:  renderBoard(done, true, now),
+		})
 	})
 	return updated, err
 }
@@ -226,11 +295,18 @@ func (s *Store) createCardOnExistingBoardResultUnlocked(name string, input CardI
 	if err != nil {
 		return created, false, err
 	}
+	if value.Archived {
+		return created, false, errors.New("cannot create cards on an archived board")
+	}
 	now := s.now().UTC()
+	priority := input.Priority
+	if priority == "" {
+		priority = P2
+	}
 	created = Card{
 		ID: newID(now), Title: strings.TrimSpace(input.Title), Description: strings.TrimSpace(input.Description),
 		DueDate: strings.TrimSpace(input.DueDate), Milestone: strings.ToLower(strings.TrimSpace(input.Milestone)),
-		Status: input.Status, Assignee: strings.TrimSpace(input.Assignee), Agent: strings.TrimSpace(input.Agent), Blocked: input.Blocked, Labels: normalizeLabels(input.Labels),
+		Priority: priority, Status: input.Status, Assignee: strings.TrimSpace(input.Assignee), Agent: strings.TrimSpace(input.Agent), Blocked: input.Blocked, Labels: normalizeLabels(input.Labels),
 		Comments: []Comment{}, Attachments: []Attachment{}, CreatedAt: now, UpdatedAt: now,
 	}
 	if created.Status == "" {
@@ -256,11 +332,18 @@ func (s *Store) createCard(name string, input CardInput, ensure bool) (Card, err
 		if err != nil {
 			return err
 		}
+		if board.Archived {
+			return errors.New("cannot create cards on an archived board")
+		}
 		now := s.now().UTC()
+		priority := input.Priority
+		if priority == "" {
+			priority = P2
+		}
 		created = Card{
 			ID: newID(now), Title: strings.TrimSpace(input.Title), Description: strings.TrimSpace(input.Description),
 			DueDate: strings.TrimSpace(input.DueDate), Milestone: strings.ToLower(strings.TrimSpace(input.Milestone)),
-			Status: input.Status, Assignee: strings.TrimSpace(input.Assignee), Agent: strings.TrimSpace(input.Agent), Blocked: input.Blocked, Labels: normalizeLabels(input.Labels),
+			Priority: priority, Status: input.Status, Assignee: strings.TrimSpace(input.Assignee), Agent: strings.TrimSpace(input.Agent), Blocked: input.Blocked, Labels: normalizeLabels(input.Labels),
 			Comments: []Comment{}, Attachments: []Attachment{}, CreatedAt: now, UpdatedAt: now,
 		}
 		if created.Status == "" {
@@ -302,6 +385,9 @@ func (s *Store) UpdateCard(name, id string, patch CardPatch) (Card, error) {
 		if patch.Milestone != nil {
 			updated.Milestone = strings.ToLower(strings.TrimSpace(*patch.Milestone))
 		}
+		if patch.Priority != nil {
+			updated.Priority = *patch.Priority
+		}
 		if patch.Status != nil {
 			updated.Status = *patch.Status
 		}
@@ -332,6 +418,10 @@ func (s *Store) UpdateCard(name, id string, patch CardPatch) (Card, error) {
 				doneBoard.Cards = append([]Card{updated}, doneBoard.Cards...)
 			}
 			board.Cards = append(board.Cards[:index], board.Cards[index+1:]...)
+			if board.FocusCardID == updated.ID {
+				board.FocusCardID = ""
+			}
+			copyBoardMetadata(&doneBoard, board)
 			return s.commitArchiveUnlocked(name, archiveJournal{
 				BoardImage: renderBoard(board, false, updated.UpdatedAt),
 				DoneImage:  renderBoard(doneBoard, true, updated.UpdatedAt),
@@ -422,11 +512,18 @@ func (s *Store) MoveCardToBoard(sourceName, destinationName, id, actor string) (
 		if err != nil {
 			return err
 		}
+		destinationArchive, err := readBoard(s.donePath(destinationName))
+		if err != nil {
+			return err
+		}
+		if destination.Archived {
+			return errors.New("cannot move cards to an archived board")
+		}
 		sourceIndex := cardIndex(source.Cards, id)
 		if sourceIndex < 0 {
 			return os.ErrNotExist
 		}
-		if cardIndex(destination.Cards, id) >= 0 {
+		if cardIndex(destination.Cards, id) >= 0 || cardIndex(destinationArchive.Cards, id) >= 0 {
 			return ErrCardExists
 		}
 
@@ -439,57 +536,88 @@ func (s *Store) MoveCardToBoard(sourceName, destinationName, id, actor string) (
 			ToBoard: destinationName, CreatedAt: now,
 		})
 		source.Cards = append(source.Cards[:sourceIndex], source.Cards[sourceIndex+1:]...)
+		if source.FocusCardID == moved.ID {
+			source.FocusCardID = ""
+		}
 		destination.Cards = append(destination.Cards, moved)
 
 		sourceAfter := renderBoard(source, false, now)
 		destinationAfter := renderBoard(destination, false, now)
 
-		var sourceAttachments, destinationAttachments string
-		if len(moved.Attachments) > 0 {
-			sourceAttachments, err = s.attachmentDirUnlocked(sourceName, id, false)
-			if err != nil {
-				return err
-			}
-			destinationRoot := filepath.Join(s.root, destinationName, "attachments")
-			if err := os.MkdirAll(destinationRoot, 0o750); err != nil {
-				return err
-			}
-			if info, err := os.Lstat(destinationRoot); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-				return errors.New("destination attachment directory is unsafe")
-			}
-			destinationAttachments = filepath.Join(destinationRoot, id)
-			if _, err := os.Lstat(destinationAttachments); !errors.Is(err, os.ErrNotExist) {
-				if err == nil {
-					return ErrCardExists
-				}
-				return err
-			}
-			if err := os.Rename(sourceAttachments, destinationAttachments); err != nil {
-				return err
-			}
-		}
-		rollbackAttachments := func() error {
-			if destinationAttachments == "" {
-				return nil
-			}
-			return os.Rename(destinationAttachments, sourceAttachments)
-		}
-		if err := s.writeFile(s.boardPath(destinationName), destinationAfter); err != nil {
-			if rollbackErr := rollbackAttachments(); rollbackErr != nil {
-				return fmt.Errorf("write destination: %v; rollback attachments: %w", err, rollbackErr)
-			}
+		return s.commitCrossBoardMoveUnlocked(crossBoardMoveJournal{
+			Version: crossBoardMoveVersion, State: moveStateCommit, Kind: moveKindActive,
+			Source: sourceName, Destination: destinationName, CardID: id,
+			HasAttachments: len(moved.Attachments) > 0,
+			SourceBefore:   sourceBefore, SourceAfter: sourceAfter,
+			DestinationBefore: destinationBefore, DestinationAfter: destinationAfter,
+		})
+	})
+	return moved, err
+}
+
+// MoveArchivedCardToBoard transfers a completed card between board archives
+// while preserving its completion and content timestamps. The transfer is
+// recorded in audit history and attachments move with the stable card ID.
+func (s *Store) MoveArchivedCardToBoard(sourceName, destinationName, id, actor string) (Card, error) {
+	if !validBoardName(sourceName) || !validBoardName(destinationName) {
+		return Card{}, errors.New("invalid board name")
+	}
+	if sourceName == destinationName {
+		return Card{}, errors.New("destination board must be different")
+	}
+	actor = strings.TrimSpace(actor)
+	if actor == "" || len(actor) > 80 {
+		return Card{}, errors.New("actor must be 1-80 characters")
+	}
+
+	var moved Card
+	err := s.withBoardLocks([]string{sourceName, destinationName}, func() error {
+		sourceActive, err := readBoard(s.boardPath(sourceName))
+		if err != nil {
 			return err
 		}
-		if err := s.writeFile(s.boardPath(sourceName), sourceAfter); err != nil {
-			destinationRollbackErr := atomicWrite(s.boardPath(destinationName), destinationBefore)
-			sourceRollbackErr := atomicWrite(s.boardPath(sourceName), sourceBefore)
-			attachmentRollbackErr := rollbackAttachments()
-			if destinationRollbackErr != nil || sourceRollbackErr != nil || attachmentRollbackErr != nil {
-				return fmt.Errorf("write source: %v; rollback destination: %v; rollback source: %v; rollback attachments: %v", err, destinationRollbackErr, sourceRollbackErr, attachmentRollbackErr)
-			}
+		source, err := readBoard(s.donePath(sourceName))
+		if err != nil {
 			return err
 		}
-		return nil
+		destination, err := readBoard(s.donePath(destinationName))
+		if err != nil {
+			return err
+		}
+		destinationActive, err := readBoard(s.boardPath(destinationName))
+		if err != nil {
+			return err
+		}
+		if destinationActive.Archived {
+			return errors.New("cannot move cards to an archived board")
+		}
+		sourceIndex := cardIndex(source.Cards, id)
+		if sourceIndex < 0 {
+			return os.ErrNotExist
+		}
+		if cardIndex(destination.Cards, id) >= 0 || cardIndex(destinationActive.Cards, id) >= 0 {
+			return ErrCardExists
+		}
+
+		now := s.now().UTC()
+		sourceBefore := renderBoard(source, true, now)
+		destinationBefore := renderBoard(destination, true, now)
+		moved = source.Cards[sourceIndex]
+		moved.Audit = append(moved.Audit, AuditEntry{
+			Action: "moved_archived_board", Actor: actor, FromBoard: sourceName,
+			ToBoard: destinationName, CreatedAt: now,
+		})
+		source.Cards = append(source.Cards[:sourceIndex], source.Cards[sourceIndex+1:]...)
+		destination.Cards = append([]Card{moved}, destination.Cards...)
+		copyBoardMetadata(&source, sourceActive)
+		copyBoardMetadata(&destination, destinationActive)
+		return s.commitCrossBoardMoveUnlocked(crossBoardMoveJournal{
+			Version: crossBoardMoveVersion, State: moveStateCommit, Kind: moveKindArchive,
+			Source: sourceName, Destination: destinationName, CardID: id,
+			HasAttachments: len(moved.Attachments) > 0,
+			SourceBefore:   sourceBefore, SourceAfter: renderBoard(source, true, now),
+			DestinationBefore: destinationBefore, DestinationAfter: renderBoard(destination, true, now),
+		})
 	})
 	return moved, err
 }
@@ -518,6 +646,9 @@ func (s *Store) DeleteCard(name, id string) (Card, error) {
 			}
 		}
 		value.Cards = append(value.Cards[:index], value.Cards[index+1:]...)
+		if value.FocusCardID == deleted.ID {
+			value.FocusCardID = ""
+		}
 		if err := s.writeActive(name, value); err != nil {
 			if quarantine != "" {
 				_ = os.Rename(quarantine, attachmentDir)
@@ -645,6 +776,9 @@ func (s *Store) RestoreCard(name, id string, status Status) (Card, error) {
 		if err != nil {
 			return err
 		}
+		if active.Archived {
+			return errors.New("cannot restore cards to an archived board")
+		}
 		archived, err := readBoard(s.donePath(name))
 		if err != nil {
 			return err
@@ -654,7 +788,7 @@ func (s *Store) RestoreCard(name, id string, status Status) (Card, error) {
 			return os.ErrNotExist
 		}
 		if cardIndex(active.Cards, id) >= 0 {
-			return errors.New("card already exists on active board")
+			return ErrCardExists
 		}
 		restored = archived.Cards[index]
 		restored.Status = status
@@ -665,6 +799,7 @@ func (s *Store) RestoreCard(name, id string, status Status) (Card, error) {
 		}
 		archived.Cards = append(archived.Cards[:index], archived.Cards[index+1:]...)
 		active.Cards = append(active.Cards, restored)
+		copyBoardMetadata(&archived, active)
 		return s.commitArchiveUnlocked(name, archiveJournal{
 			BoardImage: renderBoard(active, false, restored.UpdatedAt),
 			DoneImage:  renderBoard(archived, true, restored.UpdatedAt),
@@ -918,6 +1053,251 @@ func (s *Store) attachmentDirUnlocked(name, cardID string, create bool) (string,
 	return cardDir, nil
 }
 
+func (s *Store) commitCrossBoardMoveUnlocked(journal crossBoardMoveJournal) error {
+	if err := s.validateCrossBoardMoveJournal(journal); err != nil {
+		return err
+	}
+	if err := s.validateMoveAttachmentPreconditions(journal); err != nil {
+		return err
+	}
+	path := s.crossBoardMoveJournalPath(journal.Source, journal.Destination)
+	if _, err := os.Lstat(path); err == nil {
+		return errors.New("cross-board move journal already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := s.writeCrossBoardMoveJournal(path, journal); err != nil {
+		return err
+	}
+	if s.moveCheckpoint != nil {
+		s.moveCheckpoint("journal_written")
+	}
+	if err := s.applyCrossBoardMoveJournalUnlocked(journal, s.writeFile, true); err != nil {
+		originalErr := err
+		journal.State = moveStateRollback
+		if journalErr := s.writeCrossBoardMoveJournal(path, journal); journalErr != nil {
+			return fmt.Errorf("apply cross-board move: %v; persist rollback decision: %w", originalErr, journalErr)
+		}
+		if rollbackErr := s.applyCrossBoardMoveJournalUnlocked(journal, atomicWrite, false); rollbackErr != nil {
+			return fmt.Errorf("apply cross-board move: %v; rollback: %w", originalErr, rollbackErr)
+		}
+		if cleanupErr := s.removeCrossBoardMoveJournal(path); cleanupErr != nil {
+			return fmt.Errorf("apply cross-board move: %v; clean rollback journal: %w", originalErr, cleanupErr)
+		}
+		return originalErr
+	}
+	return s.removeCrossBoardMoveJournal(path)
+}
+
+func (s *Store) recoverCrossBoardMoveUnlocked(descriptor crossBoardMoveDescriptor) error {
+	payload, err := os.ReadFile(descriptor.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var journal crossBoardMoveJournal
+	if err := json.Unmarshal(payload, &journal); err != nil {
+		return fmt.Errorf("parse cross-board move journal %s: %w", descriptor.path, err)
+	}
+	if err := s.validateCrossBoardMoveJournal(journal); err != nil {
+		return fmt.Errorf("invalid cross-board move journal %s: %w", descriptor.path, err)
+	}
+	first, second := sortedBoardPair(journal.Source, journal.Destination)
+	if descriptor.first != first || descriptor.second != second || descriptor.path != s.crossBoardMoveJournalPath(first, second) {
+		return fmt.Errorf("cross-board move journal pair does not match filename")
+	}
+	if err := s.applyCrossBoardMoveJournalUnlocked(journal, atomicWrite, false); err != nil {
+		return err
+	}
+	return s.removeCrossBoardMoveJournal(descriptor.path)
+}
+
+func (s *Store) applyCrossBoardMoveJournalUnlocked(journal crossBoardMoveJournal, writer func(string, []byte) error, checkpoints bool) error {
+	commit := journal.State == moveStateCommit
+	if journal.HasAttachments {
+		if err := s.placeMoveAttachmentsUnlocked(journal, commit); err != nil {
+			return err
+		}
+	}
+	if checkpoints && s.moveCheckpoint != nil {
+		s.moveCheckpoint("attachments_moved")
+	}
+	destinationImage, sourceImage := journal.DestinationAfter, journal.SourceAfter
+	if !commit {
+		destinationImage, sourceImage = journal.DestinationBefore, journal.SourceBefore
+	}
+	if err := writer(s.crossBoardMoveDataPath(journal.Destination, journal.Kind), destinationImage); err != nil {
+		return err
+	}
+	if checkpoints && s.moveCheckpoint != nil {
+		s.moveCheckpoint("destination_written")
+	}
+	if err := writer(s.crossBoardMoveDataPath(journal.Source, journal.Kind), sourceImage); err != nil {
+		return err
+	}
+	if checkpoints && s.moveCheckpoint != nil {
+		s.moveCheckpoint("source_written")
+	}
+	return nil
+}
+
+func (s *Store) validateCrossBoardMoveJournal(journal crossBoardMoveJournal) error {
+	if journal.Version != crossBoardMoveVersion || (journal.State != moveStateCommit && journal.State != moveStateRollback) {
+		return errors.New("unsupported cross-board move journal")
+	}
+	if journal.Kind != moveKindActive && journal.Kind != moveKindArchive {
+		return errors.New("invalid cross-board move kind")
+	}
+	if !validBoardName(journal.Source) || !validBoardName(journal.Destination) || journal.Source == journal.Destination || !validObjectID(journal.CardID) {
+		return errors.New("invalid cross-board move identity")
+	}
+	if len(journal.SourceBefore) == 0 || len(journal.SourceAfter) == 0 || len(journal.DestinationBefore) == 0 || len(journal.DestinationAfter) == 0 {
+		return errors.New("incomplete cross-board move images")
+	}
+	return nil
+}
+
+func (s *Store) validateMoveAttachmentPreconditions(journal crossBoardMoveJournal) error {
+	if !journal.HasAttachments {
+		return nil
+	}
+	sourceRoot := filepath.Join(s.root, journal.Source, "attachments")
+	sourceCard := filepath.Join(sourceRoot, journal.CardID)
+	if exists, err := safeDirectoryExists(sourceRoot); err != nil || !exists {
+		if err != nil {
+			return err
+		}
+		return errors.New("source attachment directory is missing")
+	}
+	if exists, err := safeDirectoryExists(sourceCard); err != nil || !exists {
+		if err != nil {
+			return err
+		}
+		return errors.New("source card attachment directory is missing")
+	}
+	destinationRoot := filepath.Join(s.root, journal.Destination, "attachments")
+	if _, err := safeDirectoryExists(destinationRoot); err != nil {
+		return err
+	}
+	if exists, err := safeDirectoryExists(filepath.Join(destinationRoot, journal.CardID)); err != nil {
+		return err
+	} else if exists {
+		return ErrCardExists
+	}
+	return nil
+}
+
+func (s *Store) placeMoveAttachmentsUnlocked(journal crossBoardMoveJournal, atDestination bool) error {
+	sourceRoot := filepath.Join(s.root, journal.Source, "attachments")
+	destinationRoot := filepath.Join(s.root, journal.Destination, "attachments")
+	if atDestination {
+		exists, err := safeDirectoryExists(destinationRoot)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if err := os.Mkdir(destinationRoot, 0o750); err != nil && !errors.Is(err, os.ErrExist) {
+				return err
+			}
+			if err := syncDir(filepath.Dir(destinationRoot)); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := safeDirectoryExists(sourceRoot); err != nil {
+		return err
+	}
+	if _, err := safeDirectoryExists(destinationRoot); err != nil {
+		return err
+	}
+	sourceCard := filepath.Join(sourceRoot, journal.CardID)
+	destinationCard := filepath.Join(destinationRoot, journal.CardID)
+	sourceExists, err := safeDirectoryExists(sourceCard)
+	if err != nil {
+		return err
+	}
+	destinationExists, err := safeDirectoryExists(destinationCard)
+	if err != nil {
+		return err
+	}
+	if sourceExists && destinationExists {
+		return errors.New("attachment directory exists on both boards")
+	}
+	if !sourceExists && !destinationExists {
+		return errors.New("attachment directory is missing from both boards")
+	}
+	if atDestination && sourceExists {
+		if err := os.Rename(sourceCard, destinationCard); err != nil {
+			return err
+		}
+		return syncMoveAttachmentParents(sourceRoot, destinationRoot)
+	}
+	if !atDestination && destinationExists {
+		if err := os.Rename(destinationCard, sourceCard); err != nil {
+			return err
+		}
+		return syncMoveAttachmentParents(sourceRoot, destinationRoot)
+	}
+	return nil
+}
+
+func safeDirectoryExists(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false, errors.New("attachment directory is unsafe")
+	}
+	return true, nil
+}
+
+func syncMoveAttachmentParents(sourceRoot, destinationRoot string) error {
+	if err := syncDir(sourceRoot); err != nil {
+		return err
+	}
+	return syncDir(destinationRoot)
+}
+
+func (s *Store) writeCrossBoardMoveJournal(path string, journal crossBoardMoveJournal) error {
+	payload, err := json.Marshal(journal)
+	if err != nil {
+		return err
+	}
+	return atomicWrite(path, payload)
+}
+
+func (s *Store) removeCrossBoardMoveJournal(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return syncDir(s.root)
+}
+
+func (s *Store) crossBoardMoveDataPath(name, kind string) string {
+	if kind == moveKindArchive {
+		return s.donePath(name)
+	}
+	return s.boardPath(name)
+}
+
+func sortedBoardPair(first, second string) (string, string) {
+	if second < first {
+		return second, first
+	}
+	return first, second
+}
+
+func (s *Store) crossBoardMoveJournalPath(first, second string) string {
+	first, second = sortedBoardPair(first, second)
+	return filepath.Join(s.root, ".cross-board-move-"+hex.EncodeToString([]byte(first))+"."+hex.EncodeToString([]byte(second))+".wal")
+}
+
 func validObjectID(id string) bool {
 	if id == "" || len(id) > 100 {
 		return false
@@ -945,90 +1325,225 @@ func (s *Store) withLockMode(name string, create bool, fn func() error) error {
 	if !validBoardName(name) {
 		return errors.New("invalid board name")
 	}
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	dir := filepath.Join(s.root, name)
+	createNames := map[string]bool{}
 	if create {
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			return err
-		}
-	} else if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		return os.ErrNotExist
+		createNames[name] = true
 	}
-	lock, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return err
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	if err := s.recoverArchiveUnlocked(name); err != nil {
-		return err
-	}
-	return fn()
+	return s.withBoardLocksMode([]string{name}, createNames, fn)
 }
 
 func (s *Store) withBoardLocks(names []string, fn func() error) error {
-	names = append([]string(nil), names...)
-	sort.Strings(names)
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	locks := make([]*os.File, 0, len(names))
+	return s.withBoardLocksMode(names, nil, fn)
+}
+
+func (s *Store) withBoardLocksMode(names []string, createNames map[string]bool, fn func() error) error {
+	names = uniqueSortedBoardNames(names)
+	if len(names) == 0 {
+		return errors.New("at least one board lock is required")
+	}
 	for _, name := range names {
 		if !validBoardName(name) {
 			return errors.New("invalid board name")
 		}
+	}
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	for _, name := range names {
 		dir := filepath.Join(s.root, name)
-		info, err := os.Stat(dir)
-		if err != nil || !info.IsDir() {
-			if errors.Is(err, os.ErrNotExist) {
-				return os.ErrNotExist
+		if createNames[name] {
+			if err := os.MkdirAll(dir, 0o750); err != nil {
+				return err
 			}
-			return err
+		} else if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			return os.ErrNotExist
 		}
-		lock, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	}
+
+	lockNames := append([]string(nil), names...)
+	for {
+		descriptors, err := s.crossBoardMoveDescriptors()
 		if err != nil {
 			return err
 		}
-		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-			lock.Close()
+		lockNames = moveJournalLockClosure(lockNames, descriptors)
+		locks, err := s.acquireBoardLocks(lockNames)
+		if err != nil {
 			return err
+		}
+		latest, err := s.crossBoardMoveDescriptors()
+		if err != nil {
+			releaseBoardLocks(locks)
+			return err
+		}
+		required := moveJournalLockClosure(names, latest)
+		if !boardNamesSubset(required, lockNames) {
+			releaseBoardLocks(locks)
+			lockNames = required
+			continue
+		}
+		defer releaseBoardLocks(locks)
+		for _, name := range lockNames {
+			if err := s.recoverArchiveUnlocked(name); err != nil {
+				return err
+			}
+		}
+		for _, descriptor := range latest {
+			if boardNameInSorted(required, descriptor.first) && boardNameInSorted(required, descriptor.second) {
+				if err := s.recoverCrossBoardMoveUnlocked(descriptor); err != nil {
+					return err
+				}
+			}
+		}
+		return fn()
+	}
+}
+
+func (s *Store) crossBoardMoveDescriptors() ([]crossBoardMoveDescriptor, error) {
+	entries, err := os.ReadDir(s.root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	const prefix = ".cross-board-move-"
+	const suffix = ".wal"
+	descriptors := make([]crossBoardMoveDescriptor, 0)
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+			continue
+		}
+		encoded := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
+		parts := strings.Split(encoded, ".")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid cross-board move journal filename %q", name)
+		}
+		firstBytes, firstErr := hex.DecodeString(parts[0])
+		secondBytes, secondErr := hex.DecodeString(parts[1])
+		first, second := string(firstBytes), string(secondBytes)
+		if firstErr != nil || secondErr != nil || !validBoardName(first) || !validBoardName(second) || first >= second {
+			return nil, fmt.Errorf("invalid cross-board move journal filename %q", name)
+		}
+		descriptors = append(descriptors, crossBoardMoveDescriptor{
+			path: filepath.Join(s.root, name), first: first, second: second,
+		})
+	}
+	sort.Slice(descriptors, func(i, j int) bool { return descriptors[i].path < descriptors[j].path })
+	return descriptors, nil
+}
+
+func moveJournalLockClosure(names []string, descriptors []crossBoardMoveDescriptor) []string {
+	set := make(map[string]bool, len(names))
+	for _, name := range names {
+		set[name] = true
+	}
+	changed := true
+	for changed {
+		changed = false
+		for _, descriptor := range descriptors {
+			if !set[descriptor.first] && !set[descriptor.second] {
+				continue
+			}
+			if !set[descriptor.first] {
+				set[descriptor.first] = true
+				changed = true
+			}
+			if !set[descriptor.second] {
+				set[descriptor.second] = true
+				changed = true
+			}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for name := range set {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func uniqueSortedBoardNames(names []string) []string {
+	set := make(map[string]bool, len(names))
+	for _, name := range names {
+		set[name] = true
+	}
+	out := make([]string, 0, len(set))
+	for name := range set {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (s *Store) acquireBoardLocks(names []string) ([]*os.File, error) {
+	locks := make([]*os.File, 0, len(names))
+	for _, name := range names {
+		dir := filepath.Join(s.root, name)
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			releaseBoardLocks(locks)
+			if err != nil {
+				return nil, err
+			}
+			return nil, errors.New("board path is not a directory")
+		}
+		lock, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			releaseBoardLocks(locks)
+			return nil, err
+		}
+		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+			_ = lock.Close()
+			releaseBoardLocks(locks)
+			return nil, err
 		}
 		locks = append(locks, lock)
 	}
-	defer func() {
-		for i := len(locks) - 1; i >= 0; i-- {
-			_ = syscall.Flock(int(locks[i].Fd()), syscall.LOCK_UN)
-			_ = locks[i].Close()
-		}
-	}()
-	for _, name := range names {
-		if err := s.recoverArchiveUnlocked(name); err != nil {
-			return err
+	return locks, nil
+}
+
+func releaseBoardLocks(locks []*os.File) {
+	for i := len(locks) - 1; i >= 0; i-- {
+		_ = syscall.Flock(int(locks[i].Fd()), syscall.LOCK_UN)
+		_ = locks[i].Close()
+	}
+}
+
+func boardNamesSubset(subset, superset []string) bool {
+	for _, name := range subset {
+		if !boardNameInSorted(superset, name) {
+			return false
 		}
 	}
-	return fn()
+	return true
+}
+
+func boardNameInSorted(names []string, name string) bool {
+	index := sort.SearchStrings(names, name)
+	return index < len(names) && names[index] == name
 }
 
 func (s *Store) ensureUnlocked(name string) error {
 	if err := os.MkdirAll(filepath.Join(s.root, name), 0o750); err != nil {
 		return err
 	}
+	created, err := boardFromInput(BoardInput{Name: name})
+	if err != nil {
+		return err
+	}
 	now := s.now().UTC()
 	if _, err := os.Stat(s.boardPath(name)); errors.Is(err, os.ErrNotExist) {
-		if err := atomicWrite(s.boardPath(name), renderBoard(Board{Version: 1, Name: name, Cards: []Card{}}, false, now)); err != nil {
+		if err := atomicWrite(s.boardPath(name), renderBoard(created, false, now)); err != nil {
 			return err
 		}
 	} else if err != nil {
 		return err
 	}
 	if _, err := os.Stat(s.donePath(name)); errors.Is(err, os.ErrNotExist) {
-		return atomicWrite(s.donePath(name), renderBoard(Board{Version: 1, Name: name, Cards: []Card{}}, true, now))
+		return atomicWrite(s.donePath(name), renderBoard(created, true, now))
 	} else {
 		return err
 	}
@@ -1122,19 +1637,38 @@ func readBoard(path string) (Board, error) {
 	if err := json.Unmarshal([]byte(text[start:start+end]), &board); err != nil {
 		return Board{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if board.Version != 1 || !validBoardName(board.Name) {
+	legacy := board.Version == 1
+	if (!legacy && board.Version != 2) || !validBoardName(board.Name) {
 		return Board{}, fmt.Errorf("unsupported or invalid board data in %s", path)
 	}
+	if board.DisplayName == "" {
+		board.DisplayName = displayName(board.Name)
+	}
+	if legacy {
+		board.Pinned = true
+	}
+	board.Version = 2
 	if board.Cards == nil {
 		board.Cards = []Card{}
+	}
+	for i := range board.Cards {
+		if board.Cards[i].Priority == "" {
+			board.Cards[i].Priority = P2
+		}
+	}
+	if err := validateBoardMetadata(board); err != nil {
+		return Board{}, fmt.Errorf("invalid board metadata in %s: %w", path, err)
 	}
 	return board, nil
 }
 
 func renderBoard(board Board, doneOnly bool, updated time.Time) []byte {
-	board.Version = 1
+	board.Version = 2
 	payload, _ := json.MarshalIndent(board, "", "  ")
-	title := displayName(board.Name)
+	title := board.DisplayName
+	if title == "" {
+		title = displayName(board.Name)
+	}
 	kind := "board"
 	heading := title + " Kanban"
 	if doneOnly {
@@ -1147,6 +1681,9 @@ func renderBoard(board Board, doneOnly bool, updated time.Time) []byte {
 		b.WriteString("> Completed cards are removed from the active board and preserved here.\n\n")
 	} else {
 		b.WriteString("> Managed by Netexplore Kanban. The structured data and readable board live together in this note.\n\n")
+	}
+	if board.Description != "" {
+		fmt.Fprintf(&b, "> %s\n\n", strings.ReplaceAll(board.Description, "\n", "\n> "))
 	}
 	b.WriteString("## Kanban data\n\n" + dataStart + string(payload) + dataEnd + "\n\n")
 	statuses := ActiveStatuses
@@ -1177,6 +1714,7 @@ func renderBoard(board Board, doneOnly bool, updated time.Time) []byte {
 			if card.Milestone != "" {
 				fmt.Fprintf(&b, "- **Milestone:** %s\n", card.Milestone)
 			}
+			fmt.Fprintf(&b, "- **Priority:** %s\n", strings.ToUpper(string(card.Priority)))
 			if len(card.Labels) > 0 {
 				b.WriteString("- **Labels:**")
 				for _, label := range card.Labels {
@@ -1255,11 +1793,113 @@ func syncDir(path string) error {
 	return dir.Sync()
 }
 
+func boardFromInput(input BoardInput) (Board, error) {
+	name := strings.TrimSpace(input.Name)
+	if name == "focus" {
+		return Board{}, errors.New("board name is reserved")
+	}
+	pinned := true
+	if input.Pinned != nil {
+		pinned = *input.Pinned
+	}
+	value := Board{
+		Version: 2, Name: name, DisplayName: strings.TrimSpace(input.DisplayName),
+		Description: strings.TrimSpace(input.Description), Icon: strings.TrimSpace(input.Icon),
+		Color: strings.TrimSpace(input.Color), SortOrder: input.SortOrder, Pinned: pinned,
+		Cards: []Card{},
+	}
+	if value.DisplayName == "" {
+		value.DisplayName = displayName(name)
+	}
+	if err := validateBoardMetadata(value); err != nil {
+		return Board{}, err
+	}
+	return value, nil
+}
+
+func applyBoardSettingsPatch(value *Board, patch BoardSettingsPatch) error {
+	if patch.DisplayName != nil {
+		value.DisplayName = strings.TrimSpace(*patch.DisplayName)
+	}
+	if patch.Description != nil {
+		value.Description = strings.TrimSpace(*patch.Description)
+	}
+	if patch.Icon != nil {
+		value.Icon = strings.TrimSpace(*patch.Icon)
+	}
+	if patch.Color != nil {
+		value.Color = strings.TrimSpace(*patch.Color)
+	}
+	if patch.SortOrder != nil {
+		value.SortOrder = *patch.SortOrder
+	}
+	if patch.Pinned != nil {
+		value.Pinned = *patch.Pinned
+	}
+	if patch.Archived != nil {
+		value.Archived = *patch.Archived
+	}
+	if patch.FocusCardID != nil {
+		value.FocusCardID = strings.TrimSpace(*patch.FocusCardID)
+	}
+	if patch.DispatchEnabled != nil {
+		value.DispatchEnabled = *patch.DispatchEnabled
+	}
+	if value.Archived {
+		value.DispatchEnabled = false
+		value.FocusCardID = ""
+	}
+	value.Version = 2
+	return validateBoardMetadata(*value)
+}
+
+func validateBoardMetadata(value Board) error {
+	if !validBoardName(value.Name) {
+		return errors.New("invalid board name")
+	}
+	if value.DisplayName == "" || len(value.DisplayName) > 80 || strings.ContainsAny(value.DisplayName, "\r\n") {
+		return errors.New("display name must be 1-80 characters on one line")
+	}
+	if len(value.Description) > 500 {
+		return errors.New("board description exceeds 500 characters")
+	}
+	if len(value.Icon) > 32 || strings.ContainsAny(value.Icon, "\r\n") {
+		return errors.New("board icon must be at most 32 characters on one line")
+	}
+	if value.Color != "" && !boardColorPattern.MatchString(value.Color) {
+		return errors.New("board color must be a six-digit hex color")
+	}
+	if value.SortOrder < -10000 || value.SortOrder > 10000 {
+		return errors.New("board sort order must be between -10000 and 10000")
+	}
+	if value.FocusCardID != "" && !validObjectID(value.FocusCardID) {
+		return errors.New("invalid focus card id")
+	}
+	return nil
+}
+
+func copyBoardMetadata(destination *Board, source Board) {
+	destination.Version = 2
+	destination.Name = source.Name
+	destination.DisplayName = source.DisplayName
+	destination.Description = source.Description
+	destination.Icon = source.Icon
+	destination.Color = source.Color
+	destination.SortOrder = source.SortOrder
+	destination.Pinned = source.Pinned
+	destination.Archived = source.Archived
+	destination.FocusCardID = source.FocusCardID
+	destination.DispatchEnabled = source.DispatchEnabled
+}
+
 func validateInput(input CardInput) error {
 	if input.Status == "" {
 		input.Status = Triage
 	}
-	return validateCard(Card{Title: strings.TrimSpace(input.Title), Description: input.Description, DueDate: strings.TrimSpace(input.DueDate), Milestone: strings.ToLower(strings.TrimSpace(input.Milestone)), Status: input.Status, Assignee: input.Assignee, Agent: input.Agent, Blocked: input.Blocked, Labels: input.Labels})
+	if input.Priority == "" {
+		input.Priority = P2
+	}
+	return validateCard(Card{Title: strings.TrimSpace(input.Title), Description: input.Description, DueDate: strings.TrimSpace(input.DueDate), Milestone: strings.ToLower(strings.TrimSpace(input.Milestone)), Priority: input.Priority, Status: input.Status, Assignee: input.Assignee, Agent: input.Agent, Blocked: input.Blocked, Labels: input.Labels})
 }
 func validateCard(card Card) error {
 	if card.Title == "" || len(card.Title) > 200 || strings.ContainsAny(card.Title, "\r\n") {
@@ -1276,6 +1916,9 @@ func validateCard(card Card) error {
 	}
 	if len(card.Milestone) > 32 || strings.ContainsAny(card.Milestone, "\r\n`") {
 		return errors.New("milestone must be at most 32 safe characters")
+	}
+	if !ValidPriority(card.Priority) {
+		return errors.New("invalid card priority")
 	}
 	if !ValidStatus(card.Status) {
 		return errors.New("invalid card status")
