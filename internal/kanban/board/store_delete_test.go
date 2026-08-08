@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -76,5 +77,21 @@ func TestCreateBoardRejectsReservedFocusRouteName(t *testing.T) {
 	store := deleteTestStore(t)
 	if _, err := store.CreateBoard("focus"); err == nil {
 		t.Fatal("CreateBoard accepted reserved focus route name")
+	}
+}
+
+func TestRenderBoardHasNoTrailingWhitespaceAndOneFinalNewline(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	value := Board{Version: 2, Name: "example", DisplayName: "Example", Description: "Board line  ", Cards: []Card{{
+		ID: "card-1", Title: "Card", Description: "first  \nsecond 	", Priority: P2, Status: Done, UpdatedAt: now,
+	}}}
+	rendered := string(renderBoard(value, true, now))
+	for index, line := range strings.Split(strings.TrimSuffix(rendered, "\n"), "\n") {
+		if strings.HasSuffix(line, " ") || strings.HasSuffix(line, "	") {
+			t.Fatalf("line %d has trailing whitespace: %q", index+1, line)
+		}
+	}
+	if !strings.HasSuffix(rendered, "\n") || strings.HasSuffix(rendered, "\n\n") {
+		t.Fatal("rendered board must end in exactly one newline")
 	}
 }

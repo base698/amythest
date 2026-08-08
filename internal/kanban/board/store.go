@@ -1682,8 +1682,8 @@ func renderBoard(board Board, doneOnly bool, updated time.Time) []byte {
 	} else {
 		b.WriteString("> Managed by Netexplore Kanban. The structured data and readable board live together in this note.\n\n")
 	}
-	if board.Description != "" {
-		fmt.Fprintf(&b, "> %s\n\n", strings.ReplaceAll(board.Description, "\n", "\n> "))
+	if description := cleanMarkdownText(board.Description); description != "" {
+		fmt.Fprintf(&b, "> %s\n\n", strings.ReplaceAll(description, "\n", "\n> "))
 	}
 	b.WriteString("## Kanban data\n\n" + dataStart + string(payload) + dataEnd + "\n\n")
 	statuses := ActiveStatuses
@@ -1698,7 +1698,7 @@ func renderBoard(board Board, doneOnly bool, updated time.Time) []byte {
 				continue
 			}
 			found = true
-			fmt.Fprintf(&b, "### %s ^card-%s\n\n- **ID:** `%s`\n", card.Title, card.ID, card.ID)
+			fmt.Fprintf(&b, "### %s ^card-%s\n\n- **ID:** `%s`\n", strings.TrimSpace(card.Title), card.ID, card.ID)
 			if card.Assignee != "" {
 				fmt.Fprintf(&b, "- **Assignee:** %s\n", card.Assignee)
 			}
@@ -1726,13 +1726,13 @@ func renderBoard(board Board, doneOnly bool, updated time.Time) []byte {
 			if card.DoneAt != nil {
 				fmt.Fprintf(&b, "- **Done:** %s\n", card.DoneAt.Format(time.RFC3339))
 			}
-			if card.Description != "" {
-				fmt.Fprintf(&b, "\n%s\n", card.Description)
+			if description := cleanMarkdownText(card.Description); description != "" {
+				fmt.Fprintf(&b, "\n%s\n", description)
 			}
 			if len(card.Comments) > 0 {
 				b.WriteString("\n#### Comments\n\n")
 				for _, comment := range card.Comments {
-					fmt.Fprintf(&b, "- **%s — %s:** %s\n", comment.CreatedAt.Format("2006-01-02 15:04Z"), comment.Author, strings.ReplaceAll(comment.Body, "\n", " "))
+					fmt.Fprintf(&b, "- **%s — %s:** %s\n", comment.CreatedAt.Format("2006-01-02 15:04Z"), comment.Author, cleanMarkdownText(strings.ReplaceAll(comment.Body, "\n", " ")))
 				}
 			}
 			b.WriteString("\n")
@@ -1741,7 +1741,15 @@ func renderBoard(board Board, doneOnly bool, updated time.Time) []byte {
 			b.WriteString("_No cards._\n\n")
 		}
 	}
-	return []byte(b.String())
+	return []byte(strings.TrimRight(b.String(), " 	\n") + "\n")
+}
+
+func cleanMarkdownText(value string) string {
+	lines := strings.Split(strings.TrimSpace(value), "\n")
+	for index := range lines {
+		lines[index] = strings.TrimRight(lines[index], " 	")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func atomicWrite(path string, data []byte) error {
