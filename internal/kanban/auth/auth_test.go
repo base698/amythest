@@ -6,14 +6,14 @@ import (
 )
 
 func TestManagerAuthenticatesAndRejectsTamperedOrExpiredSessions(t *testing.T) {
-	m, err := NewManager("justin", "correct horse", []byte("01234567890123456789012345678901"), time.Hour)
+	m, err := NewManager("operator", "correct horse", []byte("01234567890123456789012345678901"), time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !m.Authenticate("justin", "correct horse") {
+	if !m.Authenticate("operator", "correct horse") {
 		t.Fatal("valid credentials rejected")
 	}
-	if m.Authenticate("justin", "wrong") {
+	if m.Authenticate("operator", "wrong") {
 		t.Fatal("invalid password accepted")
 	}
 
@@ -26,7 +26,7 @@ func TestManagerAuthenticatesAndRejectsTamperedOrExpiredSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.User != "justin" || got.CSRF != session.CSRF {
+	if got.User != "operator" || got.CSRF != session.CSRF {
 		t.Fatalf("session = %#v", got)
 	}
 
@@ -42,10 +42,10 @@ func TestManagerRequiresStrongConfiguration(t *testing.T) {
 	if _, err := NewManager("", "password", []byte("01234567890123456789012345678901"), time.Hour); err == nil {
 		t.Fatal("empty username accepted")
 	}
-	if _, err := NewManager("justin", "short", []byte("01234567890123456789012345678901"), time.Hour); err == nil {
+	if _, err := NewManager("operator", "short", []byte("01234567890123456789012345678901"), time.Hour); err == nil {
 		t.Fatal("short password accepted")
 	}
-	if _, err := NewManager("justin", "long enough password", []byte("short"), time.Hour); err == nil {
+	if _, err := NewManager("operator", "long enough password", []byte("short"), time.Hour); err == nil {
 		t.Fatal("short secret accepted")
 	}
 }

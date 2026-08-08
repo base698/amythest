@@ -26,9 +26,9 @@ const (
 )
 
 type Config struct {
-	Store *board.Store
-	Auth   *auth.Manager
-	Assets fs.FS
+	Store        *board.Store
+	Auth         *auth.Manager
+	Assets       fs.FS
 	Now          func() time.Time
 	CookieSecure bool
 }
@@ -168,14 +168,12 @@ func (s *server) boards(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "invalid CSRF token")
 			return
 		}
-		var input struct {
-			Name string `json:"name"`
-		}
-		if err := decodeJSON(w, r, &input, 1024); err != nil {
+		var input board.BoardInput
+		if err := decodeJSON(w, r, &input, 2048); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		created, err := s.config.Store.CreateBoard(input.Name)
+		created, err := s.config.Store.CreateBoardWithInput(input)
 		if errors.Is(err, board.ErrBoardExists) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
@@ -219,6 +217,14 @@ func (s *server) boardRoutes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "invalid CSRF token")
 		return
 	}
+	if len(parts) == 1 && r.Method == http.MethodDelete {
+		if err := s.config.Store.DeleteBoard(boardName); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if len(parts) == 2 && parts[1] == "archive" && r.Method == http.MethodGet {
 		limit := 100
 		if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -253,15 +259,34 @@ func (s *server) boardRoutes(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, card)
 		return
 	}
-	if len(parts) == 2 && parts[1] == "settings" && r.Method == http.MethodPut {
+	if len(parts) == 4 && parts[1] == "archive" && parts[3] == "board" && r.Method == http.MethodPost {
 		var input struct {
-			DispatchEnabled bool `json:"dispatchEnabled"`
+			DestinationBoard string `json:"destinationBoard"`
+			Confirm          bool   `json:"confirm"`
 		}
 		if err := decodeJSON(w, r, &input, 1024); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		value, err := s.config.Store.UpdateBoardSettings(boardName, input.DispatchEnabled)
+		if !input.Confirm {
+			writeError(w, http.StatusBadRequest, "archived board move requires explicit confirmation")
+			return
+		}
+		card, err := s.config.Store.MoveArchivedCardToBoard(boardName, input.DestinationBoard, parts[2], session.User)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, card)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "settings" && (r.Method == http.MethodPut || r.Method == http.MethodPatch) {
+		var input board.BoardSettingsPatch
+		if err := decodeJSON(w, r, &input, 2048); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		value, err := s.config.Store.PatchBoardSettings(boardName, input)
 		if err != nil {
 			writeStoreError(w, err)
 			return
@@ -571,6 +596,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
+
 // rewriteIndexBase repoints the SPA's absolute /kanban asset URLs at the
 // public mount when a reverse proxy serves the app under a deeper prefix
 // (e.g. /notes/kanban). The proxy declares the prefix via X-Forwarded-Prefix;

@@ -29,8 +29,8 @@ contents, and backlinks.*
 comments, a blocked toggle, and a prominent New card button — dark
 theme](docs/kanban-ui.png)
 
-*Kanban: markdown-backed boards with card search, creation dates, labels, comments, due dates, blocked
-flags, and per-card status moves.*
+*Kanban: markdown-backed boards with metadata, P0-P3 priority, one explicit focus card per board,
+card search, labels, comments, due dates, blocked flags, and safe cross-board moves.*
 
 ## What's inside
 
@@ -55,7 +55,10 @@ flags, and per-card status moves.*
 - **Kanban built in.** Boards are markdown files inside the vault — human
   readable in Obsidian, canonical on disk — managed by a locked, journaled,
   crash-safe store with a stable JSON API and an embedded React board UI at
-  `/kanban`.
+  `/kanban`. Create and organize boards in the UI, pin them in a chosen order,
+  archive dormant boards without deleting their history, delete only boards with
+  no active or archived cards, and use the cross-board Focus view at
+  `/kanban/focus` to see the most important active work together.
 - **Tasks**: Obsidian Tasks emoji syntax (📅 ⏳ 🔁 ⏫ ✅) indexed vault-wide;
   ```` ```tasks ```` blocks in notes render live results (filters, relative
   dates, sort/group/limit); `/tasks` dashboard; file-first `/tasks/triage`

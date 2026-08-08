@@ -9,7 +9,7 @@ import (
 func TestCardTitleFromTaskFitsTheBoardLimit(t *testing.T) {
 	// The wording that failed with "title must be 1-200 characters": 205
 	// characters, and the "Ü" costs two bytes so it overruns further.
-	long := "Justin: before snapshot retirement, decide whether to restart the old Bible tracker, " +
+	long := "Operator: before snapshot retirement, decide whether to restart the old Bible tracker, " +
 		"preserve the Stanford cybersecurity-program link, or carry forward the Ryan-family/KÜHL " +
 		"reminders from Unsorted TODOs.md."
 	if len(long) <= cardTitleLimit {
@@ -28,7 +28,7 @@ func TestCardTitleFromTaskFitsTheBoardLimit(t *testing.T) {
 	if !strings.HasSuffix(title, "…") {
 		t.Fatalf("truncated title should signal it was cut: %q", title)
 	}
-	if !strings.HasPrefix(title, "Justin: before snapshot retirement") {
+	if !strings.HasPrefix(title, "Operator: before snapshot retirement") {
 		t.Fatalf("title lost its beginning: %q", title)
 	}
 	if strings.HasSuffix(strings.TrimSuffix(title, "…"), " ") {

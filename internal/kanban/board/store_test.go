@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ func TestCreateBoardCreatesNoteBackedBoardAndRejectsDuplicateOrInvalidNames(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Name != "new-project" || created.Version != 1 || created.DispatchEnabled || len(created.Cards) != 0 {
+	if created.Name != "new-project" || created.Version != 2 || !created.Pinned || created.DispatchEnabled || len(created.Cards) != 0 {
 		t.Fatalf("created board = %#v", created)
 	}
 	for _, name := range []string{"board.md", "done.md"} {
@@ -314,7 +315,7 @@ func TestStoreCreatesReadableBoardAndArchivesDoneCard(t *testing.T) {
 		Title:       "Deploy Proof production with login",
 		Description: "Deploy the private production service with authentication.",
 		Status:      Ready,
-		Assignee:    "Justin",
+		Assignee:    "Operator",
 		Labels:      []string{"proof", "deployment", "1.0"},
 	})
 	if err != nil {
@@ -334,7 +335,7 @@ func TestStoreCreatesReadableBoardAndArchivesDoneCard(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(boardMD)
-	for _, want := range []string{"# Proof Kanban", "## Ready", "Deploy Proof production with login", "`proof`", "**Assignee:** Justin"} {
+	for _, want := range []string{"# Proof Kanban", "## Ready", "Deploy Proof production with login", "`proof`", "**Assignee:** Operator"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("board.md missing %q", want)
 		}
@@ -493,12 +494,12 @@ func TestMoveCardToBoardPreservesCardDataAttachmentsAndRecordsAudit(t *testing.T
 	}
 	card, err := store.CreateCard("source", CardInput{
 		Title: "Keep everything", Description: "Full description", Status: Ready,
-		Assignee: "Justin", Labels: []string{"important", "move"},
+		Assignee: "Operator", Labels: []string{"important", "move"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AddComment("source", card.ID, "Justin", "Preserve this comment"); err != nil {
+	if _, err := store.AddComment("source", card.ID, "Operator", "Preserve this comment"); err != nil {
 		t.Fatal(err)
 	}
 	payload := []byte("attachment contents")
@@ -513,7 +514,7 @@ func TestMoveCardToBoardPreservesCardDataAttachmentsAndRecordsAudit(t *testing.T
 	original := before.Cards[0]
 	current = current.Add(time.Hour)
 
-	moved, err := store.MoveCardToBoard("source", "destination", card.ID, "Justin")
+	moved, err := store.MoveCardToBoard("source", "destination", card.ID, "Operator")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -525,7 +526,7 @@ func TestMoveCardToBoardPreservesCardDataAttachmentsAndRecordsAudit(t *testing.T
 	if len(moved.Labels) != 2 || len(moved.Comments) != 1 || len(moved.Attachments) != 1 || moved.Attachments[0].ID != attachment.ID {
 		t.Fatalf("moved card lost related data: %#v", moved)
 	}
-	if len(moved.Audit) != 1 || moved.Audit[0].Action != "moved_board" || moved.Audit[0].Actor != "Justin" ||
+	if len(moved.Audit) != 1 || moved.Audit[0].Action != "moved_board" || moved.Audit[0].Actor != "Operator" ||
 		moved.Audit[0].FromBoard != "source" || moved.Audit[0].ToBoard != "destination" {
 		t.Fatalf("move audit = %#v", moved.Audit)
 	}
@@ -579,7 +580,7 @@ func TestMoveCardToBoardRollsBackBothBoardsAndAttachmentsWhenSourceWriteFails(t 
 		}
 		return atomicWrite(path, data)
 	}
-	if _, err := store.MoveCardToBoard("source", "destination", card.ID, "Justin"); err == nil {
+	if _, err := store.MoveCardToBoard("source", "destination", card.ID, "Operator"); err == nil {
 		t.Fatal("move unexpectedly succeeded")
 	}
 	store.writeFile = atomicWrite
@@ -754,7 +755,7 @@ func TestRestoreCardMovesDoneCardBackToActiveBoard(t *testing.T) {
 	if err := store.EnsureBoard("operations"); err != nil {
 		t.Fatal(err)
 	}
-	card, err := store.CreateCard("operations", CardInput{Title: "Update Costco address", Status: Triage, Assignee: "Justin"})
+	card, err := store.CreateCard("operations", CardInput{Title: "Update Costco address", Status: Triage, Assignee: "Operator"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -765,7 +766,7 @@ func TestRestoreCardMovesDoneCardBackToActiveBoard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored.Status != Triage || restored.DoneAt != nil || restored.Assignee != "Justin" {
+	if restored.Status != Triage || restored.DoneAt != nil || restored.Assignee != "Operator" {
 		t.Fatalf("restored card = %#v", restored)
 	}
 	active, err := store.Load("operations")
@@ -1067,5 +1068,504 @@ func TestBlockedFlagPersistsAndClearsThroughTheStore(t *testing.T) {
 	}
 	if strings.Count(string(raw), "**Blocked:** yes") != 1 {
 		t.Fatalf("blocked flag rendered %d times", strings.Count(string(raw), "**Blocked:** yes"))
+	}
+}
+
+func TestLegacyBoardLoadsWithMetadataAndPriorityDefaults(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "research")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `# Research Kanban
+
+## Kanban data
+
+<!-- AMYTHEST_KANBAN_DATA_START -->
+` + "```json\n" + `{
+  "version": 1,
+  "name": "research",
+  "dispatchEnabled": false,
+  "cards": [{
+    "id": "k_legacy",
+    "title": "Legacy card",
+    "description": "",
+    "status": "ready",
+    "labels": [],
+    "comments": [],
+    "attachments": [],
+    "createdAt": "2026-08-01T12:00:00Z",
+    "updatedAt": "2026-08-01T12:00:00Z"
+  }]
+}` + "\n```\n" + `<!-- AMYTHEST_KANBAN_DATA_END -->
+`
+	for _, name := range []string{"board.md", "done.md"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(legacy), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loaded, err := NewStore(root, fixedClock).Load("research")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.DisplayName != "Research" || !loaded.Pinned || loaded.Archived {
+		t.Fatalf("legacy metadata defaults = %#v", loaded)
+	}
+	if got := loaded.Cards[0].Priority; got != P2 {
+		t.Fatalf("legacy priority = %q, want %q", got, P2)
+	}
+}
+
+func TestBoardMetadataCanBeCreatedAndPatchedWithoutErasingOmittedFields(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	pinned := true
+	created, err := store.CreateBoardWithInput(BoardInput{
+		Name: "research", DisplayName: "Research Lab", Description: "Experiments and evidence",
+		Icon: "flask", Color: "#336699", SortOrder: 30, Pinned: &pinned,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Version != 2 || created.DisplayName != "Research Lab" || !created.Pinned || created.DispatchEnabled {
+		t.Fatalf("created board = %#v", created)
+	}
+	nextName := "Research"
+	archived := true
+	dispatchOn := true
+	updated, err := store.PatchBoardSettings("research", BoardSettingsPatch{DisplayName: &nextName, Archived: &archived, DispatchEnabled: &dispatchOn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.DisplayName != "Research" || updated.Description != created.Description || updated.Icon != created.Icon || updated.Color != created.Color || updated.SortOrder != 30 || !updated.Pinned || !updated.Archived || updated.DispatchEnabled || updated.FocusCardID != "" {
+		t.Fatalf("patched board erased metadata: %#v", updated)
+	}
+	raw, err := os.ReadFile(filepath.Join(store.root, "research", "board.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "# Research Kanban") || !strings.Contains(string(raw), "> Experiments and evidence") {
+		t.Fatalf("board metadata is not human readable:\n%s", raw)
+	}
+}
+
+func TestCardPriorityDefaultsValidatesPersistsAndRenders(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root, fixedClock)
+	if _, err := store.CreateBoard("research"); err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.CreateCard("research", CardInput{Title: "Critical evidence", Status: Ready, Priority: P0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Priority != P0 {
+		t.Fatalf("priority = %q", created.Priority)
+	}
+	defaulted, err := store.CreateCard("research", CardInput{Title: "Normal evidence", Status: Ready})
+	if err != nil || defaulted.Priority != P2 {
+		t.Fatalf("default card = %#v err=%v", defaulted, err)
+	}
+	if _, err := store.CreateCard("research", CardInput{Title: "Bad", Status: Ready, Priority: Priority("urgent")}); err == nil {
+		t.Fatal("invalid priority was accepted")
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "research", "board.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "- **Priority:** P0") || !strings.Contains(string(raw), `"priority": "p0"`) {
+		t.Fatalf("priority missing from board:\n%s", raw)
+	}
+}
+
+func TestBoardFocusRequiresActiveCardAndClearsOnArchiveDeleteAndCrossBoardMove(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	for _, name := range []string{"alpha", "beta"} {
+		if _, err := store.CreateBoard(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	card, err := store.CreateCard("alpha", CardInput{Title: "Focus", Status: Ready})
+	if err != nil {
+		t.Fatal(err)
+	}
+	focus := card.ID
+	if _, err := store.PatchBoardSettings("alpha", BoardSettingsPatch{FocusCardID: &focus}); err != nil {
+		t.Fatal(err)
+	}
+	missing := "k_missing"
+	if _, err := store.PatchBoardSettings("alpha", BoardSettingsPatch{FocusCardID: &missing}); err == nil {
+		t.Fatal("missing focus card was accepted")
+	}
+	if _, err := store.MoveCard("alpha", card.ID, Done, ""); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _ := store.Load("alpha")
+	if loaded.FocusCardID != "" {
+		t.Fatalf("focus survived archive: %q", loaded.FocusCardID)
+	}
+	restored, err := store.RestoreCard("alpha", card.ID, Ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	focus = restored.ID
+	_, _ = store.PatchBoardSettings("alpha", BoardSettingsPatch{FocusCardID: &focus})
+	if _, err := store.MoveCardToBoard("alpha", "beta", restored.ID, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _ = store.Load("alpha")
+	if loaded.FocusCardID != "" {
+		t.Fatalf("focus survived board move: %q", loaded.FocusCardID)
+	}
+	if _, err := store.PatchBoardSettings("beta", BoardSettingsPatch{FocusCardID: &focus}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DeleteCard("beta", restored.ID); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _ = store.Load("beta")
+	if loaded.FocusCardID != "" {
+		t.Fatalf("focus survived delete: %q", loaded.FocusCardID)
+	}
+}
+
+func TestMoveArchivedCardToBoardPreservesCardAndAttachmentState(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root, fixedClock)
+	for _, name := range []string{"alpha", "beta"} {
+		if _, err := store.CreateBoard(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	card, err := store.CreateCard("alpha", CardInput{
+		Title: "Completed evidence", Description: "Keep every field", DueDate: "2026-08-08",
+		Milestone: "release-1", Priority: P1, Status: Ready, Assignee: "Reviewer", Agent: "worker",
+		Blocked: true, Labels: []string{"research"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err = store.AddComment("alpha", card.ID, "Reviewer", "Preserve this comment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddAttachment("alpha", card.ID, "evidence.txt", "text/plain", bytes.NewReader([]byte("proof")), 5); err != nil {
+		t.Fatal(err)
+	}
+	card, err = store.MoveCard("alpha", card.ID, Done, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalUpdated, originalDone := card.UpdatedAt, *card.DoneAt
+
+	moved, err := store.MoveArchivedCardToBoard("alpha", "beta", card.ID, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.ID != card.ID || moved.Priority != P1 || moved.Status != Done || moved.UpdatedAt != originalUpdated || moved.DoneAt == nil || *moved.DoneAt != originalDone || len(moved.Comments) != 1 || len(moved.Attachments) != 1 {
+		t.Fatalf("moved archived card lost state: %#v", moved)
+	}
+	if len(moved.Audit) != 1 || moved.Audit[0].Action != "moved_archived_board" || moved.Audit[0].FromBoard != "alpha" || moved.Audit[0].ToBoard != "beta" {
+		t.Fatalf("archive move audit = %#v", moved.Audit)
+	}
+	from, err := store.ListArchived("alpha", "", 100)
+	if err != nil || len(from) != 0 {
+		t.Fatalf("source archive = %#v err=%v", from, err)
+	}
+	to, err := store.ListArchived("beta", "", 100)
+	if err != nil || len(to) != 1 || to[0].ID != card.ID {
+		t.Fatalf("destination archive = %#v err=%v", to, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "beta", "attachments", card.ID)); err != nil {
+		t.Fatalf("destination attachment directory missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "alpha", "attachments", card.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source attachment directory remains: %v", err)
+	}
+}
+
+func TestArchivedBoardRejectsNewAndIncomingWork(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	for _, name := range []string{"active", "archived"} {
+		if _, err := store.CreateBoard(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	archived := true
+	if _, err := store.PatchBoardSettings("archived", BoardSettingsPatch{Archived: &archived}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateCard("archived", CardInput{Title: "No new work", Status: Ready}); err == nil {
+		t.Fatal("created a card on an archived board")
+	}
+	card, err := store.CreateCard("active", CardInput{Title: "Do not move", Status: Ready})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MoveCardToBoard("active", "archived", card.ID, "tester"); err == nil {
+		t.Fatal("moved a card to an archived board")
+	}
+}
+
+func TestCrossBoardActiveMoveRecoversFromEveryCrashCheckpoint(t *testing.T) {
+	for _, checkpoint := range []string{"journal_written", "attachments_moved", "destination_written", "source_written"} {
+		t.Run(checkpoint, func(t *testing.T) {
+			root := t.TempDir()
+			store := NewStore(root, fixedClock)
+			for _, name := range []string{"z-source", "a-destination"} {
+				if _, err := store.CreateBoard(name); err != nil {
+					t.Fatal(err)
+				}
+			}
+			card, err := store.CreateCard("z-source", CardInput{Title: "Crash-safe", Status: Ready})
+			if err != nil {
+				t.Fatal(err)
+			}
+			attachment, err := store.AddAttachment("z-source", card.ID, "identity.txt", "text/plain", bytes.NewReader([]byte("same bytes")), 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store.moveCheckpoint = func(got string) {
+				if got == checkpoint {
+					panic("simulated process crash")
+				}
+			}
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Fatal("move did not reach injected crash")
+					}
+				}()
+				_, _ = store.MoveCardToBoard("z-source", "a-destination", card.ID, "tester")
+			}()
+
+			journals, err := filepath.Glob(filepath.Join(root, ".cross-board-move-*.wal"))
+			if err != nil || len(journals) != 1 {
+				t.Fatalf("durable move WALs = %v err=%v", journals, err)
+			}
+			recovered := NewStore(root, fixedClock)
+			// Loading either participant must recover under the same sorted pair
+			// locks, including when lexical order opposes move direction.
+			if _, err := recovered.Load("z-source"); err != nil {
+				t.Fatal(err)
+			}
+			source, err := recovered.Load("z-source")
+			if err != nil {
+				t.Fatal(err)
+			}
+			destination, err := recovered.Load("a-destination")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cardIndex(source.Cards, card.ID) >= 0 || cardIndex(destination.Cards, card.ID) < 0 {
+				t.Fatalf("recovered source=%#v destination=%#v", source.Cards, destination.Cards)
+			}
+			moved := destination.Cards[cardIndex(destination.Cards, card.ID)]
+			if moved.ID != card.ID || len(moved.Attachments) != 1 || moved.Attachments[0].ID != attachment.ID || len(moved.Audit) != 1 {
+				t.Fatalf("identity was not preserved: %#v", moved)
+			}
+			file, found, err := recovered.OpenAttachment("a-destination", card.ID, attachment.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload, readErr := io.ReadAll(file)
+			_ = file.Close()
+			if readErr != nil || found.ID != attachment.ID || string(payload) != "same bytes" {
+				t.Fatalf("attachment=%#v payload=%q err=%v", found, payload, readErr)
+			}
+			if _, err := recovered.Load("a-destination"); err != nil {
+				t.Fatalf("idempotent second recovery failed: %v", err)
+			}
+			journals, _ = filepath.Glob(filepath.Join(root, ".cross-board-move-*.wal"))
+			if len(journals) != 0 {
+				t.Fatalf("move WAL was not safely cleaned up: %v", journals)
+			}
+		})
+	}
+}
+
+func TestCrossBoardArchivedMoveRecoversMetadataAndAttachmentAfterCrash(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root, fixedClock)
+	for _, name := range []string{"alpha", "beta"} {
+		if _, err := store.CreateBoard(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	card, err := store.CreateCard("alpha", CardInput{Title: "Archived crash", Status: Ready})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := store.AddAttachment("alpha", card.ID, "proof.txt", "text/plain", bytes.NewReader([]byte("proof")), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MoveCard("alpha", card.ID, Done, ""); err != nil {
+		t.Fatal(err)
+	}
+	setDivergentDoneMetadata(t, store, "alpha", "Stale alpha")
+	setDivergentDoneMetadata(t, store, "beta", "Stale beta")
+	store.moveCheckpoint = func(checkpoint string) {
+		if checkpoint == "destination_written" {
+			panic("simulated process crash")
+		}
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("archived move did not reach injected crash")
+			}
+		}()
+		_, _ = store.MoveArchivedCardToBoard("alpha", "beta", card.ID, "tester")
+	}()
+
+	recovered := NewStore(root, fixedClock)
+	cards, err := recovered.ListArchived("beta", "", 100)
+	if err != nil || len(cards) != 1 || cards[0].ID != card.ID || cards[0].Attachments[0].ID != attachment.ID {
+		t.Fatalf("recovered archive=%#v err=%v", cards, err)
+	}
+	assertDoneMetadataMatchesActive(t, recovered, "alpha")
+	assertDoneMetadataMatchesActive(t, recovered, "beta")
+	payload, err := os.ReadFile(filepath.Join(root, "beta", "attachments", card.ID, attachmentDiskName(attachment)))
+	if err != nil || string(payload) != "proof" {
+		t.Fatalf("recovered attachment payload=%q err=%v", payload, err)
+	}
+}
+
+func TestArchivedMovesAndRestoresSynchronizeDoneMetadata(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	for _, name := range []string{"alpha", "beta"} {
+		if _, err := store.CreateBoardWithInput(BoardInput{Name: name, DisplayName: strings.ToUpper(name), Description: "active " + name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	card, err := store.CreateCard("alpha", CardInput{Title: "Metadata", Status: Ready})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MoveCard("alpha", card.ID, Done, ""); err != nil {
+		t.Fatal(err)
+	}
+	setDivergentDoneMetadata(t, store, "alpha", "stale source")
+	setDivergentDoneMetadata(t, store, "beta", "stale destination")
+	if _, err := store.MoveArchivedCardToBoard("alpha", "beta", card.ID, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	assertDoneMetadataMatchesActive(t, store, "alpha")
+	assertDoneMetadataMatchesActive(t, store, "beta")
+
+	setDivergentDoneMetadata(t, store, "beta", "stale restore")
+	if _, err := store.RestoreCard("beta", card.ID, Ready); err != nil {
+		t.Fatal(err)
+	}
+	assertDoneMetadataMatchesActive(t, store, "beta")
+}
+
+func TestArchivedDestinationsRejectArchivedMovesAndRestores(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	for _, name := range []string{"source", "destination"} {
+		if _, err := store.CreateBoard(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	card, err := store.CreateCard("source", CardInput{Title: "Done", Status: Ready})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MoveCard("source", card.ID, Done, ""); err != nil {
+		t.Fatal(err)
+	}
+	archived := true
+	if _, err := store.PatchBoardSettings("destination", BoardSettingsPatch{Archived: &archived}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MoveArchivedCardToBoard("source", "destination", card.ID, "tester"); err == nil {
+		t.Fatal("archived transfer entered archived destination board")
+	}
+	if _, err := store.PatchBoardSettings("source", BoardSettingsPatch{Archived: &archived}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RestoreCard("source", card.ID, Ready); err == nil {
+		t.Fatal("restored work onto archived board")
+	}
+}
+
+func TestCrossBoardMovesRejectDestinationIDCollisionInEitherFile(t *testing.T) {
+	for _, moveKind := range []string{"active", "archive"} {
+		for _, collisionFile := range []string{"active", "archive"} {
+			t.Run(moveKind+"_to_"+collisionFile, func(t *testing.T) {
+				store := NewStore(t.TempDir(), fixedClock)
+				for _, name := range []string{"source", "destination"} {
+					if _, err := store.CreateBoard(name); err != nil {
+						t.Fatal(err)
+					}
+				}
+				card, err := store.CreateCard("source", CardInput{Title: "Original", Status: Ready})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if moveKind == "archive" {
+					if _, err := store.MoveCard("source", card.ID, Done, ""); err != nil {
+						t.Fatal(err)
+					}
+				}
+				path := store.boardPath("destination")
+				doneOnly := false
+				if collisionFile == "archive" {
+					path = store.donePath("destination")
+					doneOnly = true
+				}
+				collision, err := readBoard(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				duplicate := card
+				if doneOnly {
+					duplicate.Status = Done
+					doneAt := fixedClock()
+					duplicate.DoneAt = &doneAt
+				}
+				collision.Cards = append(collision.Cards, duplicate)
+				if err := atomicWrite(path, renderBoard(collision, doneOnly, fixedClock())); err != nil {
+					t.Fatal(err)
+				}
+				if moveKind == "active" {
+					_, err = store.MoveCardToBoard("source", "destination", card.ID, "tester")
+				} else {
+					_, err = store.MoveArchivedCardToBoard("source", "destination", card.ID, "tester")
+				}
+				if !errors.Is(err, ErrCardExists) {
+					t.Fatalf("collision error = %v, want ErrCardExists", err)
+				}
+			})
+		}
+	}
+}
+
+func setDivergentDoneMetadata(t *testing.T, store *Store, name, displayName string) {
+	t.Helper()
+	done, err := readBoard(store.donePath(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done.DisplayName = displayName
+	done.Description = "stale metadata"
+	if err := atomicWrite(store.donePath(name), renderBoard(done, true, fixedClock())); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertDoneMetadataMatchesActive(t *testing.T, store *Store, name string) {
+	t.Helper()
+	active, err := readBoard(store.boardPath(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done, err := readBoard(store.donePath(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done.Cards = active.Cards
+	if !reflect.DeepEqual(done, active) {
+		t.Fatalf("%s done metadata does not match active:\nactive=%#v\ndone=%#v", name, active, done)
 	}
 }

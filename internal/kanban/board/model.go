@@ -3,6 +3,7 @@ package board
 import "time"
 
 type Status string
+type Priority string
 
 const (
 	Triage     Status = "triage"
@@ -11,6 +12,13 @@ const (
 	InProgress Status = "in_progress"
 	Verify     Status = "verify"
 	Done       Status = "done"
+)
+
+const (
+	P0 Priority = "p0"
+	P1 Priority = "p1"
+	P2 Priority = "p2"
+	P3 Priority = "p3"
 )
 
 var ActiveStatuses = []Status{Triage, Backlog, Ready, InProgress, Verify}
@@ -39,13 +47,14 @@ type AuditEntry struct {
 }
 
 type Card struct {
-	ID          string `json:"id"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	DueDate     string `json:"dueDate,omitempty"`
-	Milestone   string `json:"milestone,omitempty"`
-	Status      Status `json:"status"`
-	Assignee    string `json:"assignee,omitempty"`
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	DueDate     string   `json:"dueDate,omitempty"`
+	Milestone   string   `json:"milestone,omitempty"`
+	Priority    Priority `json:"priority"`
+	Status      Status   `json:"status"`
+	Assignee    string   `json:"assignee,omitempty"`
 	// Agent names the dispatch agent (provider + model) that should run this
 	// card, overriding the agent implied by Assignee. Empty means "use the
 	// assignee's agent".
@@ -66,13 +75,52 @@ type Card struct {
 type Board struct {
 	Version         int    `json:"version"`
 	Name            string `json:"name"`
+	DisplayName     string `json:"displayName"`
+	Description     string `json:"description,omitempty"`
+	Icon            string `json:"icon,omitempty"`
+	Color           string `json:"color,omitempty"`
+	SortOrder       int    `json:"sortOrder"`
+	Pinned          bool   `json:"pinned"`
+	Archived        bool   `json:"archived"`
+	FocusCardID     string `json:"focusCardId,omitempty"`
 	DispatchEnabled bool   `json:"dispatchEnabled"`
 	Cards           []Card `json:"cards"`
 }
 
 type BoardSummary struct {
-	Name   string         `json:"name"`
-	Counts map[Status]int `json:"counts"`
+	Name            string         `json:"name"`
+	DisplayName     string         `json:"displayName"`
+	Description     string         `json:"description,omitempty"`
+	Icon            string         `json:"icon,omitempty"`
+	Color           string         `json:"color,omitempty"`
+	SortOrder       int            `json:"sortOrder"`
+	Pinned          bool           `json:"pinned"`
+	Archived        bool           `json:"archived"`
+	FocusCardID     string         `json:"focusCardId,omitempty"`
+	DispatchEnabled bool           `json:"dispatchEnabled"`
+	Counts          map[Status]int `json:"counts"`
+}
+
+type BoardInput struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName"`
+	Description string `json:"description"`
+	Icon        string `json:"icon"`
+	Color       string `json:"color"`
+	SortOrder   int    `json:"sortOrder"`
+	Pinned      *bool  `json:"pinned"`
+}
+
+type BoardSettingsPatch struct {
+	DisplayName     *string `json:"displayName"`
+	Description     *string `json:"description"`
+	Icon            *string `json:"icon"`
+	Color           *string `json:"color"`
+	SortOrder       *int    `json:"sortOrder"`
+	Pinned          *bool   `json:"pinned"`
+	Archived        *bool   `json:"archived"`
+	FocusCardID     *string `json:"focusCardId"`
+	DispatchEnabled *bool   `json:"dispatchEnabled"`
 }
 
 type CardInput struct {
@@ -80,6 +128,7 @@ type CardInput struct {
 	Description string   `json:"description"`
 	DueDate     string   `json:"dueDate"`
 	Milestone   string   `json:"milestone"`
+	Priority    Priority `json:"priority"`
 	Status      Status   `json:"status"`
 	Assignee    string   `json:"assignee"`
 	Agent       string   `json:"agent"`
@@ -92,6 +141,7 @@ type CardPatch struct {
 	Description *string   `json:"description"`
 	DueDate     *string   `json:"dueDate"`
 	Milestone   *string   `json:"milestone"`
+	Priority    *Priority `json:"priority"`
 	Status      *Status   `json:"status"`
 	Assignee    *string   `json:"assignee"`
 	Agent       *string   `json:"agent"`
@@ -102,6 +152,15 @@ type CardPatch struct {
 func ValidStatus(status Status) bool {
 	switch status {
 	case Triage, Backlog, Ready, InProgress, Verify, Done:
+		return true
+	default:
+		return false
+	}
+}
+
+func ValidPriority(priority Priority) bool {
+	switch priority {
+	case P0, P1, P2, P3:
 		return true
 	default:
 		return false

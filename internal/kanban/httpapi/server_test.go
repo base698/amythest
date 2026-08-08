@@ -24,7 +24,7 @@ func testServer(t *testing.T) (*httptest.Server, *board.Store) {
 	if err := store.EnsureBoard("proof"); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := auth.NewManager("justin", "correct horse", []byte("01234567890123456789012345678901"), time.Hour)
+	manager, err := auth.NewManager("operator", "correct horse", []byte("01234567890123456789012345678901"), time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestAPIRequiresLoginAndCSRFThenCreatesCard(t *testing.T) {
 		t.Fatalf("unauthenticated status = %d", resp.StatusCode)
 	}
 
-	loginBody := bytes.NewBufferString(`{"username":"justin","password":"correct horse"}`)
+	loginBody := bytes.NewBufferString(`{"username":"operator","password":"correct horse"}`)
 	resp, err = http.Post(srv.URL+"/api/login", "application/json", loginBody)
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestAPIRequiresLoginAndCSRFThenCreatesCard(t *testing.T) {
 		t.Fatal("secure session cookie missing")
 	}
 
-	payload := bytes.NewBufferString(`{"title":"Deploy Proof production with login","status":"ready","assignee":"Justin","labels":["proof","1.0"]}`)
+	payload := bytes.NewBufferString(`{"title":"Deploy Proof production with login","status":"ready","assignee":"Operator","labels":["proof","1.0"]}`)
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/boards/proof/cards", payload)
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(sessionCookie)
@@ -81,7 +81,7 @@ func TestAPIRequiresLoginAndCSRFThenCreatesCard(t *testing.T) {
 		t.Fatalf("missing CSRF status = %d", resp.StatusCode)
 	}
 
-	payload = bytes.NewBufferString(`{"title":"Deploy project with login","status":"ready","assignee":"operator","dueDate":"2026-08-04","milestone":"1.0","labels":["release"]}`)
+	payload = bytes.NewBufferString(`{"title":"Deploy project with login","status":"ready","priority":"p1","assignee":"operator","dueDate":"2026-08-04","milestone":"1.0","labels":["release"]}`)
 	req, _ = http.NewRequest(http.MethodPost, srv.URL+"/api/boards/proof/cards", payload)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-CSRF-Token", login.CSRF)
@@ -102,6 +102,9 @@ func TestAPIRequiresLoginAndCSRFThenCreatesCard(t *testing.T) {
 	}
 	if created.Milestone != "1.0" {
 		t.Fatalf("created milestone = %q", created.Milestone)
+	}
+	if created.Priority != board.P1 {
+		t.Fatalf("created priority = %q", created.Priority)
 	}
 }
 
@@ -127,7 +130,7 @@ func TestCreateBoardAPIRequiresAuthenticationAndCSRFAndRejectsDuplicateOrInvalid
 	if got := create(nil, "", `{"name":"new-project"}`).StatusCode; got != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated create = %d", got)
 	}
-	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"justin","password":"correct horse"}`))
+	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"operator","password":"correct horse"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +144,7 @@ func TestCreateBoardAPIRequiresAuthenticationAndCSRFAndRejectsDuplicateOrInvalid
 	if got := create(cookie, "", `{"name":"new-project"}`).StatusCode; got != http.StatusForbidden {
 		t.Fatalf("create without CSRF = %d", got)
 	}
-	resp := create(cookie, login.CSRF, `{"name":"new-project"}`)
+	resp := create(cookie, login.CSRF, `{"name":"new-project","displayName":"New Project","description":"Scoped work","icon":"folder","color":"#336699","sortOrder":40,"pinned":true}`)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create = %d", resp.StatusCode)
 	}
@@ -149,7 +152,7 @@ func TestCreateBoardAPIRequiresAuthenticationAndCSRFAndRejectsDuplicateOrInvalid
 	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Name != "new-project" || created.DispatchEnabled {
+	if created.Name != "new-project" || created.DisplayName != "New Project" || created.Description != "Scoped work" || created.Icon != "folder" || created.Color != "#336699" || created.SortOrder != 40 || !created.Pinned || created.DispatchEnabled {
 		t.Fatalf("created board = %#v", created)
 	}
 	if _, err := store.Load("new-project"); err != nil {
@@ -169,7 +172,7 @@ func TestMoveCardAPIRequiresCSRFAndPersistsRequestedPosition(t *testing.T) {
 	first, _ := store.CreateCard("proof", board.CardInput{Title: "First", Status: board.Ready})
 	second, _ := store.CreateCard("proof", board.CardInput{Title: "Second", Status: board.Ready})
 
-	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"justin","password":"correct horse"}`))
+	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"operator","password":"correct horse"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +238,7 @@ func TestMoveCardToBoardAPIRequiresAuthenticationCSRFAndExplicitConfirmation(t *
 	if got := request(nil, "", `{"destinationBoard":"destination","confirm":true}`).StatusCode; got != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated move = %d", got)
 	}
-	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"justin","password":"correct horse"}`))
+	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"operator","password":"correct horse"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +263,7 @@ func TestMoveCardToBoardAPIRequiresAuthenticationCSRFAndExplicitConfirmation(t *
 	if err := json.NewDecoder(resp.Body).Decode(&moved); err != nil {
 		t.Fatal(err)
 	}
-	if moved.ID != card.ID || len(moved.Audit) != 1 || moved.Audit[0].Actor != "justin" {
+	if moved.ID != card.ID || len(moved.Audit) != 1 || moved.Audit[0].Actor != "operator" {
 		t.Fatalf("moved card = %#v", moved)
 	}
 	source, _ := store.Load("proof")
@@ -286,7 +289,7 @@ func TestDeleteCardRequiresAuthenticationAndCSRF(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated delete = %d", resp.StatusCode)
 	}
-	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"justin","password":"correct horse"}`))
+	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"operator","password":"correct horse"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +346,7 @@ func TestArchiveSearchAndRestoreRequireAuthenticationAndCSRF(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated archive search = %d", resp.StatusCode)
 	}
-	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"justin","password":"correct horse"}`))
+	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"operator","password":"correct horse"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +403,7 @@ func TestAttachmentAPIRequiresAuthenticationAndCSRFAndSupportsUploadListDownload
 	if err != nil {
 		t.Fatal(err)
 	}
-	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"justin","password":"correct horse"}`))
+	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"operator","password":"correct horse"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,6 +506,103 @@ func TestAttachmentAPIRequiresAuthenticationAndCSRFAndSupportsUploadListDownload
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete=%v err=%v", resp.StatusCode, err)
+	}
+}
+
+func TestPatchBoardSettingsRequiresCSRFAndPersistsFocus(t *testing.T) {
+	srv, store := testServer(t)
+	defer srv.Close()
+	card, err := store.CreateCard("proof", board.CardInput{Title: "Current focus", Status: board.Ready})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"operator","password":"correct horse"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var login struct {
+		CSRF string `json:"csrf"`
+	}
+	if err := json.NewDecoder(loginResp.Body).Decode(&login); err != nil {
+		t.Fatal(err)
+	}
+	request := func(csrf, body string) *http.Response {
+		req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/boards/proof/settings", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-CSRF-Token", csrf)
+		req.AddCookie(loginResp.Cookies()[0])
+		resp, requestErr := http.DefaultClient.Do(req)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		return resp
+	}
+	body := `{"displayName":"Proof Product","description":"Product work","icon":"check","color":"#228855","sortOrder":60,"pinned":true,"focusCardId":"` + card.ID + `"}`
+	if got := request("", body).StatusCode; got != http.StatusForbidden {
+		t.Fatalf("settings without CSRF = %d", got)
+	}
+	resp := request(login.CSRF, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("settings = %d body=%s", resp.StatusCode, readResponse(t, resp))
+	}
+	var updated board.Board
+	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.DisplayName != "Proof Product" || updated.FocusCardID != card.ID || updated.SortOrder != 60 {
+		t.Fatalf("updated settings = %#v", updated)
+	}
+	if got := request(login.CSRF, `{"focusCardId":"k_missing"}`).StatusCode; got != http.StatusBadRequest {
+		t.Fatalf("invalid focus = %d", got)
+	}
+}
+
+func TestMoveArchivedCardToBoardAPIRequiresConfirmation(t *testing.T) {
+	srv, store := testServer(t)
+	defer srv.Close()
+	if _, err := store.CreateBoard("destination"); err != nil {
+		t.Fatal(err)
+	}
+	card, err := store.CreateCard("proof", board.CardInput{Title: "Archived evidence", Status: board.Ready})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MoveCard("proof", card.ID, board.Done, ""); err != nil {
+		t.Fatal(err)
+	}
+	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"operator","password":"correct horse"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var login struct {
+		CSRF string `json:"csrf"`
+	}
+	if err := json.NewDecoder(loginResp.Body).Decode(&login); err != nil {
+		t.Fatal(err)
+	}
+	request := func(confirm bool) *http.Response {
+		payload := fmt.Sprintf(`{"destinationBoard":"destination","confirm":%t}`, confirm)
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/boards/proof/archive/"+card.ID+"/board", bytes.NewBufferString(payload))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-CSRF-Token", login.CSRF)
+		req.AddCookie(loginResp.Cookies()[0])
+		resp, requestErr := http.DefaultClient.Do(req)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		return resp
+	}
+	if got := request(false).StatusCode; got != http.StatusBadRequest {
+		t.Fatalf("archive move without confirmation = %d", got)
+	}
+	resp := request(true)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("archive move = %d body=%s", resp.StatusCode, readResponse(t, resp))
+	}
+	from, _ := store.ListArchived("proof", "", 100)
+	to, _ := store.ListArchived("destination", "", 100)
+	if len(from) != 0 || len(to) != 1 || to[0].ID != card.ID {
+		t.Fatalf("source=%#v destination=%#v", from, to)
 	}
 }
 

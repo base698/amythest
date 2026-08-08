@@ -7,6 +7,7 @@ package mcp
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -422,14 +423,38 @@ type cardIn struct {
 	Board string `json:"board"`
 	Card  string `json:"card" jsonschema:"card id (k_...)"`
 }
+type createBoardIn struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName,omitempty"`
+	Description string `json:"description,omitempty"`
+	Icon        string `json:"icon,omitempty"`
+	Color       string `json:"color,omitempty"`
+	SortOrder   int    `json:"sortOrder,omitempty"`
+	Pinned      *bool  `json:"pinned,omitempty"`
+}
+type updateBoardSettingsIn struct {
+	Board           string  `json:"board"`
+	DisplayName     *string `json:"displayName,omitempty"`
+	Description     *string `json:"description,omitempty"`
+	Icon            *string `json:"icon,omitempty"`
+	Color           *string `json:"color,omitempty"`
+	SortOrder       *int    `json:"sortOrder,omitempty"`
+	Pinned          *bool   `json:"pinned,omitempty"`
+	Archived        *bool   `json:"archived,omitempty"`
+	FocusCardID     *string `json:"focusCardId,omitempty"`
+	DispatchEnabled *bool   `json:"dispatchEnabled,omitempty"`
+}
 type createCardIn struct {
 	Board       string   `json:"board"`
 	Title       string   `json:"title"`
 	Description string   `json:"description,omitempty"`
 	DueDate     string   `json:"dueDate,omitempty" jsonschema:"optional due date in YYYY-MM-DD format"`
 	Milestone   string   `json:"milestone,omitempty" jsonschema:"optional release milestone, separate from topic labels"`
+	Priority    string   `json:"priority,omitempty" jsonschema:"p0|p1|p2|p3 (default p2)"`
 	Status      string   `json:"status,omitempty" jsonschema:"triage|backlog|ready|in_progress|verify (default triage)"`
 	Assignee    string   `json:"assignee,omitempty"`
+	Agent       string   `json:"agent,omitempty"`
+	Blocked     bool     `json:"blocked,omitempty"`
 	Labels      []string `json:"labels,omitempty" jsonschema:"topic labels only; follow the deployment's documented controlled vocabulary; release numbers belong in milestone"`
 }
 type updateCardIn struct {
@@ -439,8 +464,10 @@ type updateCardIn struct {
 	Description *string   `json:"description,omitempty"`
 	DueDate     *string   `json:"dueDate,omitempty" jsonschema:"due date in YYYY-MM-DD format; empty string clears it"`
 	Milestone   *string   `json:"milestone,omitempty" jsonschema:"release milestone; empty string clears it"`
+	Priority    *string   `json:"priority,omitempty" jsonschema:"p0|p1|p2|p3"`
 	Status      *string   `json:"status,omitempty" jsonschema:"triage|backlog|ready|in_progress|verify|done (done archives)"`
 	Assignee    *string   `json:"assignee,omitempty"`
+	Agent       *string   `json:"agent,omitempty"`
 	Blocked     *bool     `json:"blocked,omitempty"`
 	Labels      *[]string `json:"labels,omitempty" jsonschema:"topic labels only; use the controlled vocabulary from kanban_create_card; release numbers belong in milestone"`
 }
@@ -449,6 +476,16 @@ type moveCardIn struct {
 	Card   string `json:"card"`
 	Status string `json:"status" jsonschema:"triage|backlog|ready|in_progress|verify|done (done archives)"`
 	Before string `json:"before,omitempty" jsonschema:"card id to place this card before"`
+}
+type moveBetweenBoardsIn struct {
+	Board            string `json:"board"`
+	Card             string `json:"card"`
+	DestinationBoard string `json:"destinationBoard"`
+	Confirm          bool   `json:"confirm" jsonschema:"must be true after reviewing the exact source card"`
+}
+type deleteBoardIn struct {
+	Board   string `json:"board"`
+	Confirm bool   `json:"confirm" jsonschema:"must be true after verifying the board has no active or archived cards"`
 }
 type commentIn struct {
 	Board string `json:"board"`
@@ -472,13 +509,43 @@ const mcpActor = "mcp"
 
 func registerKanbanTools(server *sdk.Server, deps Deps) {
 	sdk.AddTool(server, &sdk.Tool{Name: "kanban_list_boards",
-		Description: "List kanban boards with per-status card counts."},
+		Description: "List kanban boards with metadata, focus card IDs, and per-status card counts."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in struct{}) (*sdk.CallToolResult, boardsOut, error) {
 			boards, err := deps.Kanban.ListBoards()
 			if err != nil {
 				return nil, boardsOut{}, err
 			}
 			return nil, boardsOut{Boards: boards}, nil
+		})
+
+	sdk.AddTool(server, &sdk.Tool{Name: "kanban_create_board",
+		Description: "Create a board with dispatch disabled. The slug is immutable; displayName is editable."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in createBoardIn) (*sdk.CallToolResult, board.Board, error) {
+			created, err := deps.Kanban.CreateBoardWithInput(board.BoardInput{
+				Name: in.Name, DisplayName: in.DisplayName, Description: in.Description,
+				Icon: in.Icon, Color: in.Color, SortOrder: in.SortOrder, Pinned: in.Pinned,
+			})
+			return nil, created, err
+		})
+
+	sdk.AddTool(server, &sdk.Tool{Name: "kanban_update_board_settings",
+		Description: "Patch board display metadata, ordering, archive state, focus card, or dispatch setting. Omitted fields are preserved."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in updateBoardSettingsIn) (*sdk.CallToolResult, board.Board, error) {
+			updated, err := deps.Kanban.PatchBoardSettings(in.Board, board.BoardSettingsPatch{
+				DisplayName: in.DisplayName, Description: in.Description, Icon: in.Icon, Color: in.Color,
+				SortOrder: in.SortOrder, Pinned: in.Pinned, Archived: in.Archived,
+				FocusCardID: in.FocusCardID, DispatchEnabled: in.DispatchEnabled,
+			})
+			return nil, updated, err
+		})
+
+	sdk.AddTool(server, &sdk.Tool{Name: "kanban_delete_board",
+		Description: "Permanently delete a board only when both active and archived card lists are empty. Requires explicit confirmation."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in deleteBoardIn) (*sdk.CallToolResult, struct{}, error) {
+			if !in.Confirm {
+				return nil, struct{}{}, errors.New("board deletion requires explicit confirmation")
+			}
+			return nil, struct{}{}, deps.Kanban.DeleteBoard(in.Board)
 		})
 
 	sdk.AddTool(server, &sdk.Tool{Name: "kanban_list_cards",
@@ -499,8 +566,9 @@ func registerKanbanTools(server *sdk.Server, deps Deps) {
 				status = board.Triage
 			}
 			card, err := deps.Kanban.CreateCard(in.Board, board.CardInput{
-				Title: in.Title, Description: in.Description, DueDate: in.DueDate, Milestone: in.Milestone, Status: status,
-				Assignee: in.Assignee, Labels: in.Labels,
+				Title: in.Title, Description: in.Description, DueDate: in.DueDate, Milestone: in.Milestone,
+				Priority: board.Priority(in.Priority), Status: status, Assignee: in.Assignee,
+				Agent: in.Agent, Blocked: in.Blocked, Labels: in.Labels,
 			})
 			return nil, card, err
 		})
@@ -513,9 +581,15 @@ func registerKanbanTools(server *sdk.Server, deps Deps) {
 				value := board.Status(*in.Status)
 				status = &value
 			}
+			var priority *board.Priority
+			if in.Priority != nil {
+				value := board.Priority(*in.Priority)
+				priority = &value
+			}
 			card, err := deps.Kanban.UpdateCard(in.Board, in.Card, board.CardPatch{
 				Title: in.Title, Description: in.Description, DueDate: in.DueDate, Milestone: in.Milestone,
-				Status: status, Assignee: in.Assignee, Blocked: in.Blocked, Labels: in.Labels,
+				Priority: priority, Status: status, Assignee: in.Assignee, Agent: in.Agent,
+				Blocked: in.Blocked, Labels: in.Labels,
 			})
 			return nil, card, err
 		})
@@ -524,6 +598,26 @@ func registerKanbanTools(server *sdk.Server, deps Deps) {
 		Description: "Move a card to a status column; moving to done archives it."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in moveCardIn) (*sdk.CallToolResult, board.Card, error) {
 			card, err := deps.Kanban.MoveCard(in.Board, in.Card, board.Status(in.Status), in.Before)
+			return nil, card, err
+		})
+
+	sdk.AddTool(server, &sdk.Tool{Name: "kanban_move_between_boards",
+		Description: "Move an active card to another board while preserving its stable ID and all metadata. Requires confirm=true."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in moveBetweenBoardsIn) (*sdk.CallToolResult, board.Card, error) {
+			if !in.Confirm {
+				return nil, board.Card{}, fmt.Errorf("board move requires explicit confirmation")
+			}
+			card, err := deps.Kanban.MoveCardToBoard(in.Board, in.DestinationBoard, in.Card, mcpActor)
+			return nil, card, err
+		})
+
+	sdk.AddTool(server, &sdk.Tool{Name: "kanban_move_archived_between_boards",
+		Description: "Move a done card between board archives while preserving stable ID, done timestamp, metadata, comments, and attachments. Requires confirm=true."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in moveBetweenBoardsIn) (*sdk.CallToolResult, board.Card, error) {
+			if !in.Confirm {
+				return nil, board.Card{}, fmt.Errorf("archived board move requires explicit confirmation")
+			}
+			card, err := deps.Kanban.MoveArchivedCardToBoard(in.Board, in.DestinationBoard, in.Card, mcpActor)
 			return nil, card, err
 		})
 
