@@ -1109,6 +1109,12 @@ input.task-toggle:disabled { cursor: wait; opacity: 0.6; }
 
 .share-page {
   max-width: 34rem;
+  .share-section {
+    padding: 1.1rem 0 1.4rem;
+    border-bottom: 1px solid var(--border);
+    &:last-child { border-bottom: 0; }
+    h2 { margin-top: 0; }
+  }
   .share-controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 1.2rem 0; }
   .share-primary {
     border: 1px solid var(--accent);
@@ -1122,23 +1128,27 @@ input.task-toggle:disabled { cursor: wait; opacity: 0.6; }
     &:disabled { opacity: 0.45; cursor: default; }
     &.recording { background: #d04545; border-color: #d04545; }
   }
-  .share-file-label, .share-title-label {
+  .share-file-label, .share-title-label, .share-description-label {
     display: block;
     font-size: 0.85rem;
     color: var(--fg-muted);
-    input[type="text"] {
+    input[type="text"], textarea {
       display: block;
+      box-sizing: border-box;
       width: 100%;
+      min-width: 0;
       margin-top: 0.3rem;
       background: var(--bg-alt);
       color: var(--fg);
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 0.5rem 0.7rem;
+      font: inherit;
     }
-    input[type="file"] { display: block; margin-top: 0.3rem; }
+    textarea { resize: vertical; min-height: 7rem; }
+    input[type="file"] { display: block; max-width: 100%; margin-top: 0.3rem; }
   }
-  .share-title-label { margin: 1rem 0; }
-  #share-status { margin-top: 1rem; min-height: 1.4em; }
+  .share-title-label, .share-description-label { margin: 1rem 0; }
+  .share-status { margin-top: 1rem; min-height: 1.4em; }
   #share-timer { font-variant-numeric: tabular-nums; }
 }
