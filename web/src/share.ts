@@ -10,6 +10,17 @@ let recordedName = ""
 let timerHandle: number | undefined
 let startedAt = 0
 
+export const shareTextTitleSelector = "#share-text-title"
+export const shareTextDescriptionSelector = "#share-text-description"
+export const shareTextSaveSelector = "#share-text-save"
+export const shareTextEndpoint = "api/share/text"
+
+export function buildTextNotePayload(title: string, description: string) {
+  title = title.trim()
+  if (!title) throw new Error("Title is required")
+  return { title, description }
+}
+
 export function setupShare() {
   if (bound) return
   bound = true
@@ -18,6 +29,11 @@ export function setupShare() {
     const t = e.target as Element
     if (t.closest?.("#share-record")) void toggleRecord()
     if (t.closest?.("#share-upload")) void upload()
+    if (t.closest?.(shareTextSaveSelector)) void saveTextNote()
+  })
+  document.addEventListener("input", (e) => {
+    const input = e.target as HTMLInputElement
+    if (input.id === "share-text-title") updateTextReady()
   })
   document.addEventListener("change", (e) => {
     const input = e.target as HTMLInputElement
@@ -29,6 +45,59 @@ export function setupShare() {
 }
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T | null
+
+function updateTextReady() {
+  const title = el<HTMLInputElement>("share-text-title")
+  const button = el<HTMLButtonElement>("share-text-save")
+  if (button) button.disabled = !title?.value.trim()
+}
+
+async function saveTextNote() {
+  const title = el<HTMLInputElement>("share-text-title")
+  const description = el<HTMLTextAreaElement>("share-text-description")
+  const button = el<HTMLButtonElement>("share-text-save")
+  if (!title || !description || !button) return
+
+  let payload: ReturnType<typeof buildTextNotePayload>
+  try {
+    payload = buildTextNotePayload(title.value, description.value)
+  } catch (err) {
+    textStatus(err instanceof Error ? err.message : "Title is required")
+    return
+  }
+  button.disabled = true
+  textStatus("Saving…")
+  try {
+    const res = await fetch(`${baseURL()}${shareTextEndpoint}`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) throw new Error((await res.text()) || `save failed (${res.status})`)
+    const out = (await res.json()) as { noteURL: string; note: string }
+    const s = el<HTMLDivElement>("share-text-status")
+    if (s) {
+      s.innerHTML = ""
+      const a = document.createElement("a")
+      a.className = "internal"
+      a.href = out.noteURL
+      a.textContent = out.note
+      s.append("Saved to ", a, ".")
+    }
+    title.value = ""
+    description.value = ""
+    updateTextReady()
+  } catch (err) {
+    textStatus(err instanceof Error ? err.message : "Save failed")
+    button.disabled = false
+  }
+}
+
+function textStatus(text: string) {
+  const s = el<HTMLDivElement>("share-text-status")
+  if (s) s.textContent = text
+}
 
 async function toggleRecord() {
   const btn = el<HTMLButtonElement>("share-record")

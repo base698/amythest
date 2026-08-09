@@ -60,7 +60,7 @@ func TestVaultMutationsFailClosedWithoutKanbanAuth(t *testing.T) {
 		"/api/tasks/toggle", "/api/tasks/due", "/api/tasks/triage",
 		"/api/tasks/file", "/api/tasks/file/hide", "/api/tasks/move-to-board",
 		"/api/tasks/cancel", "/api/tasks/purge", "/api/tasks/priority",
-		"/api/share/upload", "/api/db/query",
+		"/api/share/upload", "/api/share/text", "/api/db/query",
 	} {
 		rec := httptest.NewRecorder()
 		s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, target, strings.NewReader("{}")))

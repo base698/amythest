@@ -49,6 +49,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -217,6 +218,51 @@ func (s *Store) CreateNote(a *Asset, title, mime string, now time.Time) (*Upload
 	}
 	noteRel := filepath.ToSlash(rel)
 	return &Upload{AssetRel: a.Rel, NoteRel: noteRel, NoteSlug: vault.Slugify(noteRel)}, nil
+}
+
+// CreateTextNote writes a share note without requiring an uploaded asset.
+// The description is plain text: HTML is escaped because notes render with
+// raw HTML enabled, while line breaks are preserved for readable paragraphs.
+func (s *Store) CreateTextNote(title, description string, now time.Time) (*Upload, error) {
+	noteTitle := strings.TrimSpace(title)
+	if noteTitle == "" {
+		return nil, errors.New("title is required")
+	}
+	dir := filepath.Join(s.vaultRoot, "_Inbox")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	base := strings.ToLower(unsafeName.ReplaceAllString(noteTitle, " "))
+	base = strings.Join(strings.Fields(base), "-")
+	base = strings.Trim(base, " ._-")
+	if base == "" {
+		base = "text-note-" + now.Format("2006-01-02-150405")
+	} else if strings.EqualFold(base, "index") {
+		base = "note-index"
+	}
+	noteAbs, err := reserveUnique(dir, base, ".md")
+	if err != nil {
+		return nil, err
+	}
+
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "---\ntype: source\ncreated: %s\ntags: [share]\n---\n\n# %s\n",
+		now.Format("2006-01-02"), html.EscapeString(noteTitle))
+	if description = strings.TrimSpace(description); description != "" {
+		description = strings.ReplaceAll(description, "\r\n", "\n")
+		description = strings.ReplaceAll(description, "\r", "\n")
+		fmt.Fprintf(&b, "\n%s\n", html.EscapeString(description))
+	}
+	if err := os.WriteFile(noteAbs, b.Bytes(), 0o644); err != nil {
+		_ = os.Remove(noteAbs)
+		return nil, err
+	}
+	rel, err := filepath.Rel(s.vaultRoot, noteAbs)
+	if err != nil {
+		return nil, err
+	}
+	noteRel := filepath.ToSlash(rel)
+	return &Upload{NoteRel: noteRel, NoteSlug: vault.Slugify(noteRel)}, nil
 }
 
 // reserveUnique atomically claims dir/base+ext, appending -2, -3, … until it

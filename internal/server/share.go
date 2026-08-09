@@ -1,12 +1,15 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"net/http"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/base698/amythest/internal/share"
 )
@@ -15,6 +18,20 @@ import (
 func (s *Server) handleSharePage(w http.ResponseWriter, r *http.Request) {
 	html := `
 <div class="share-page">
+  <section class="share-section" aria-labelledby="share-text-heading">
+    <h2 id="share-text-heading">Quick text note</h2>
+    <p>Save a title and optional description directly to <code>_Inbox/</code>.</p>
+    <label class="share-title-label">Title
+      <input id="share-text-title" type="text" maxlength="120" required autocomplete="off">
+    </label>
+    <label class="share-description-label">Description <span class="hint">optional</span>
+      <textarea id="share-text-description" maxlength="20000" rows="6"></textarea>
+    </label>
+    <button id="share-text-save" type="button" class="share-primary" disabled>Save text note</button>
+    <div id="share-text-status" class="muted share-status" role="status"></div>
+  </section>
+  <section class="share-section" aria-labelledby="share-upload-heading">
+  <h2 id="share-upload-heading">File or voice memo</h2>
   <p>Record a voice memo or drop a file; it lands in the vault under
   <code>Assets/Share/</code> with a note in <code>_Inbox/</code>.` +
 		s.sharePluginsBlurb() + `</p>
@@ -29,7 +46,8 @@ func (s *Server) handleSharePage(w http.ResponseWriter, r *http.Request) {
     <input id="share-title" type="text" maxlength="120" placeholder="Share ` + time.Now().Format("2006-01-02 15:04") + `">
   </label>
   <button id="share-upload" type="button" class="share-primary" disabled>Upload to notes</button>
-  <div id="share-status" class="muted" role="status"></div>
+  <div id="share-status" class="muted share-status" role="status"></div>
+  </section>
 </div>`
 	s.renderPage(w, pageData{
 		SiteName:    s.cfg.SiteName,
@@ -96,6 +114,69 @@ func (s *Server) handleShareUpload(w http.ResponseWriter, r *http.Request) {
 		"noteURL": s.base() + up.NoteSlug,
 		"asset":   up.AssetRel,
 		"plugins": len(s.share.Plugins()),
+	})
+}
+
+const (
+	maxShareTextBodyBytes    = 100 << 10
+	maxShareTitleRunes       = 120
+	maxShareDescriptionRunes = 20000
+)
+
+// handleShareText creates a plain text note directly in _Inbox without an
+// uploaded asset. Title is required; description is optional.
+func (s *Server) handleShareText(w http.ResponseWriter, r *http.Request) {
+	if !s.requireKanbanSession(w, r, "share") {
+		return
+	}
+	if s.share == nil {
+		http.Error(w, "share not configured", http.StatusNotFound)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxShareTextBodyBytes)
+	var in struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		http.Error(w, "invalid text note", http.StatusBadRequest)
+		return
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid text note", http.StatusBadRequest)
+		return
+	}
+	in.Title = strings.TrimSpace(in.Title)
+	if in.Title == "" {
+		http.Error(w, "title is required", http.StatusBadRequest)
+		return
+	}
+	if utf8.RuneCountInString(in.Title) > maxShareTitleRunes {
+		http.Error(w, "title is too long", http.StatusBadRequest)
+		return
+	}
+	if utf8.RuneCountInString(in.Description) > maxShareDescriptionRunes {
+		http.Error(w, "description is too long", http.StatusBadRequest)
+		return
+	}
+	up, err := s.share.CreateTextNote(in.Title, in.Description, time.Now())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.indexShareUpload(up); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.scheduleFullReconcile()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	s.writeJSON(w, map[string]any{
+		"ok":      true,
+		"note":    up.NoteSlug,
+		"noteURL": s.base() + up.NoteSlug,
 	})
 }
 
@@ -168,7 +249,11 @@ func (s *Server) readShareUpload(r *http.Request) (up *share.Upload, mime, title
 func (s *Server) indexShareUpload(up *share.Upload) error {
 	s.rescanMu.Lock()
 	defer s.rescanMu.Unlock()
-	v := s.vault.Load().WithFiles(up.NoteRel, up.AssetRel)
+	rels := []string{up.NoteRel}
+	if up.AssetRel != "" {
+		rels = append(rels, up.AssetRel)
+	}
+	v := s.vault.Load().WithFiles(rels...)
 	n, ok := v.BySlug(up.NoteSlug)
 	if !ok {
 		return fmt.Errorf("share note %q vanished before indexing", up.NoteRel)
