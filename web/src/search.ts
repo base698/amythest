@@ -5,6 +5,8 @@
 // moment, so captured element references (and element-bound listeners)
 // go stale and made the dropdown stop responding.
 
+import { matchSlashCommands, parseSlashQuery, type SlashCommand } from "./slashCommands"
+
 type SearchResult = {
   slug: string
   title: string
@@ -15,6 +17,7 @@ type SearchResult = {
 
 let selected = 0
 let results: SearchResult[] = []
+let commands: SlashCommand[] = [] // non-empty while the query is a slash command
 let debounce: number | undefined
 let bound = false
 
@@ -40,12 +43,15 @@ export function setupSearch() {
       close()
     } else if (e.key === "ArrowDown") {
       e.preventDefault()
-      selected = Math.min(selected + 1, results.length - 1)
+      selected = Math.min(selected + 1, (commands.length || results.length) - 1)
       render()
     } else if (e.key === "ArrowUp") {
       e.preventDefault()
       selected = Math.max(selected - 1, 0)
       render()
+    } else if (e.key === "Enter" && commands[selected]) {
+      close()
+      window.location.href = commands[selected].href({ base: baseURL(), now: new Date() })
     } else if (e.key === "Enter" && results[selected]) {
       close()
       window.location.href = `${baseURL()}${encodeSlug(results[selected].slug)}`
@@ -95,6 +101,15 @@ async function runQuery() {
   const i = input()
   if (!i) return
   const q = i.value.trim()
+  const slash = parseSlashQuery(q)
+  if (slash !== null) {
+    commands = matchSlashCommands(slash)
+    results = []
+    selected = 0
+    render()
+    return
+  }
+  commands = []
   if (!q) {
     results = []
     render()
@@ -119,6 +134,10 @@ function render() {
   const l = list()
   if (!l) return
   l.innerHTML = ""
+  if (commands.length > 0) {
+    renderCommands(l)
+    return
+  }
   results.forEach((r, i) => {
     const li = document.createElement("li")
     li.className = i === selected ? "selected" : ""
@@ -136,6 +155,30 @@ function render() {
     const excerpt = document.createElement("div")
     excerpt.className = "result-excerpt"
     excerpt.innerHTML = r.excerpt // server-generated snippet with <b> marks
+    a.append(title, excerpt)
+    li.append(a)
+    li.addEventListener("mouseenter", () => {
+      if (selected !== i) {
+        selected = i
+        render()
+      }
+    })
+    l.append(li)
+  })
+}
+
+function renderCommands(l: HTMLElement) {
+  commands.forEach((c, i) => {
+    const li = document.createElement("li")
+    li.className = i === selected ? "selected" : ""
+    const a = document.createElement("a")
+    a.href = c.href({ base: baseURL(), now: new Date() })
+    const title = document.createElement("div")
+    title.className = "result-title"
+    title.textContent = `/${c.name}`
+    const excerpt = document.createElement("div")
+    excerpt.className = "result-excerpt"
+    excerpt.textContent = c.description
     a.append(title, excerpt)
     li.append(a)
     li.addEventListener("mouseenter", () => {
