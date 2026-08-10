@@ -45,8 +45,8 @@ type boardView struct {
 	cursors [6]int // one per column in boardColumns order
 	busy    bool
 	loaded  bool
-	moving  bool // "m" pressed, waiting for a destination status key
 	find    finder
+	picker  movePicker
 }
 
 func newBoardView(client *apiclient.Client, name string) *boardView {
@@ -55,7 +55,20 @@ func newBoardView(client *apiclient.Client, name string) *boardView {
 
 func (v *boardView) Title() string   { return v.name }
 func (v *boardView) Busy() bool      { return v.busy }
-func (v *boardView) Capturing() bool { return v.find.active() }
+func (v *boardView) Capturing() bool { return v.find.active() || v.picker.active }
+
+// boardMovePickerMsg carries the board list needed to offer cross-board
+// destinations; typed per-view so the stack broadcast can't open two pickers.
+type boardMovePickerMsg struct {
+	board  string
+	cardID string
+	boards []board.BoardSummary
+}
+
+// cardMovedBoardMsg announces a completed cross-board transfer.
+type cardMovedBoardMsg struct {
+	from, to, cardID string
+}
 
 // flatCards enumerates every visible card in column order so search can jump
 // across columns; each entry remembers its (column, row) position.
@@ -210,6 +223,25 @@ func (v *boardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.busy = false
 		return v, nil
 
+	case boardMovePickerMsg:
+		if msg.board != v.name {
+			return v, nil
+		}
+		v.busy = false
+		card := v.currentCard()
+		if card == nil || card.ID != msg.cardID {
+			return v, nil
+		}
+		v.picker.open(card.Title, buildMoveOptions(card.Status, v.name, msg.boards))
+		return v, nil
+
+	case cardMovedBoardMsg:
+		if msg.from != v.name && msg.to != v.name {
+			return v, nil
+		}
+		v.busy = true
+		return v, v.loadCmd()
+
 	case tea.KeyMsg:
 		if v.find.active() {
 			committed, cmd := v.find.handleKey(msg)
@@ -218,12 +250,15 @@ func (v *boardView) Update(msg tea.Msg) (view, tea.Cmd) {
 			}
 			return v, cmd
 		}
-		if v.moving {
-			v.moving = false
-			if status, ok := moveKeys[msg.String()]; ok {
-				return v.moveCurrent(status)
+		if v.picker.active {
+			choice := v.picker.handleKey(msg)
+			if choice == nil {
+				return v, nil
 			}
-			return v, nil
+			if choice.boardName != "" {
+				return v.moveCurrentToBoard(choice.boardName)
+			}
+			return v.moveCurrent(choice.status)
 		}
 		switch msg.String() {
 		case "/":
@@ -271,12 +306,38 @@ func (v *boardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		case "d":
 			return v.moveCurrent(board.Done)
 		case "m":
-			if v.currentCard() != nil {
-				v.moving = true
+			if card := v.currentCard(); card != nil {
+				v.busy = true
+				client, name, cardID := v.client, v.name, card.ID
+				return v, func() tea.Msg {
+					boards, err := client.ListBoards(context.Background())
+					if err != nil {
+						return fail(err)
+					}
+					return boardMovePickerMsg{board: name, cardID: cardID, boards: boards}
+				}
 			}
 		}
 	}
 	return v, nil
+}
+
+func (v *boardView) moveCurrentToBoard(destination string) (view, tea.Cmd) {
+	card := v.currentCard()
+	if card == nil || v.busy {
+		return v, nil
+	}
+	if boardColumns[v.col] == board.Done {
+		return v, flash("restore the card first, then move it between boards")
+	}
+	v.busy = true
+	client, name, cardID := v.client, v.name, card.ID
+	return v, func() tea.Msg {
+		if err := client.MoveCardToBoard(context.Background(), name, cardID, destination); err != nil {
+			return fail(err)
+		}
+		return cardMovedBoardMsg{from: name, to: destination, cardID: cardID}
+	}
 }
 
 func (v *boardView) maybeLoadArchive() tea.Cmd {
@@ -328,6 +389,9 @@ func (v *boardView) View(width, height int) string {
 	if !v.loaded {
 		return "\n  loading board…"
 	}
+	if v.picker.active {
+		return v.picker.view()
+	}
 	colWidth := max(18, width/len(boardColumns)-2)
 	perColumn := max(3, height-4)
 	var columns []string
@@ -355,10 +419,7 @@ func (v *boardView) View(width, height int) string {
 		columns = append(columns, style.Width(colWidth).Render(strings.Join(lines, "\n")))
 	}
 	view := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
-	hint := dimStyle.Render(" enter open · e edit · d done · m+key move · / search · h/l columns")
-	if v.moving {
-		hint = dimStyle.Render(" move to: t triage · b backlog · y ready · i in_progress · v verify · d done")
-	}
+	hint := dimStyle.Render(" enter open · e edit · d done · m move · / search · h/l columns")
 	if bar := v.find.bar(); bar != "" {
 		hint = " " + bar
 	}

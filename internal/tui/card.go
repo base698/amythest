@@ -28,12 +28,18 @@ type cardView struct {
 	focus       int      // index into checkIdxs
 	offset      int      // scroll offset in display rows
 	busy        bool
-	moving      bool
 	pendingEdit bool
 	now         func() time.Time
 	find        finder
 	comment     textinput.Model
 	commenting  bool
+	picker      movePicker
+}
+
+// cardMovePickerMsg mirrors boardMovePickerMsg for the card view.
+type cardMovePickerMsg struct {
+	cardID string
+	boards []board.BoardSummary
 }
 
 func newCardView(client *apiclient.Client, boardName string, card board.Card) *cardView {
@@ -69,7 +75,7 @@ func (v *cardView) setDescription(desc string) {
 
 func (v *cardView) Title() string   { return v.card.Title }
 func (v *cardView) Busy() bool      { return v.busy }
-func (v *cardView) Capturing() bool { return v.find.active() || v.commenting }
+func (v *cardView) Capturing() bool { return v.find.active() || v.commenting || v.picker.active }
 
 func (v *cardView) Init() tea.Cmd {
 	if v.pendingEdit {
@@ -171,6 +177,21 @@ func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		}
 		return v, nil
 
+	case cardMovePickerMsg:
+		if msg.cardID != v.card.ID {
+			return v, nil
+		}
+		v.busy = false
+		v.picker.open(v.card.Title, buildMoveOptions(v.card.Status, v.boardName, msg.boards))
+		return v, nil
+
+	case cardMovedBoardMsg:
+		v.busy = false
+		if msg.cardID == v.card.ID {
+			return v, popView() // the card left this board; back to the list
+		}
+		return v, nil
+
 	case errMsg:
 		v.busy = false
 		return v, nil
@@ -186,12 +207,15 @@ func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		if v.commenting {
 			return v.handleCommentKey(msg)
 		}
-		if v.moving {
-			v.moving = false
-			if status, ok := moveKeys[msg.String()]; ok {
-				return v.moveSelf(status)
+		if v.picker.active {
+			choice := v.picker.handleKey(msg)
+			if choice == nil {
+				return v, nil
 			}
-			return v, nil
+			if choice.boardName != "" {
+				return v.moveSelfToBoard(choice.boardName)
+			}
+			return v.moveSelf(choice.status)
 		}
 		switch msg.String() {
 		case "j", "down":
@@ -220,7 +244,18 @@ func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		case "d":
 			return v.moveSelf(board.Done)
 		case "m":
-			v.moving = true
+			if v.busy {
+				return v, nil
+			}
+			v.busy = true
+			client, cardID := v.client, v.card.ID
+			return v, func() tea.Msg {
+				boards, err := client.ListBoards(context.Background())
+				if err != nil {
+					return fail(err)
+				}
+				return cardMovePickerMsg{cardID: cardID, boards: boards}
+			}
 		case "e":
 			if !v.busy {
 				return v, v.editCmd()
@@ -328,6 +363,20 @@ func (v *cardView) toggleCmd(lineIdx int, done bool) tea.Cmd {
 	}
 }
 
+func (v *cardView) moveSelfToBoard(destination string) (view, tea.Cmd) {
+	if v.busy {
+		return v, nil
+	}
+	v.busy = true
+	client, boardName, cardID := v.client, v.boardName, v.card.ID
+	return v, func() tea.Msg {
+		if err := client.MoveCardToBoard(context.Background(), boardName, cardID, destination); err != nil {
+			return fail(err)
+		}
+		return cardMovedBoardMsg{from: boardName, to: destination, cardID: cardID}
+	}
+}
+
 func (v *cardView) moveSelf(status board.Status) (view, tea.Cmd) {
 	if v.busy || v.card.Status == status {
 		return v, nil
@@ -406,6 +455,9 @@ func (v *cardView) bodyRows(width int) []displayRow {
 }
 
 func (v *cardView) View(width, height int) string {
+	if v.picker.active {
+		return v.picker.view()
+	}
 	var b strings.Builder
 	var meta []string
 	meta = append(meta, statusLabels[v.card.Status])

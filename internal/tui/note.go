@@ -58,7 +58,7 @@ func newNoteView(client *apiclient.Client, note *apiclient.Note) *noteView {
 
 func (v *noteView) Title() string   { return v.note.Title }
 func (v *noteView) Busy() bool      { return v.busy }
-func (v *noteView) Capturing() bool { return v.find.active() }
+func (v *noteView) Capturing() bool { return v.find.active() || v.pickingAgent }
 func (v *noteView) Init() tea.Cmd   { return nil }
 
 func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {

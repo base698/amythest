@@ -318,6 +318,16 @@ func (c *Client) RestoreCard(ctx context.Context, boardName, cardID string, stat
 	return c.do(ctx, http.MethodPost, path, body, nil)
 }
 
+// MoveCardToBoard transfers a card to another board.
+func (c *Client) MoveCardToBoard(ctx context.Context, boardName, cardID, destination string) error {
+	body := struct {
+		DestinationBoard string `json:"destinationBoard"`
+		Confirm          bool   `json:"confirm"`
+	}{destination, true}
+	path := "/kanban/api/boards/" + url.PathEscape(boardName) + "/cards/" + url.PathEscape(cardID) + "/board"
+	return c.do(ctx, http.MethodPost, path, body, nil)
+}
+
 // MoveCard moves a card to a column, before beforeID or appended when empty.
 func (c *Client) MoveCard(ctx context.Context, boardName, cardID string, status board.Status, beforeID string) error {
 	body := struct {

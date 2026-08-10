@@ -50,7 +50,7 @@ func TestAppRendersTasksNavigatesToBoardsAndBack(t *testing.T) {
 
 	// enter pushes the board view; the push command must be executed by the
 	// runtime, so simulate that dispatch loop here.
-	_, cmd = app.Update(keyMsg("enter"))
+	_, cmd = app.Update(enterMsg())
 	if cmd == nil {
 		t.Fatal("expected push command")
 	}
@@ -98,6 +98,20 @@ func TestHelpOverlayClosesOnEscape(t *testing.T) {
 	}
 	if strings.Contains(app.View(), "j/k or arrows") {
 		t.Fatal("q must close help")
+	}
+}
+
+func TestCoalescedRunesReplayAsIndividualKeys(t *testing.T) {
+	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
+	app := NewApp(client)
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	app.Update(keyMsg("2")) // tasks view
+	app.Update(loadedTasks())
+	// One coalesced "jj" must move the cursor two rows, not zero.
+	app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("jj")})
+	tv := app.top().(*tasksView)
+	if tv.current() == nil || tv.current().Text != "card checkbox" {
+		t.Fatalf("cursor after coalesced jj: %+v", tv.current())
 	}
 }
 
