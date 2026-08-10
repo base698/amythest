@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/base698/amythest/internal/apiclient"
+	"github.com/base698/amythest/internal/herdr"
 	"github.com/base698/amythest/internal/kanban/board"
 	"github.com/base698/amythest/internal/tasks"
 )
@@ -34,6 +35,13 @@ type cardView struct {
 	comment     textinput.Model
 	commenting  bool
 	picker      movePicker
+	agents      agentPicker
+}
+
+// cardAgentsMsg carries the herdr agent list for this card's send picker.
+type cardAgentsMsg struct {
+	cardID string
+	agents []herdr.Agent
 }
 
 // cardMovePickerMsg mirrors boardMovePickerMsg for the card view.
@@ -75,7 +83,9 @@ func (v *cardView) setDescription(desc string) {
 
 func (v *cardView) Title() string   { return v.card.Title }
 func (v *cardView) Busy() bool      { return v.busy }
-func (v *cardView) Capturing() bool { return v.find.active() || v.commenting || v.picker.active }
+func (v *cardView) Capturing() bool {
+	return v.find.active() || v.commenting || v.picker.active || v.agents.active
+}
 
 func (v *cardView) Init() tea.Cmd {
 	if v.pendingEdit {
@@ -185,6 +195,18 @@ func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.picker.open(v.card.Title, buildMoveOptions(v.card.Status, v.boardName, msg.boards))
 		return v, nil
 
+	case cardAgentsMsg:
+		if msg.cardID != v.card.ID {
+			return v, nil
+		}
+		v.busy = false
+		v.agents.open(v.card.Title, msg.agents)
+		return v, nil
+
+	case agentPromptSentMsg:
+		v.busy = false
+		return v, flash("sent to agent ✓")
+
 	case cardMovedBoardMsg:
 		v.busy = false
 		if msg.cardID == v.card.ID {
@@ -216,6 +238,14 @@ func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {
 				return v.moveSelfToBoard(choice.boardName)
 			}
 			return v.moveSelf(choice.status)
+		}
+		if v.agents.active {
+			agent := v.agents.handleKey(msg)
+			if agent == nil {
+				return v, nil
+			}
+			v.busy = true
+			return v, sendToAgentCmd(*agent, v.card.Title, cardContextPrompt(v.card, v.boardName, v.client.Endpoint()))
 		}
 		switch msg.String() {
 		case "j", "down":
@@ -264,6 +294,15 @@ func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {
 			v.commenting = true
 			v.comment.SetValue("")
 			return v, v.comment.Focus()
+		case "a":
+			if v.busy {
+				return v, nil
+			}
+			v.busy = true
+			cardID := v.card.ID
+			return v, listAgentsCmd(func(agents []herdr.Agent) tea.Msg {
+				return cardAgentsMsg{cardID: cardID, agents: agents}
+			})
 		case "/":
 			return v, v.find.start()
 		case "n", "N":
@@ -457,6 +496,9 @@ func (v *cardView) bodyRows(width int) []displayRow {
 func (v *cardView) View(width, height int) string {
 	if v.picker.active {
 		return v.picker.view()
+	}
+	if v.agents.active {
+		return v.agents.view()
 	}
 	var b strings.Builder
 	var meta []string

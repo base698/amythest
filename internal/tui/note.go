@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -26,10 +25,7 @@ type noteView struct {
 	offset int
 	busy   bool
 	find   finder
-
-	pickingAgent bool
-	agents       []herdr.Agent
-	agentCursor  int
+	agents agentPicker
 }
 
 type noteLink struct {
@@ -38,8 +34,10 @@ type noteLink struct {
 	line   int
 }
 
-type agentsListedMsg struct{ agents []herdr.Agent }
-type notePromptedMsg struct{ title string }
+type noteAgentsMsg struct {
+	slug   string
+	agents []herdr.Agent
+}
 
 func newNoteView(client *apiclient.Client, note *apiclient.Note) *noteView {
 	v := &noteView{client: client, note: note, linkAt: -1, find: newFinder()}
@@ -58,7 +56,7 @@ func newNoteView(client *apiclient.Client, note *apiclient.Note) *noteView {
 
 func (v *noteView) Title() string   { return v.note.Title }
 func (v *noteView) Busy() bool      { return v.busy }
-func (v *noteView) Capturing() bool { return v.find.active() || v.pickingAgent }
+func (v *noteView) Capturing() bool { return v.find.active() || v.agents.active }
 func (v *noteView) Init() tea.Cmd   { return nil }
 
 func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
@@ -68,19 +66,17 @@ func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.busy = false
 		return v, pushView(newNoteView(v.client, msg.note))
 
-	case agentsListedMsg:
-		v.busy = false
-		if len(msg.agents) == 0 {
-			return v, flash("no running herdr agents")
+	case noteAgentsMsg:
+		if msg.slug != v.note.Slug {
+			return v, nil
 		}
-		v.pickingAgent = true
-		v.agents = msg.agents
-		v.agentCursor = 0
+		v.busy = false
+		v.agents.open(v.note.Title, msg.agents)
 		return v, nil
 
-	case notePromptedMsg:
+	case agentPromptSentMsg:
 		v.busy = false
-		return v, flash("note sent to agent ✓")
+		return v, flash("sent to agent ✓")
 
 	case errMsg:
 		v.busy = false
@@ -94,8 +90,13 @@ func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
 			}
 			return v, cmd
 		}
-		if v.pickingAgent {
-			return v.handleAgentKey(msg)
+		if v.agents.active {
+			agent := v.agents.handleKey(msg)
+			if agent == nil {
+				return v, nil
+			}
+			v.busy = true
+			return v, sendToAgentCmd(*agent, v.note.Title, agentContextPrompt(v.note, v.client.Endpoint()))
 		}
 		switch msg.String() {
 		case "j", "down":
@@ -130,13 +131,10 @@ func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
 			}
 		case "a":
 			v.busy = true
-			return v, func() tea.Msg {
-				agents, err := herdr.List(context.Background())
-				if err != nil {
-					return fail(err)
-				}
-				return agentsListedMsg{agents}
-			}
+			slug := v.note.Slug
+			return v, listAgentsCmd(func(agents []herdr.Agent) tea.Msg {
+				return noteAgentsMsg{slug: slug, agents: agents}
+			})
 		case "/":
 			return v, v.find.start()
 		case "n", "N":
@@ -157,36 +155,6 @@ func clampOffset(line, offset int) int {
 		return line
 	}
 	return offset
-}
-
-func (v *noteView) handleAgentKey(msg tea.KeyMsg) (view, tea.Cmd) {
-	switch msg.String() {
-	case "esc", "q":
-		v.pickingAgent = false
-		return v, nil
-	case "j", "down":
-		if v.agentCursor < len(v.agents)-1 {
-			v.agentCursor++
-		}
-	case "k", "up":
-		if v.agentCursor > 0 {
-			v.agentCursor--
-		}
-	case "enter":
-		agent := v.agents[v.agentCursor]
-		v.pickingAgent = false
-		v.busy = true
-		note := v.note
-		endpoint := v.client.Endpoint()
-		return v, func() tea.Msg {
-			text := agentContextPrompt(note, endpoint)
-			if err := herdr.Prompt(context.Background(), agent.PaneID, text); err != nil {
-				return fail(err)
-			}
-			return notePromptedMsg{title: note.Title}
-		}
-	}
-	return v, nil
 }
 
 const maxAgentContextBytes = 32 * 1024
@@ -212,8 +180,8 @@ func (v *noteView) searchJump(dir int) tea.Cmd {
 }
 
 func (v *noteView) View(width, height int) string {
-	if v.pickingAgent {
-		return v.agentPickerView()
+	if v.agents.active {
+		return v.agents.view()
 	}
 	var b strings.Builder
 	b.WriteString(" " + columnTitleStyle.Render(v.note.Title) + "  " + dimStyle.Render(v.note.Path) + "\n\n")
@@ -261,22 +229,3 @@ func (v *noteView) renderNoteLine(row string, line int) string {
 	return styled
 }
 
-func (v *noteView) agentPickerView() string {
-	var b strings.Builder
-	b.WriteString(" " + columnTitleStyle.Render("Send note to agent") + "  " + dimStyle.Render(v.note.Title) + "\n\n")
-	for i, agent := range v.agents {
-		prefix := "   "
-		title := agent.Title
-		if title == "" {
-			title = agent.Cwd
-		}
-		line := fmt.Sprintf("%s [%s] %s  %s", agent.Agent, agent.Status, title, dimStyle.Render(agent.Cwd))
-		if i == v.agentCursor {
-			prefix = cursorStyle.Render(" ▸ ")
-			line = cursorStyle.Render(fmt.Sprintf("%s [%s] %s", agent.Agent, agent.Status, title)) + "  " + dimStyle.Render(agent.Cwd)
-		}
-		b.WriteString(prefix + line + "\n")
-	}
-	b.WriteString("\n" + dimStyle.Render(" enter send · j/k choose · esc cancel"))
-	return b.String()
-}
