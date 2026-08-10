@@ -79,6 +79,20 @@ func newFakeServer(t *testing.T) *fakeServer {
 	mux.HandleFunc("GET /kanban/api/boards", authed(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]map[string]any{{"name": "personal", "displayName": "Personal"}})
 	}))
+	mux.HandleFunc("POST /kanban/api/boards/{board}/cards/{card}/comments", authed(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Body string `json:"body"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.Body == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":       r.PathValue("card"),
+			"comments": []map[string]any{{"id": "cm1", "body": payload.Body}},
+		})
+	}))
 	mux.HandleFunc("PUT /kanban/api/boards/{board}/cards/{card}", authed(func(w http.ResponseWriter, r *http.Request) {
 		var patch map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
@@ -227,6 +241,21 @@ func TestPatchCardSendsOnlyChangedFields(t *testing.T) {
 	}
 	if card.ID != "c9" {
 		t.Fatalf("card = %+v", card)
+	}
+}
+
+func TestAddCommentPostsWithCSRFAndReturnsCard(t *testing.T) {
+	srv := newFakeServer(t)
+	c := testClient(t, srv)
+	card, err := c.AddComment(context.Background(), "personal", "c3", "looks good")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if card.ID != "c3" || len(card.Comments) != 1 || card.Comments[0].Body != "looks good" {
+		t.Fatalf("card = %+v", card)
+	}
+	if got := srv.sawCSRF["/kanban/api/boards/personal/cards/c3/comments"]; got != "csrf-token" {
+		t.Fatalf("comment CSRF = %q", got)
 	}
 }
 

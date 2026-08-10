@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/base698/amythest/internal/apiclient"
@@ -19,22 +20,27 @@ import (
 var checkboxLineRe = regexp.MustCompile(`^(\s*[-*+]\s+\[)(.)(\])\s*(.*)$`)
 
 type cardView struct {
-	client    *apiclient.Client
-	boardName string
-	card      board.Card
-	lines     []string // description split on \n; index = 0-based line
-	checkIdxs []int    // indexes into lines that are checkboxes
-	focus     int      // index into checkIdxs
-	offset    int
-	busy      bool
-	moving    bool
+	client      *apiclient.Client
+	boardName   string
+	card        board.Card
+	lines       []string // description split on \n; index = 0-based line
+	checkIdxs   []int    // indexes into lines that are checkboxes
+	focus       int      // index into checkIdxs
+	offset      int      // scroll offset in display rows
+	busy        bool
+	moving      bool
 	pendingEdit bool
-	now       func() time.Time
-	find      finder
+	now         func() time.Time
+	find        finder
+	comment     textinput.Model
+	commenting  bool
 }
 
 func newCardView(client *apiclient.Client, boardName string, card board.Card) *cardView {
-	v := &cardView{client: client, boardName: boardName, card: card, now: time.Now, find: newFinder()}
+	ci := textinput.New()
+	ci.Prompt = "comment: "
+	ci.CharLimit = 4000
+	v := &cardView{client: client, boardName: boardName, card: card, now: time.Now, find: newFinder(), comment: ci}
 	v.setDescription(card.Description)
 	return v
 }
@@ -63,7 +69,7 @@ func (v *cardView) setDescription(desc string) {
 
 func (v *cardView) Title() string   { return v.card.Title }
 func (v *cardView) Busy() bool      { return v.busy }
-func (v *cardView) Capturing() bool { return v.find.active() }
+func (v *cardView) Capturing() bool { return v.find.active() || v.commenting }
 
 func (v *cardView) Init() tea.Cmd {
 	if v.pendingEdit {
@@ -74,20 +80,20 @@ func (v *cardView) Init() tea.Cmd {
 }
 
 type editorDoneMsg struct {
-	cardID   string
-	path     string
-	original string
-	err      error
+	cardID string
+	path   string
+	err    error
 }
 
 // editCmd suspends the TUI and opens $EDITOR (VISUAL > EDITOR > vi) on the
-// card description in a temp file; on exit the result is PUT back if changed.
+// whole card — a key/value header plus the description — so title, status,
+// priority, due, labels, and blocked are all editable in one place.
 func (v *cardView) editCmd() tea.Cmd {
 	tmp, err := os.CreateTemp("", "amy-card-*.md")
 	if err != nil {
 		return func() tea.Msg { return fail(err) }
 	}
-	if _, err := tmp.WriteString(v.card.Description); err != nil {
+	if _, err := tmp.WriteString(serializeCardEdit(v.card)); err != nil {
 		tmp.Close()
 		os.Remove(tmp.Name())
 		return func() tea.Msg { return fail(err) }
@@ -102,10 +108,168 @@ func (v *cardView) editCmd() tea.Cmd {
 	}
 	parts := strings.Fields(editor)
 	args := append(parts[1:], tmp.Name())
-	cardID, original := v.card.ID, v.card.Description
+	cardID := v.card.ID
 	return tea.ExecProcess(exec.Command(parts[0], args...), func(err error) tea.Msg {
-		return editorDoneMsg{cardID: cardID, path: tmp.Name(), original: original, err: err}
+		return editorDoneMsg{cardID: cardID, path: tmp.Name(), err: err}
 	})
+}
+
+func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {
+	switch msg := msg.(type) {
+	case editorDoneMsg:
+		if msg.cardID != v.card.ID {
+			return v, nil
+		}
+		edited, readErr := os.ReadFile(msg.path)
+		if msg.err != nil {
+			os.Remove(msg.path)
+			return v, func() tea.Msg { return fail(msg.err) }
+		}
+		if readErr != nil {
+			os.Remove(msg.path)
+			return v, func() tea.Msg { return fail(readErr) }
+		}
+		patch, err := parseCardEdit(string(edited), v.card)
+		if err != nil {
+			// Keep the file so the edit isn't lost to a syntax slip.
+			return v, flash(fmt.Sprintf("edit not saved: %v — fix %s and press e", err, msg.path))
+		}
+		os.Remove(msg.path)
+		if emptyPatch(patch) {
+			return v, flash("no changes")
+		}
+		v.busy = true
+		client, boardName, cardID := v.client, v.boardName, v.card.ID
+		prev := v.card.Status
+		return v, func() tea.Msg {
+			card, err := client.PatchCard(context.Background(), boardName, cardID, patch)
+			if err != nil {
+				return fail(err)
+			}
+			if card.Status == board.Done && prev != board.Done {
+				return cardArchivedMsg{board: boardName, card: card, prevStatus: prev}
+			}
+			return cardSavedMsg{card}
+		}
+
+	case cardSavedMsg:
+		v.busy = false
+		if msg.card != nil && msg.card.ID == v.card.ID {
+			status := v.card.Status
+			v.card = *msg.card
+			v.setDescription(msg.card.Description)
+			if msg.card.Status == board.Done && status != board.Done {
+				return v, popView() // card archived out from under this view
+			}
+		}
+		return v, nil
+
+	case cardArchivedMsg:
+		v.busy = false
+		if msg.card != nil && msg.card.ID == v.card.ID {
+			return v, popView() // this card just got archived; back to the list
+		}
+		return v, nil
+
+	case errMsg:
+		v.busy = false
+		return v, nil
+
+	case tea.KeyMsg:
+		if v.find.active() {
+			committed, cmd := v.find.handleKey(msg)
+			if committed {
+				return v, v.searchJump(1)
+			}
+			return v, cmd
+		}
+		if v.commenting {
+			return v.handleCommentKey(msg)
+		}
+		if v.moving {
+			v.moving = false
+			if status, ok := moveKeys[msg.String()]; ok {
+				return v.moveSelf(status)
+			}
+			return v, nil
+		}
+		switch msg.String() {
+		case "j", "down":
+			if v.focus < len(v.checkIdxs)-1 {
+				v.focus++
+			} else {
+				v.offset++
+			}
+		case "k", "up":
+			if v.focus > 0 {
+				v.focus--
+			} else if v.offset > 0 {
+				v.offset--
+			}
+		case " ":
+			if v.busy || len(v.checkIdxs) == 0 {
+				return v, nil
+			}
+			lineIdx := v.checkIdxs[v.focus]
+			m := checkboxLineRe.FindStringSubmatch(v.lines[lineIdx])
+			if m == nil {
+				return v, nil
+			}
+			v.busy = true
+			return v, v.toggleCmd(lineIdx, m[2] == " ")
+		case "d":
+			return v.moveSelf(board.Done)
+		case "m":
+			v.moving = true
+		case "e":
+			if !v.busy {
+				return v, v.editCmd()
+			}
+		case "c":
+			v.commenting = true
+			v.comment.SetValue("")
+			return v, v.comment.Focus()
+		case "/":
+			return v, v.find.start()
+		case "n", "N":
+			if v.find.query != "" {
+				dir := 1
+				if msg.String() == "N" {
+					dir = -1
+				}
+				return v, v.searchJump(dir)
+			}
+		}
+	}
+	return v, nil
+}
+
+func (v *cardView) handleCommentKey(msg tea.KeyMsg) (view, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		v.commenting = false
+		v.comment.Blur()
+		return v, nil
+	case tea.KeyEnter:
+		body := strings.TrimSpace(v.comment.Value())
+		v.commenting = false
+		v.comment.Blur()
+		if body == "" {
+			return v, nil
+		}
+		v.busy = true
+		client, boardName, cardID := v.client, v.boardName, v.card.ID
+		return v, func() tea.Msg {
+			card, err := client.AddComment(context.Background(), boardName, cardID, body)
+			if err != nil {
+				return fail(err)
+			}
+			return cardSavedMsg{card}
+		}
+	}
+	var cmd tea.Cmd
+	v.comment, cmd = v.comment.Update(msg)
+	return v, cmd
 }
 
 // toggleCmd re-fetches the board so the read-modify-write happens against the
@@ -164,117 +328,26 @@ func (v *cardView) toggleCmd(lineIdx int, done bool) tea.Cmd {
 	}
 }
 
-func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {
-	switch msg := msg.(type) {
-	case cardSavedMsg:
-		v.busy = false
-		if msg.card != nil && msg.card.ID == v.card.ID {
-			status := v.card.Status
-			v.card = *msg.card
-			v.setDescription(msg.card.Description)
-			if msg.card.Status == board.Done && status != board.Done {
-				return v, popView() // card archived out from under this view
-			}
-		}
+func (v *cardView) moveSelf(status board.Status) (view, tea.Cmd) {
+	if v.busy || v.card.Status == status {
 		return v, nil
-
-	case cardArchivedMsg:
-		v.busy = false
-		if msg.card != nil && msg.card.ID == v.card.ID {
-			return v, popView() // this card just got archived; back to the list
-		}
-		return v, nil
-
-	case editorDoneMsg:
-		if msg.cardID != v.card.ID {
-			return v, nil
-		}
-		edited, readErr := os.ReadFile(msg.path)
-		os.Remove(msg.path)
-		if msg.err != nil {
-			return v, func() tea.Msg { return fail(msg.err) }
-		}
-		if readErr != nil {
-			return v, func() tea.Msg { return fail(readErr) }
-		}
-		desc := strings.TrimRight(string(edited), "\n")
-		if desc == strings.TrimRight(msg.original, "\n") {
-			return v, flash("no changes")
-		}
-		v.busy = true
-		client, boardName, cardID := v.client, v.boardName, v.card.ID
-		return v, func() tea.Msg {
-			card, err := client.PatchCard(context.Background(), boardName, cardID, apiclient.CardPatch{Description: &desc})
+	}
+	v.busy = true
+	client, boardName, cardID := v.client, v.boardName, v.card.ID
+	prev := v.card.Status
+	return v, func() tea.Msg {
+		if status == board.Done {
+			card, err := client.PatchCard(context.Background(), boardName, cardID, apiclient.CardPatch{Status: &status})
 			if err != nil {
 				return fail(err)
 			}
-			return cardSavedMsg{card}
+			return cardArchivedMsg{board: boardName, card: card, prevStatus: prev}
 		}
-
-	case errMsg:
-		v.busy = false
-		return v, nil
-
-	case tea.KeyMsg:
-		if v.find.active() {
-			committed, cmd := v.find.handleKey(msg)
-			if committed {
-				return v, v.searchJump(1)
-			}
-			return v, cmd
+		if err := client.MoveCard(context.Background(), boardName, cardID, status, ""); err != nil {
+			return fail(err)
 		}
-		if v.moving {
-			v.moving = false
-			if status, ok := moveKeys[msg.String()]; ok {
-				return v.moveSelf(status)
-			}
-			return v, nil
-		}
-		switch msg.String() {
-		case "j", "down":
-			if v.focus < len(v.checkIdxs)-1 {
-				v.focus++
-			} else {
-				v.offset++
-			}
-		case "k", "up":
-			if v.focus > 0 {
-				v.focus--
-			} else if v.offset > 0 {
-				v.offset--
-			}
-		case " ":
-			if v.busy || len(v.checkIdxs) == 0 {
-				return v, nil
-			}
-			lineIdx := v.checkIdxs[v.focus]
-			m := checkboxLineRe.FindStringSubmatch(v.lines[lineIdx])
-			if m == nil {
-				return v, nil
-			}
-			v.busy = true
-			return v, v.toggleCmd(lineIdx, m[2] == " ")
-		case "d":
-			return v.moveSelf(board.Done)
-		case "m":
-			v.moving = true
-		case "e":
-			if !v.busy {
-				return v, v.editCmd()
-			}
-		case "/":
-			return v, v.find.start()
-		case "n", "N":
-			if v.find.query != "" {
-				dir := 1
-				if msg.String() == "N" {
-					dir = -1
-				}
-				return v, v.searchJump(dir)
-			}
-		}
+		return cardSavedMsg{}
 	}
-	return v, nil
 }
 
 // searchJump moves focus (for checkbox hits) or the scroll offset to the
@@ -298,26 +371,38 @@ func (v *cardView) searchJump(dir int) tea.Cmd {
 	return nil
 }
 
-func (v *cardView) moveSelf(status board.Status) (view, tea.Cmd) {
-	if v.busy || v.card.Status == status {
-		return v, nil
+// displayRow is one terminal row of the card body after soft-wrapping.
+type displayRow struct {
+	text string
+	line int // logical description line, or -1 for comments/chrome
+}
+
+func (v *cardView) bodyRows(width int) []displayRow {
+	var rows []displayRow
+	for i, line := range v.lines {
+		for _, wrapped := range wrapLine(line, width) {
+			rows = append(rows, displayRow{text: wrapped, line: i})
+		}
 	}
-	v.busy = true
-	client, boardName, cardID := v.client, v.boardName, v.card.ID
-	prev := v.card.Status
-	return v, func() tea.Msg {
-		if status == board.Done {
-			card, err := client.PatchCard(context.Background(), boardName, cardID, apiclient.CardPatch{Status: &status})
-			if err != nil {
-				return fail(err)
+	rows = append(rows, displayRow{line: -1})
+	header := fmt.Sprintf("Comments (%d)", len(v.card.Comments))
+	if len(v.card.Comments) == 0 {
+		header += " — c to add one"
+	}
+	rows = append(rows, displayRow{text: groupHeaderStyle.Render(header), line: -1})
+	for _, comment := range v.card.Comments {
+		meta := comment.CreatedAt.Local().Format("2006-01-02 15:04")
+		if comment.Author != "" {
+			meta = comment.Author + " · " + meta
+		}
+		rows = append(rows, displayRow{text: dimStyle.Render("· " + meta), line: -1})
+		for _, bodyLine := range strings.Split(comment.Body, "\n") {
+			for _, wrapped := range wrapLine("  "+bodyLine, width) {
+				rows = append(rows, displayRow{text: wrapped, line: -1})
 			}
-			return cardArchivedMsg{board: boardName, card: card, prevStatus: prev}
 		}
-		if err := client.MoveCard(context.Background(), boardName, cardID, status, ""); err != nil {
-			return fail(err)
-		}
-		return cardSavedMsg{}
 	}
+	return rows
 }
 
 func (v *cardView) View(width, height int) string {
@@ -339,50 +424,73 @@ func (v *cardView) View(width, height int) string {
 	b.WriteString(" " + columnTitleStyle.Render(v.card.Title) + "\n")
 	b.WriteString(" " + strings.Join(meta, " · ") + "\n\n")
 
+	bodyWidth := max(20, width-4)
+	rows := v.bodyRows(bodyWidth)
+
 	focusLine := -1
 	if len(v.checkIdxs) > 0 {
 		focusLine = v.checkIdxs[v.focus]
 	}
+	// First display row of the focused logical line, for scroll math.
+	focusRow := -1
+	for i, row := range rows {
+		if row.line == focusLine && focusLine >= 0 {
+			focusRow = i
+			break
+		}
+	}
 	bodyHeight := height - 5
 	start := v.offset
-	if focusLine >= 0 {
-		if focusLine < start {
-			start = focusLine
+	if start > len(rows)-1 {
+		start = max(0, len(rows)-1)
+		v.offset = start
+	}
+	if focusRow >= 0 {
+		if focusRow < start {
+			start = focusRow
 		}
-		if focusLine >= start+bodyHeight {
-			start = focusLine - bodyHeight + 1
+		if focusRow >= start+bodyHeight {
+			start = focusRow - bodyHeight + 1
 		}
 	}
-	end := min(len(v.lines), start+bodyHeight)
+	end := min(len(rows), start+bodyHeight)
 	for i := start; i < end; i++ {
-		b.WriteString(renderDescriptionLine(v.lines[i], i == focusLine) + "\n")
+		row := rows[i]
+		if row.line < 0 {
+			b.WriteString(" " + row.text + "\n")
+			continue
+		}
+		b.WriteString(v.renderBodyRow(row, row.line == focusLine) + "\n")
 	}
-	hint := dimStyle.Render(" space toggle · e edit · d done · m move · / search · esc back")
+
+	hint := dimStyle.Render(" space toggle · e edit · c comment · d done · m move · / search · esc back")
 	if len(v.checkIdxs) == 0 {
-		hint = dimStyle.Render(" (no checklist — e edit, d done, m move, esc back)")
-		b.WriteString("\n")
+		hint = dimStyle.Render(" (no checklist — e edit, c comment, d done, m move, esc back)")
 	}
 	if bar := v.find.bar(); bar != "" {
 		hint = " " + bar
+	}
+	if v.commenting {
+		hint = " " + v.comment.View()
 	}
 	b.WriteString(hint)
 	return b.String()
 }
 
-func renderDescriptionLine(line string, focused bool) string {
+func (v *cardView) renderBodyRow(row displayRow, focused bool) string {
 	prefix := "  "
-	if focused {
+	if focused && strings.TrimSpace(row.text) != "" {
 		prefix = cursorStyle.Render("▸ ")
 	}
-	if m := checkboxLineRe.FindStringSubmatch(line); m != nil {
-		checked := m[2] != " "
-		rendered := line
-		if checked {
-			rendered = doneStyle.Render(line)
+	text := row.text
+	if m := checkboxLineRe.FindStringSubmatch(v.lines[row.line]); m != nil {
+		if m[2] != " " {
+			text = doneStyle.Render(text)
 		} else if focused {
-			rendered = cursorStyle.Render(line)
+			text = cursorStyle.Render(text)
 		}
-		return prefix + rendered
+	} else if v.find.query != "" {
+		text = highlight(text, v.find.query)
 	}
-	return prefix + line
+	return prefix + text
 }

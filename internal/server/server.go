@@ -136,6 +136,7 @@ func New(cfg config.Config) (*Server, error) {
 
 	s.mux.HandleFunc("GET /api/search", s.handleSearch)
 	s.mux.HandleFunc("GET /api/contentIndex", s.handleContentIndex)
+	s.mux.HandleFunc("GET /api/note", s.handleNoteRaw)
 	s.mux.HandleFunc("GET /api/tasks", s.handleTasksAPI)
 	s.mux.HandleFunc("POST /api/tasks/toggle", s.handleTaskToggle)
 	s.mux.HandleFunc("POST /api/tasks/due", s.handleTaskDue)
