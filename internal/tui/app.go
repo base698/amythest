@@ -1,0 +1,257 @@
+// Package tui is the amy terminal UI: a view stack over the apiclient.
+// Views are pure bubbletea-style models; all I/O happens in tea.Cmd
+// goroutines that resolve to the typed messages below.
+package tui
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/spinner"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/base698/amythest/internal/apiclient"
+	"github.com/base698/amythest/internal/kanban/board"
+)
+
+// view is one screen in the navigation stack. Update returns the replacement
+// view (usually itself) plus any command; View renders into the given box.
+type view interface {
+	Init() tea.Cmd
+	Update(msg tea.Msg) (view, tea.Cmd)
+	View(width, height int) string
+	Title() string
+	Busy() bool
+	// Capturing reports that the view has a text input open (search or a
+	// prompt) and must receive every key, including ones the root App
+	// would otherwise treat as global.
+	Capturing() bool
+}
+
+// Navigation and data messages. Non-key messages are delivered to every view
+// in the stack so a parent (e.g. the board view) can refresh itself when a
+// child's mutation lands.
+type (
+	pushMsg  struct{ v view }
+	popMsg   struct{}
+	errMsg   struct{ err error }
+	flashMsg struct{ text string }
+
+	tasksLoadedMsg   struct{ groups []apiclient.TaskGroup }
+	taskToggledMsg   struct{ recurred bool }
+	boardsLoadedMsg  struct{ boards []board.BoardSummary }
+	boardLoadedMsg   struct{ b *board.Board }
+	archiveLoadedMsg struct {
+		board string
+		cards []board.Card
+	}
+	cardSavedMsg struct{ card *board.Card }
+)
+
+func pushView(v view) tea.Cmd  { return func() tea.Msg { return pushMsg{v} } }
+func popView() tea.Cmd         { return func() tea.Msg { return popMsg{} } }
+func fail(err error) tea.Msg   { return errMsg{err} }
+func flash(text string) tea.Cmd {
+	return func() tea.Msg { return flashMsg{text} }
+}
+
+type App struct {
+	client *apiclient.Client
+	stack  []view
+	width  int
+	height int
+	spin   spinner.Model
+	status string
+	help   bool
+}
+
+func NewApp(client *apiclient.Client) *App {
+	sp := spinner.New()
+	sp.Spinner = spinner.MiniDot
+	return &App{
+		client: client,
+		stack:  []view{newTodayView(client)},
+		spin:   sp,
+	}
+}
+
+// shimmerMsg drives the gem animation; the root re-arms the tick only while
+// the today view is on top so other screens stay idle.
+type shimmerMsg struct{}
+
+func shimmerTick() tea.Cmd {
+	return tea.Tick(140*time.Millisecond, func(time.Time) tea.Msg { return shimmerMsg{} })
+}
+
+func (a *App) Init() tea.Cmd {
+	return tea.Batch(a.stack[0].Init(), a.spin.Tick, shimmerTick())
+}
+
+func (a *App) top() view { return a.stack[len(a.stack)-1] }
+
+// restartShimmer re-arms the gem animation when navigation lands back on the
+// today view. Duplicate ticks from rapid nav collapse harmlessly: extras stop
+// on the next non-today frame.
+func (a *App) restartShimmer() tea.Cmd {
+	if _, ok := a.top().(*todayView); ok {
+		return shimmerTick()
+	}
+	return nil
+}
+
+func (a *App) busy() bool {
+	for _, v := range a.stack {
+		if v.Busy() {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		a.width, a.height = msg.Width, msg.Height
+		return a, nil
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		a.spin, cmd = a.spin.Update(msg)
+		return a, cmd
+
+	case shimmerMsg:
+		if tv, ok := a.top().(*todayView); ok {
+			tv.phase++
+			return a, shimmerTick()
+		}
+		return a, nil
+
+	case pushMsg:
+		a.stack = append(a.stack, msg.v)
+		a.status = ""
+		return a, msg.v.Init()
+
+	case popMsg:
+		if len(a.stack) > 1 {
+			a.stack = a.stack[:len(a.stack)-1]
+		}
+		return a, a.restartShimmer()
+
+	case errMsg:
+		a.status = "error: " + msg.err.Error()
+		return a, nil
+
+	case flashMsg:
+		a.status = msg.text
+		return a, nil
+
+	case tea.KeyMsg:
+		if a.status != "" {
+			a.status = "" // any key dismisses the last error/notice
+		}
+		// A view with an open text input gets every key except ctrl+c.
+		if a.top().Capturing() && msg.String() != "ctrl+c" {
+			next, cmd := a.top().Update(msg)
+			a.stack[len(a.stack)-1] = next
+			return a, cmd
+		}
+		switch msg.String() {
+		case "ctrl+c", "q":
+			return a, tea.Quit
+		case "?":
+			a.help = !a.help
+			return a, nil
+		case "esc", "backspace":
+			if len(a.stack) > 1 {
+				a.stack = a.stack[:len(a.stack)-1]
+				return a, a.restartShimmer()
+			}
+			return a, nil
+		case "1":
+			a.stack = []view{newTodayView(a.client)}
+			return a, tea.Batch(a.top().Init(), shimmerTick())
+		case "2":
+			a.stack = []view{newTasksView(a.client)}
+			return a, a.top().Init()
+		case "3":
+			a.stack = []view{newBoardsView(a.client)}
+			return a, a.top().Init()
+		}
+		next, cmd := a.top().Update(msg)
+		a.stack[len(a.stack)-1] = next
+		return a, cmd
+	}
+
+	// Data messages go to every view so parents can react to child mutations.
+	var cmds []tea.Cmd
+	for i, v := range a.stack {
+		next, cmd := v.Update(msg)
+		a.stack[i] = next
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return a, tea.Batch(cmds...)
+}
+
+func (a *App) View() string {
+	if a.width == 0 {
+		return "loading…"
+	}
+	body := a.top().View(a.width, a.height-2)
+	if a.help {
+		body = helpText
+	}
+	crumbs := make([]string, len(a.stack))
+	for i, v := range a.stack {
+		crumbs[i] = v.Title()
+	}
+	header := headerStyle.Width(a.width).Render(" amy · " + strings.Join(crumbs, " › "))
+
+	status := a.status
+	if status == "" {
+		user := a.client.User()
+		if user != "" {
+			user = " · " + user
+		}
+		status = fmt.Sprintf("%s%s · ? help · q quit", a.client.Endpoint(), user)
+	}
+	if a.busy() {
+		status = a.spin.View() + " " + status
+	}
+	bar := statusStyle.Width(a.width).Render(" " + status)
+
+	lines := strings.Split(body, "\n")
+	max := a.height - 2
+	if len(lines) > max {
+		lines = lines[:max]
+	}
+	for len(lines) < max {
+		lines = append(lines, "")
+	}
+	return header + "\n" + strings.Join(lines, "\n") + "\n" + bar
+}
+
+const helpText = `
+  Keys
+
+  j/k or arrows   move cursor
+  h/l             switch board column
+  enter           open board / card
+  space           toggle task, checkbox, or complete card
+  d               mark card done (archives it)
+  m then t/b/y/i/v/d
+                  move card to triage/backlog/ready/
+                  in_progress/verify/done
+  e               edit: task due date, or card
+                  description in $EDITOR
+  /               search (enter commit, esc cancel)
+  n / N           next / previous match
+  p               cycle task query preset (tasks view)
+  r               refresh current view
+  1 / 2 / 3       today / tasks / boards
+  esc             back
+  ?               close help
+  q               quit
+`
