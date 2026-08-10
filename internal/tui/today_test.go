@@ -57,7 +57,7 @@ func TestTodayViewRendersSectionsAndKinds(t *testing.T) {
 		}
 	}
 	wide := tv.View(140, 40) // wide: gem appears
-	if !strings.Contains(wide, "a m y t h e s t") {
+	if !strings.Contains(wide, "amythest") {
 		t.Fatalf("gem caption missing in wide render")
 	}
 }
@@ -106,7 +106,7 @@ func TestGemShimmerChangesBetweenPhasesButKeepsShape(t *testing.T) {
 	if stripA != stripB {
 		t.Fatal("shimmer must only change colors, not characters")
 	}
-	if !strings.Contains(stripA, "a m y t h e s t") {
+	if !strings.Contains(stripA, "amythest") {
 		t.Fatal("caption missing")
 	}
 }
