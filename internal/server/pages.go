@@ -2,8 +2,11 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -63,6 +66,19 @@ func (s *Server) handleNote(w http.ResponseWriter, r *http.Request) {
 	if !ok && slug == "" {
 		n, ok = v.Resolve("Home")
 	}
+	if ok && s.noteOutOfSync(v, n) {
+		// An out-of-band edit (git pull, iCloud sync) landed since the last
+		// rescan. Reconcile before rendering so the page — including the task
+		// versions embedded in its rows — matches what mutations validate
+		// against; otherwise their 409 "refresh and retry" stays false until
+		// the periodic rescan fires.
+		if err := s.Rescan(); err != nil {
+			slog.Warn("stale-note rescan", "slug", n.Slug, "err", err)
+		} else {
+			v = s.vault.Load()
+			n, ok = v.BySlug(n.Slug)
+		}
+	}
 	if !ok {
 		if s.tryFolderPage(w, v, slug) {
 			return
@@ -117,6 +133,20 @@ func (s *Server) handleNote(w http.ResponseWriter, r *http.Request) {
 		Slug:        n.Slug,
 		Backlinks:   backlinks,
 	})
+}
+
+// noteOutOfSync reports whether a note's on-disk content no longer matches
+// the snapshot hash — the signature of an out-of-band edit (git pull, iCloud
+// sync) landing between periodic rescans. A read failure counts as out of
+// sync so a deleted note 404s on the next request instead of at the next
+// timer tick.
+func (s *Server) noteOutOfSync(v *vault.Vault, n *vault.Note) bool {
+	src, err := os.ReadFile(filepath.Join(v.Root, filepath.FromSlash(n.Path)))
+	if err != nil {
+		return true
+	}
+	sum := sha256.Sum256(src)
+	return hex.EncodeToString(sum[:]) != n.Hash
 }
 
 // tryFolderPage renders a listing when the slug names a folder.
