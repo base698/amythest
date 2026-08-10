@@ -204,6 +204,43 @@ func (c *Client) SetTaskDue(ctx context.Context, t tasks.Task, due string) error
 	return c.do(ctx, http.MethodPost, "/api/tasks/due", body, &out)
 }
 
+// --------------------------------------------------------------------- notes
+
+type SearchResult struct {
+	Slug     string `json:"slug"`
+	Title    string `json:"title"`
+	Excerpt  string `json:"excerpt"` // server-escaped HTML snippet with <b> marks
+	Archived bool   `json:"archived"`
+}
+
+// SearchNotes runs the server-side FTS query over the vault.
+func (c *Client) SearchNotes(ctx context.Context, query string) ([]SearchResult, error) {
+	var results []SearchResult
+	path := "/api/search?q=" + url.QueryEscape(query)
+	if err := c.do(ctx, http.MethodGet, path, nil, &results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+type Note struct {
+	Slug     string `json:"slug"`
+	Title    string `json:"title"`
+	Path     string `json:"path"`
+	Markdown string `json:"markdown"`
+}
+
+// GetNote fetches a note's raw markdown. ref may be a slug or a raw
+// [[wikilink]] target — the server resolves both.
+func (c *Client) GetNote(ctx context.Context, ref string) (*Note, error) {
+	var note Note
+	path := "/api/note?slug=" + url.QueryEscape(ref)
+	if err := c.do(ctx, http.MethodGet, path, nil, &note); err != nil {
+		return nil, err
+	}
+	return &note, nil
+}
+
 // -------------------------------------------------------------------- kanban
 
 func (c *Client) ListBoards(ctx context.Context) ([]board.BoardSummary, error) {
@@ -253,6 +290,19 @@ func (c *Client) PatchCard(ctx context.Context, boardName, cardID string, patch 
 	var card board.Card
 	path := "/kanban/api/boards/" + url.PathEscape(boardName) + "/cards/" + url.PathEscape(cardID)
 	if err := c.do(ctx, http.MethodPut, path, patch, &card); err != nil {
+		return nil, err
+	}
+	return &card, nil
+}
+
+// AddComment appends a comment to a card and returns the updated card.
+func (c *Client) AddComment(ctx context.Context, boardName, cardID, bodyText string) (*board.Card, error) {
+	body := struct {
+		Body string `json:"body"`
+	}{bodyText}
+	var card board.Card
+	path := "/kanban/api/boards/" + url.PathEscape(boardName) + "/cards/" + url.PathEscape(cardID) + "/comments"
+	if err := c.do(ctx, http.MethodPost, path, body, &card); err != nil {
 		return nil, err
 	}
 	return &card, nil

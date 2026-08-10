@@ -203,7 +203,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "3":
 			a.stack = []view{newBoardsView(a.client)}
 			return a, a.top().Init()
+		case "4":
+			a.stack = []view{newNotesView(a.client)}
+			return a, a.top().Init()
 		}
+		next, cmd := a.top().Update(msg)
+		a.stack[len(a.stack)-1] = next
+		return a, cmd
+	}
+
+	// A resolved note is a navigation event for whichever view asked for
+	// it; delivering it to the whole stack would push duplicates.
+	if _, ok := msg.(openNoteMsg); ok {
 		next, cmd := a.top().Update(msg)
 		a.stack[len(a.stack)-1] = next
 		return a, cmd
@@ -295,7 +306,10 @@ const helpText = `
   n / N           next / previous match
   p               cycle task query preset (tasks view)
   r               refresh current view
-  1 / 2 / 3       today / tasks / boards
+  1 / 2 / 3 / 4   today / tasks / boards / notes
+  tab / enter     cycle & follow note links (note view)
+  a               send note to a herdr agent (note view)
+  c               comment on a card (card view)
   esc             back
   ?               close help
   q               quit
