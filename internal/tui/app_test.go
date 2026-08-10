@@ -77,3 +77,40 @@ func TestAppRendersTasksNavigatesToBoardsAndBack(t *testing.T) {
 		t.Fatal("expected quit command")
 	}
 }
+
+func TestHelpOverlayClosesOnEscape(t *testing.T) {
+	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
+	app := NewApp(client)
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	app.Update(keyMsg("?"))
+	if !strings.Contains(app.View(), "Keys") {
+		t.Fatal("help should be open")
+	}
+	app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if strings.Contains(app.View(), "j/k or arrows") {
+		t.Fatal("esc must close help")
+	}
+	// Any other key closes it too, without triggering its normal action.
+	app.Update(keyMsg("?"))
+	_, cmd := app.Update(keyMsg("q"))
+	if cmd != nil {
+		t.Fatal("q while help is open must close help, not quit")
+	}
+	if strings.Contains(app.View(), "j/k or arrows") {
+		t.Fatal("q must close help")
+	}
+}
+
+func TestCompletionFeedbackAppearsInStatusBar(t *testing.T) {
+	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
+	app := NewApp(client)
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	app.Update(cardArchivedMsg{board: "personal", card: &board.Card{ID: "c1"}})
+	if !strings.Contains(app.View(), "card archived ✓") {
+		t.Fatalf("no archive feedback in:\n%s", app.View())
+	}
+	app.Update(taskToggledMsg{slug: "s", text: "x", done: true})
+	if !strings.Contains(app.View(), "task completed ✓") {
+		t.Fatal("no toggle feedback")
+	}
+}

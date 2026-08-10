@@ -90,6 +90,63 @@ func TestTodayViewSlashSearchJumpsAndNCycles(t *testing.T) {
 	}
 }
 
+func TestTodayViewDKeyCompletesCardAndSpaceUndoes(t *testing.T) {
+	v := newTodayView(nil)
+	next, _ := v.Update(loadedToday())
+	tv := next.(*todayView)
+	// Move to the focus card (first row).
+	if tv.current().card == nil {
+		t.Fatalf("expected card first: %+v", tv.current())
+	}
+	_, cmd := tv.Update(keyMsg("d"))
+	if cmd == nil || !tv.Busy() {
+		t.Fatal("d on a card must start the archive request")
+	}
+	// Server confirms: item stays in the list, marked done.
+	archived := *tv.current().card
+	archived.Status = board.Done
+	tv.Update(cardArchivedMsg{board: "work", card: &archived, prevStatus: board.InProgress})
+	if !tv.current().isDone() {
+		t.Fatal("card should be marked done in place")
+	}
+	out := tv.View(80, 30)
+	if !strings.Contains(out, "Ship the release ✓") {
+		t.Fatalf("done marker missing:\n%s", out)
+	}
+	// Space now restores to the recorded previous column.
+	_, cmd = tv.Update(keyMsg(" "))
+	if cmd == nil || !tv.Busy() {
+		t.Fatal("space on a done card must start the restore request")
+	}
+	tv.Update(cardRestoredMsg{board: "work", cardID: "f1", status: board.InProgress})
+	if tv.current().isDone() {
+		t.Fatal("card should be unmarked after restore")
+	}
+}
+
+func TestTodayViewTaskToggleMarksInPlace(t *testing.T) {
+	v := newTodayView(nil)
+	next, _ := v.Update(loadedToday())
+	tv := next.(*todayView)
+	tv.Update(keyMsg("j")) // onto the overdue task
+	task := tv.current().task
+	if task == nil || task.Text != "water the ferns" {
+		t.Fatalf("cursor on %+v", tv.current())
+	}
+	_, cmd := tv.Update(keyMsg(" "))
+	if cmd == nil {
+		t.Fatal("space must start the toggle")
+	}
+	tv.Update(taskToggledMsg{slug: task.Slug, text: task.Text, done: true})
+	if !tv.current().isDone() {
+		t.Fatal("task should be marked done in place, not vanish")
+	}
+	out := tv.View(80, 30)
+	if !strings.Contains(out, "water the ferns ✓") {
+		t.Fatalf("done marker missing:\n%s", out)
+	}
+}
+
 func TestGemShimmerChangesBetweenPhasesButKeepsShape(t *testing.T) {
 	// Test runners have no TTY, so lipgloss would strip all color and both
 	// phases would collapse to the same string; force a profile.

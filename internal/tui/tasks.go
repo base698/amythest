@@ -66,30 +66,43 @@ func (v *tasksView) loadCmd() tea.Cmd {
 	}
 }
 
-// toggleCmd toggles the task; on a stale-version conflict it re-queries,
-// re-locates the task by (slug, text) — text is metadata-stripped and stable
-// — and retries exactly once with the fresh line and version.
-func (v *tasksView) toggleCmd(t tasks.Task, done bool) tea.Cmd {
-	client := v.client
-	query := taskPresets[v.preset]
+// toggleTaskCmd toggles a vault task. On a stale-version conflict it re-finds
+// the task by (slug, text) — text is metadata-stripped and stable — and
+// retries exactly once. The retry query is status-agnostic so that reopening
+// a completed task works even when the view's own query filters to "not done".
+func toggleTaskCmd(client *apiclient.Client, t tasks.Task, done bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		recurred, err := client.ToggleTask(ctx, t.Slug, t.Line, t.Version, done)
 		if errors.Is(err, apiclient.ErrConflict) {
-			groups, qerr := client.ListTasks(ctx, query)
+			groups, qerr := client.ListTasks(ctx, "description includes "+t.Text)
 			if qerr != nil {
 				return fail(qerr)
 			}
 			fresh, ok := findTask(groups, t.Slug, t.Text)
 			if !ok {
-				return fail(fmt.Errorf("task changed on server; list refreshed"))
+				return fail(fmt.Errorf("task changed on server; refresh (r) and retry"))
 			}
 			recurred, err = client.ToggleTask(ctx, fresh.Slug, fresh.Line, fresh.Version, done)
 		}
 		if err != nil {
 			return fail(err)
 		}
-		return taskToggledMsg{recurred}
+		return taskToggledMsg{slug: t.Slug, text: t.Text, done: done, recurred: recurred}
+	}
+}
+
+// applyTaskToggle flips a task's status in place so the row stays visible
+// (struck through) instead of vanishing on an immediate reload — that both
+// shows the change happened and leaves space-to-undo available. The stale
+// version it leaves behind self-heals through the 409 retry above.
+func applyTaskToggle(t *tasks.Task, done bool, today string) {
+	if done {
+		t.Status = tasks.StatusDone
+		t.DoneDate = today
+	} else {
+		t.Status = tasks.StatusOpen
+		t.DoneDate = ""
 	}
 }
 
@@ -117,8 +130,19 @@ func (v *tasksView) Update(msg tea.Msg) (view, tea.Cmd) {
 		return v, nil
 
 	case taskToggledMsg:
-		v.busy = true
-		return v, v.loadCmd()
+		v.busy = false
+		if msg.recurred {
+			// The recurrence rewrote line numbers; a reload is the only
+			// safe way to keep them addressable.
+			v.busy = true
+			return v, v.loadCmd()
+		}
+		for _, row := range v.rows {
+			if row.task != nil && row.task.Slug == msg.slug && row.task.Text == msg.text {
+				applyTaskToggle(row.task, msg.done, v.now().Format("2006-01-02"))
+			}
+		}
+		return v, nil
 
 	case errMsg:
 		v.busy = false
@@ -192,10 +216,10 @@ func (v *tasksView) Update(msg tea.Msg) (view, tea.Cmd) {
 			switch t.Status {
 			case tasks.StatusOpen:
 				v.busy = true
-				return v, v.toggleCmd(*t, true)
+				return v, toggleTaskCmd(v.client, *t, true)
 			case tasks.StatusDone:
 				v.busy = true
-				return v, v.toggleCmd(*t, false)
+				return v, toggleTaskCmd(v.client, *t, false)
 			default:
 				return v, flash("only open/done tasks can be toggled")
 			}
