@@ -10,25 +10,19 @@ import (
 // comes from sweeping a purple gradient diagonally across the facets, with a
 // white sparkle that orbits the outline.
 var gemArt = []string{
-	`        ________        `,
-	`      /\        /\      `,
-	`     /  \      /  \     `,
-	`    /    \    /    \    `,
-	`   / _____\  /_____ \   `,
-	`  /_/      \/      \_\  `,
-	`  \ \      /\      / /  `,
-	`   \ \    /  \    / /   `,
-	`    \ \  /    \  / /    `,
-	`     \ \/______\/ /     `,
-	`      \    /\    /      `,
-	`       \  /  \  /       `,
-	`        \/____\/        `,
-	`         \    /         `,
-	`          \  /          `,
-	`           \/           `,
+	`    ______    `,
+	`   /\    /\   `,
+	`  /  \  /  \  `,
+	` /____\/____\ `,
+	` \    /\    / `,
+	`  \  /  \  /  `,
+	`   \/____\/   `,
+	`    \    /    `,
+	`     \  /     `,
+	`      \/      `,
 }
 
-const gemCaption = "a m y t h e s t"
+const gemCaption = "amythest"
 
 // Purple-to-lavender sweep; index by (col+row+phase) so the band moves
 // diagonally, which reads as light passing over the stone.
