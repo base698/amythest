@@ -4,8 +4,11 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/base698/amythest/internal/apiclient"
+	"github.com/base698/amythest/internal/herdr"
 	"github.com/base698/amythest/internal/kanban/board"
 )
 
@@ -115,6 +118,51 @@ func TestCardViewShowsCommentsAndWrapsLongLines(t *testing.T) {
 	}
 	if !strings.Contains(out, "Comments (1)") || !strings.Contains(out, "first comment") {
 		t.Fatalf("comments missing:\n%s", out)
+	}
+}
+
+func TestCardContextPromptIncludesMetadataDescriptionAndComments(t *testing.T) {
+	card := editFixtureCard()
+	card.Blocked = true
+	card.Comments = []board.Comment{{Author: "sam", Body: "check the feeder"}}
+	prompt := cardContextPrompt(card, "personal", "https://host/notes")
+	for _, want := range []string{
+		`card "Weekend chores"`, "board personal", "https://host/notes/kanban/",
+		"status: ready", "priority: p2", "due: 2026-08-10", "labels: home", "BLOCKED",
+		"refill bird feeder", "Comments:", "sam", "check the feeder",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestCardViewAKeyOpensAgentPickerAndEscCloses(t *testing.T) {
+	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
+	v := newCardView(client, "personal", editFixtureCard())
+	_, cmd := v.Update(keyMsg("a"))
+	if cmd == nil || !v.Busy() {
+		t.Fatal("a must fetch the agent list")
+	}
+	v.Update(cardAgentsMsg{cardID: "c1", agents: []herdr.Agent{{PaneID: "w1:p1", Agent: "claude", Status: "idle", Title: "helper"}}})
+	if !v.agents.active || !v.Capturing() {
+		t.Fatal("agent picker should be open and capturing")
+	}
+	out := v.View(120, 40)
+	if !strings.Contains(out, "Send to agent") || !strings.Contains(out, "claude [idle] helper") {
+		t.Fatalf("picker render:\n%s", out)
+	}
+	v.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if v.agents.active {
+		t.Fatal("esc must close the agent picker")
+	}
+	// Enter after reopening picks the agent and starts the send.
+	v.busy = false
+	v.Update(keyMsg("a"))
+	v.Update(cardAgentsMsg{cardID: "c1", agents: []herdr.Agent{{PaneID: "w1:p1"}}})
+	_, cmd = v.Update(enterMsg())
+	if cmd == nil || !v.Busy() {
+		t.Fatal("enter must start the send")
 	}
 }
 
