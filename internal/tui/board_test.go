@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/base698/amythest/internal/kanban/board"
 )
@@ -68,18 +71,52 @@ func TestBoardViewFocusingDoneColumnRequestsArchive(t *testing.T) {
 	}
 }
 
-func TestBoardViewMovePromptThenStatusKeyStartsMove(t *testing.T) {
+func TestBoardViewMoveOpensPickerWithLanesAndBoards(t *testing.T) {
+	v := newBoardView(nil, "personal")
+	next, _ := v.Update(loadedBoard())
+	bv := next.(*boardView)
+	_, cmd := bv.Update(keyMsg("m"))
+	if cmd == nil || !bv.Busy() {
+		t.Fatal("m must fetch the board list for the picker")
+	}
+	bv.Update(boardMovePickerMsg{board: "personal", cardID: "a", boards: []board.BoardSummary{
+		{Name: "personal", DisplayName: "Personal"},
+		{Name: "work", DisplayName: "Work"},
+		{Name: "old", Archived: true},
+	}})
+	if !bv.picker.active || !bv.Capturing() {
+		t.Fatal("picker should be open and capturing")
+	}
+	// 6 lanes + only the non-archived, non-current board.
+	if len(bv.picker.options) != 7 {
+		t.Fatalf("options = %+v", bv.picker.options)
+	}
+	out := bv.View(120, 40)
+	if !strings.Contains(out, "→ board: Work") || !strings.Contains(out, "(current)") {
+		t.Fatalf("picker render:\n%s", out)
+	}
+	// Cursor starts on the current lane (Triage for card "a"); j + enter
+	// chooses Backlog and closes the picker.
+	next2, cmd := bv.Update(keyMsg("j"))
+	bv = next2.(*boardView)
+	next2, cmd = bv.Update(enterMsg())
+	bv = next2.(*boardView)
+	if bv.picker.active || cmd == nil || !bv.Busy() {
+		t.Fatal("enter on a lane must start the move")
+	}
+}
+
+func TestBoardViewPickerEscCancels(t *testing.T) {
 	v := newBoardView(nil, "personal")
 	next, _ := v.Update(loadedBoard())
 	bv := next.(*boardView)
 	bv.Update(keyMsg("m"))
-	if !bv.moving {
-		t.Fatal("m should arm the move prompt")
+	bv.Update(boardMovePickerMsg{board: "personal", cardID: "a", boards: nil})
+	if !bv.picker.active {
+		t.Fatal("picker should be open")
 	}
-	// A cross-board test client isn't wired here; verify arming resets and
-	// that an unknown key cancels cleanly instead of moving.
-	bv.Update(keyMsg("x"))
-	if bv.moving || bv.Busy() {
-		t.Fatal("unknown key should cancel the move prompt")
+	bv.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if bv.picker.active || bv.Busy() {
+		t.Fatal("esc must close the picker without moving")
 	}
 }

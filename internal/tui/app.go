@@ -176,11 +176,25 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.help = false
 			return a, nil
 		}
-		// A view with an open text input gets every key except ctrl+c.
+		// A view with an open text input gets every key except ctrl+c —
+		// including multi-rune messages, which are pastes there.
 		if a.top().Capturing() && msg.String() != "ctrl+c" {
 			next, cmd := a.top().Update(msg)
 			a.stack[len(a.stack)-1] = next
 			return a, cmd
+		}
+		// Outside text inputs, fast input (key repeat, automation) can
+		// coalesce several runes into one KeyMsg ("jjj"), which would match
+		// no binding; replay them as individual keypresses.
+		if msg.Type == tea.KeyRunes && len(msg.Runes) > 1 {
+			var cmds []tea.Cmd
+			for _, r := range msg.Runes {
+				_, cmd := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			}
+			return a, tea.Batch(cmds...)
 		}
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -236,6 +250,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.status = "card archived ✓ — space on it in today (1) restores"
 	case cardRestoredMsg:
 		a.status = fmt.Sprintf("card restored to %s", msg.status)
+	case cardMovedBoardMsg:
+		a.status = fmt.Sprintf("card moved to %s ✓", msg.to)
 	}
 
 	// Data messages go to every view so parents can react to child mutations.
@@ -296,9 +312,8 @@ const helpText = `
   enter           open board / card
   space           toggle task, checkbox, or complete card
   d               mark card done (archives it)
-  m then t/b/y/i/v/d
-                  move card to triage/backlog/ready/
-                  in_progress/verify/done
+  m               move card: picker with lanes and
+                  other boards (t/b/y/i/v/d shortcuts)
   e               edit: task due date, or card
                   description in $EDITOR
   x               show/hide "Done today" (today view)

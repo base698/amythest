@@ -93,6 +93,17 @@ func newFakeServer(t *testing.T) *fakeServer {
 			"comments": []map[string]any{{"id": "cm1", "body": payload.Body}},
 		})
 	}))
+	mux.HandleFunc("POST /kanban/api/boards/{board}/cards/{card}/board", authed(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			DestinationBoard string `json:"destinationBoard"`
+			Confirm          bool   `json:"confirm"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.DestinationBoard == "" || !payload.Confirm {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"id": r.PathValue("card")})
+	}))
 	mux.HandleFunc("PUT /kanban/api/boards/{board}/cards/{card}", authed(func(w http.ResponseWriter, r *http.Request) {
 		var patch map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
@@ -256,6 +267,17 @@ func TestAddCommentPostsWithCSRFAndReturnsCard(t *testing.T) {
 	}
 	if got := srv.sawCSRF["/kanban/api/boards/personal/cards/c3/comments"]; got != "csrf-token" {
 		t.Fatalf("comment CSRF = %q", got)
+	}
+}
+
+func TestMoveCardToBoardPostsConfirmedTransfer(t *testing.T) {
+	srv := newFakeServer(t)
+	c := testClient(t, srv)
+	if err := c.MoveCardToBoard(context.Background(), "personal", "c7", "work"); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.sawCSRF["/kanban/api/boards/personal/cards/c7/board"]; got != "csrf-token" {
+		t.Fatalf("transfer CSRF = %q", got)
 	}
 }
 
