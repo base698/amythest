@@ -190,6 +190,22 @@ func (v *boardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.busy = true
 		return v, v.loadCmd()
 
+	case cardArchivedMsg:
+		if msg.board != v.name {
+			return v, nil
+		}
+		v.busy = true
+		v.archiveLoaded = false // the done column just gained a card
+		return v, tea.Batch(v.loadCmd(), v.maybeLoadArchive())
+
+	case cardRestoredMsg:
+		if msg.board != v.name {
+			return v, nil
+		}
+		v.busy = true
+		v.archiveLoaded = false
+		return v, tea.Batch(v.loadCmd(), v.maybeLoadArchive())
+
 	case errMsg:
 		v.busy = false
 		return v, nil
@@ -280,19 +296,28 @@ func (v *boardView) moveCurrent(status board.Status) (view, tea.Cmd) {
 		return v, nil
 	}
 	if boardColumns[v.col] == board.Done {
-		return v, flash("archived cards are restored from the web UI")
+		// m+key on an archived card restores it into that column.
+		v.busy = true
+		client, name, id := v.client, v.name, card.ID
+		return v, func() tea.Msg {
+			if err := client.RestoreCard(context.Background(), name, id, status); err != nil {
+				return fail(err)
+			}
+			return cardRestoredMsg{board: name, cardID: id, status: status}
+		}
 	}
 	v.busy = true
-	client, name, id := v.client, v.name, card.ID
+	client, name, id, prev := v.client, v.name, card.ID, card.Status
 	return v, func() tea.Msg {
-		var err error
 		if status == board.Done {
 			done := board.Done
-			_, err = client.PatchCard(context.Background(), name, id, apiclient.CardPatch{Status: &done})
-		} else {
-			err = client.MoveCard(context.Background(), name, id, status, "")
+			saved, err := client.PatchCard(context.Background(), name, id, apiclient.CardPatch{Status: &done})
+			if err != nil {
+				return fail(err)
+			}
+			return cardArchivedMsg{board: name, card: saved, prevStatus: prev}
 		}
-		if err != nil {
+		if err := client.MoveCard(context.Background(), name, id, status, ""); err != nil {
 			return fail(err)
 		}
 		return cardSavedMsg{}

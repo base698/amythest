@@ -178,6 +178,13 @@ func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		}
 		return v, nil
 
+	case cardArchivedMsg:
+		v.busy = false
+		if msg.card != nil && msg.card.ID == v.card.ID {
+			return v, popView() // this card just got archived; back to the list
+		}
+		return v, nil
+
 	case editorDoneMsg:
 		if msg.cardID != v.card.ID {
 			return v, nil
@@ -297,13 +304,14 @@ func (v *cardView) moveSelf(status board.Status) (view, tea.Cmd) {
 	}
 	v.busy = true
 	client, boardName, cardID := v.client, v.boardName, v.card.ID
+	prev := v.card.Status
 	return v, func() tea.Msg {
 		if status == board.Done {
 			card, err := client.PatchCard(context.Background(), boardName, cardID, apiclient.CardPatch{Status: &status})
 			if err != nil {
 				return fail(err)
 			}
-			return cardSavedMsg{card}
+			return cardArchivedMsg{board: boardName, card: card, prevStatus: prev}
 		}
 		if err := client.MoveCard(context.Background(), boardName, cardID, status, ""); err != nil {
 			return fail(err)

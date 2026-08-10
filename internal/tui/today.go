@@ -2,8 +2,6 @@ package tui
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -19,10 +17,21 @@ import (
 // todayItem is one row of the focus view: either a vault task or a kanban
 // card, normalized so toggling/searching/rendering can treat them alike.
 type todayItem struct {
-	section string // "Focus" | "Overdue" | "Due today"
+	section string // "Focus" | "Overdue" | "Due today" | "Done today"
 	task    *tasks.Task
 	card    *board.Card
 	board   string // owning board for cards
+	// done marks a card completed (archived); prevStatus is where space
+	// restores it to. Task doneness lives on task.Status.
+	done       bool
+	prevStatus board.Status
+}
+
+func (it todayItem) isDone() bool {
+	if it.task != nil {
+		return it.task.Status == tasks.StatusDone
+	}
+	return it.done
 }
 
 func (it todayItem) text() string {
@@ -42,16 +51,17 @@ func (it todayItem) due() string {
 type todayLoadedMsg struct{ items []todayItem }
 
 type todayView struct {
-	client *apiclient.Client
-	items  []todayItem
-	cursor int
-	offset int
-	busy   bool
-	loaded bool
-	phase  int // shimmer phase, advanced by the root App
-	find   finder
-	prompt duePrompt
-	now    func() time.Time
+	client   *apiclient.Client
+	items    []todayItem
+	cursor   int
+	offset   int
+	busy     bool
+	loaded   bool
+	showDone bool // "x": include the Done-today section
+	phase    int  // shimmer phase, advanced by the root App
+	find     finder
+	prompt   duePrompt
+	now      func() time.Time
 }
 
 func newTodayView(client *apiclient.Client) *todayView {
@@ -71,9 +81,12 @@ func (v *todayView) Init() tea.Cmd {
 
 // loadCmd assembles the focus list: overdue/today vault tasks plus kanban
 // cards that are due (or explicitly focused via the board's focus card).
+// With showDone it also gathers what was finished today, so a completion can
+// always be seen — and undone — after the fact.
 func (v *todayView) loadCmd() tea.Cmd {
 	client := v.client
 	today := v.now().Format("2006-01-02")
+	showDone := v.showDone
 	return func() tea.Msg {
 		ctx := context.Background()
 		groups, err := client.ListTasks(ctx, "not done;due before tomorrow;sort by due")
@@ -92,6 +105,21 @@ func (v *todayView) loadCmd() tea.Cmd {
 					section = "Overdue"
 				}
 				items = append(items, todayItem{section: section, task: t})
+			}
+		}
+		if showDone {
+			doneGroups, err := client.ListTasks(ctx, "done;done on today")
+			if err != nil {
+				return fail(err)
+			}
+			for gi := range doneGroups {
+				for ti := range doneGroups[gi].Tasks {
+					t := &doneGroups[gi].Tasks[ti]
+					if strings.HasPrefix(t.Path, "kanban/") {
+						continue
+					}
+					items = append(items, todayItem{section: "Done today", task: t})
+				}
 			}
 		}
 		boards, err := client.ListBoards(ctx)
@@ -119,13 +147,29 @@ func (v *todayView) loadCmd() tea.Cmd {
 					items = append(items, todayItem{section: section, card: &b.Cards[i], board: b.Name})
 				}
 			}
+			if showDone {
+				archived, err := client.ListArchive(ctx, bs.Name, 50)
+				if err != nil {
+					return fail(err)
+				}
+				for i := range archived {
+					card := archived[i]
+					if card.DoneAt == nil || card.DoneAt.Local().Format("2006-01-02") != today {
+						continue
+					}
+					items = append(items, todayItem{
+						section: "Done today", card: &archived[i], board: bs.Name,
+						done: true, prevStatus: board.Triage,
+					})
+				}
+			}
 		}
 		sortTodayItems(items)
 		return todayLoadedMsg{items}
 	}
 }
 
-var todaySectionOrder = map[string]int{"Focus": 0, "Overdue": 1, "Due today": 2}
+var todaySectionOrder = map[string]int{"Focus": 0, "Overdue": 1, "Due today": 2, "Done today": 3}
 
 func sortTodayItems(items []todayItem) {
 	sort.SliceStable(items, func(i, j int) bool {
@@ -155,7 +199,39 @@ func (v *todayView) Update(msg tea.Msg) (view, tea.Cmd) {
 		}
 		return v, nil
 
-	case taskToggledMsg, cardSavedMsg:
+	case taskToggledMsg:
+		v.busy = false
+		if msg.recurred {
+			v.busy = true
+			return v, v.loadCmd()
+		}
+		for i := range v.items {
+			if t := v.items[i].task; t != nil && t.Slug == msg.slug && t.Text == msg.text {
+				applyTaskToggle(t, msg.done, v.now().Format("2006-01-02"))
+			}
+		}
+		return v, nil
+
+	case cardArchivedMsg:
+		v.busy = false
+		for i := range v.items {
+			if c := v.items[i].card; c != nil && c.ID != "" && msg.card != nil && c.ID == msg.card.ID {
+				v.items[i].done = true
+				v.items[i].prevStatus = msg.prevStatus
+			}
+		}
+		return v, nil
+
+	case cardRestoredMsg:
+		v.busy = false
+		for i := range v.items {
+			if c := v.items[i].card; c != nil && c.ID == msg.cardID {
+				v.items[i].done = false
+			}
+		}
+		return v, nil
+
+	case cardSavedMsg:
 		v.busy = true
 		return v, v.loadCmd()
 
@@ -209,7 +285,11 @@ func (v *todayView) Update(msg tea.Msg) (view, tea.Cmd) {
 		case "r":
 			v.busy = true
 			return v, v.loadCmd()
-		case " ":
+		case "x":
+			v.showDone = !v.showDone
+			v.busy = true
+			return v, v.loadCmd()
+		case " ", "d":
 			return v.toggleCurrent()
 		case "enter":
 			if it := v.current(); it != nil && it.card != nil {
@@ -236,6 +316,9 @@ func (v *todayView) current() *todayItem {
 	return &v.items[v.cursor]
 }
 
+// toggleCurrent completes the selected item, or brings it back when it is
+// already done: tasks re-open in place, archived cards restore to the column
+// they were completed from.
 func (v *todayView) toggleCurrent() (view, tea.Cmd) {
 	it := v.current()
 	if it == nil || v.busy {
@@ -244,35 +327,29 @@ func (v *todayView) toggleCurrent() (view, tea.Cmd) {
 	v.busy = true
 	client := v.client
 	if it.task != nil {
-		t := *it.task
-		return v, func() tea.Msg {
-			ctx := context.Background()
-			recurred, err := client.ToggleTask(ctx, t.Slug, t.Line, t.Version, true)
-			if errors.Is(err, apiclient.ErrConflict) {
-				groups, qerr := client.ListTasks(ctx, "not done;due before tomorrow;sort by due")
-				if qerr != nil {
-					return fail(qerr)
-				}
-				fresh, ok := findTask(groups, t.Slug, t.Text)
-				if !ok {
-					return fail(fmt.Errorf("task changed on server; list refreshed"))
-				}
-				recurred, err = client.ToggleTask(ctx, fresh.Slug, fresh.Line, fresh.Version, true)
-			}
-			if err != nil {
-				return fail(err)
-			}
-			return taskToggledMsg{recurred}
-		}
+		return v, toggleTaskCmd(client, *it.task, it.task.Status != tasks.StatusDone)
 	}
 	boardName, cardID := it.board, it.card.ID
+	if it.isDone() {
+		status := it.prevStatus
+		if status == "" || status == board.Done {
+			status = board.Triage
+		}
+		return v, func() tea.Msg {
+			if err := client.RestoreCard(context.Background(), boardName, cardID, status); err != nil {
+				return fail(err)
+			}
+			return cardRestoredMsg{board: boardName, cardID: cardID, status: status}
+		}
+	}
+	prev := it.card.Status
 	return v, func() tea.Msg {
 		done := board.Done
 		card, err := client.PatchCard(context.Background(), boardName, cardID, apiclient.CardPatch{Status: &done})
 		if err != nil {
 			return fail(err)
 		}
-		return cardSavedMsg{card}
+		return cardArchivedMsg{board: boardName, card: card, prevStatus: prev}
 	}
 }
 
@@ -339,6 +416,9 @@ func (v *todayView) renderItem(it todayItem, selected bool, width int) string {
 	text := highlight(it.text(), v.find.query)
 	if selected {
 		text = cursorStyle.Render(it.text())
+	}
+	if it.isDone() {
+		text = doneStyle.Render(it.text() + " ✓")
 	}
 	var meta []string
 	if it.due() != "" {

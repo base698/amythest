@@ -38,8 +38,13 @@ type (
 	errMsg   struct{ err error }
 	flashMsg struct{ text string }
 
-	tasksLoadedMsg   struct{ groups []apiclient.TaskGroup }
-	taskToggledMsg   struct{ recurred bool }
+	tasksLoadedMsg struct{ groups []apiclient.TaskGroup }
+	taskToggledMsg struct {
+		slug     string
+		text     string
+		done     bool
+		recurred bool
+	}
 	boardsLoadedMsg  struct{ boards []board.BoardSummary }
 	boardLoadedMsg   struct{ b *board.Board }
 	archiveLoadedMsg struct {
@@ -47,6 +52,19 @@ type (
 		cards []board.Card
 	}
 	cardSavedMsg struct{ card *board.Card }
+	// cardArchivedMsg / cardRestoredMsg are completion state changes, kept
+	// distinct from cardSavedMsg (description edits) so list views can mark
+	// items in place and the root can announce them.
+	cardArchivedMsg struct {
+		board      string
+		card       *board.Card
+		prevStatus board.Status
+	}
+	cardRestoredMsg struct {
+		board  string
+		cardID string
+		status board.Status
+	}
 )
 
 func pushView(v view) tea.Cmd  { return func() tea.Msg { return pushMsg{v} } }
@@ -150,6 +168,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.status != "" {
 			a.status = "" // any key dismisses the last error/notice
 		}
+		// The help overlay swallows the next keypress to close itself.
+		if a.help {
+			if msg.String() == "ctrl+c" {
+				return a, tea.Quit
+			}
+			a.help = false
+			return a, nil
+		}
 		// A view with an open text input gets every key except ctrl+c.
 		if a.top().Capturing() && msg.String() != "ctrl+c" {
 			next, cmd := a.top().Update(msg)
@@ -181,6 +207,24 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next, cmd := a.top().Update(msg)
 		a.stack[len(a.stack)-1] = next
 		return a, cmd
+	}
+
+	// Completion changes get announced in the status bar so a keystroke
+	// like "d" always has visible feedback, whatever the view does.
+	switch msg := msg.(type) {
+	case taskToggledMsg:
+		switch {
+		case msg.recurred:
+			a.status = "task completed ✓ — next occurrence created"
+		case msg.done:
+			a.status = "task completed ✓ — space toggles it back"
+		default:
+			a.status = "task reopened"
+		}
+	case cardArchivedMsg:
+		a.status = "card archived ✓ — space on it in today (1) restores"
+	case cardRestoredMsg:
+		a.status = fmt.Sprintf("card restored to %s", msg.status)
 	}
 
 	// Data messages go to every view so parents can react to child mutations.
@@ -246,6 +290,7 @@ const helpText = `
                   in_progress/verify/done
   e               edit: task due date, or card
                   description in $EDITOR
+  x               show/hide "Done today" (today view)
   /               search (enter commit, esc cancel)
   n / N           next / previous match
   p               cycle task query preset (tasks view)

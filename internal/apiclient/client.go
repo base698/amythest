@@ -258,6 +258,16 @@ func (c *Client) PatchCard(ctx context.Context, boardName, cardID string, patch 
 	return &card, nil
 }
 
+// RestoreCard moves an archived (done) card back onto the board in the given
+// column.
+func (c *Client) RestoreCard(ctx context.Context, boardName, cardID string, status board.Status) error {
+	body := struct {
+		Status board.Status `json:"status"`
+	}{status}
+	path := "/kanban/api/boards/" + url.PathEscape(boardName) + "/archive/" + url.PathEscape(cardID) + "/restore"
+	return c.do(ctx, http.MethodPost, path, body, nil)
+}
+
 // MoveCard moves a card to a column, before beforeID or appended when empty.
 func (c *Client) MoveCard(ctx context.Context, boardName, cardID string, status board.Status, beforeID string) error {
 	body := struct {
