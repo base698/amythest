@@ -1,6 +1,6 @@
-.PHONY: all assets build run test compat clean
+.PHONY: all assets build build-amy install-amy run test compat clean
 
-all: build
+all: build build-amy
 
 node_modules: package.json
 	npm install
@@ -11,6 +11,13 @@ assets: node_modules
 
 build: assets
 	go build -o bin/amythest ./cmd/amythest
+
+# amy is the terminal client; pure Go, no web assets needed.
+build-amy:
+	go build -o bin/amy ./cmd/amy
+
+install-amy: build-amy
+	install -m 0755 bin/amy $(HOME)/bin/amy
 
 run: assets
 	go run ./cmd/amythest -vault $(HOME)/notes

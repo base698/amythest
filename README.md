@@ -113,6 +113,24 @@ and duration histograms, vault note/asset gauges, rescan health, heap usage,
 and goroutine count. The HTTP series use only method and status-code labels
 to avoid unbounded path cardinality.
 
+### amy — terminal client
+
+`amy` is an interactive TUI for a running server: browse open vault tasks
+and kanban boards, toggle tasks and card checklist items (with Obsidian-style
+`✅` done-dates), and move or complete cards.
+
+```sh
+make install-amy          # builds and installs to ~/bin/amy
+amy                       # tasks view; 2 = boards, ? = help
+amy -check                # non-interactive login + connectivity smoke
+```
+
+The endpoint comes from `-endpoint`, `AMYTHEST_ENDPOINT`, or
+`~/.config/amythest/cli.yaml` (`endpoint: https://host/notes`); credentials
+come from `KANBAN_USERNAME`/`KANBAN_PASSWORD` or `~/.config/amythest/env`.
+Sessions are cached in `~/.cache/amythest-kanban/session.json`, shared with
+the kanban.py skill client.
+
 ## Layout
 
 ```

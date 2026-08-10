@@ -40,6 +40,10 @@ done
 
 k() { python3 "$KANBAN_PY" "$@"; }
 
+echo "== amy client smoke =="
+go build -o "$TMP/amy" ./cmd/amy
+"$TMP/amy" -check -endpoint http://127.0.0.1:8641
+
 echo "== boards list =="
 k boards | tee "$TMP/boards.txt"
 
