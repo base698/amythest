@@ -204,6 +204,25 @@ func (c *Client) SetTaskDue(ctx context.Context, t tasks.Task, due string) error
 	return c.do(ctx, http.MethodPost, "/api/tasks/due", body, &out)
 }
 
+// AddTask appends a "- [ ] text" line to a note: today's daily note when
+// daily is true (created if missing), otherwise the note named by slug.
+// Returns the vault-relative path written to.
+func (c *Client) AddTask(ctx context.Context, slug string, daily bool, text string) (string, error) {
+	body := struct {
+		Slug  string `json:"slug"`
+		Daily bool   `json:"daily"`
+		Text  string `json:"text"`
+	}{slug, daily, text}
+	var out struct {
+		OK   bool   `json:"ok"`
+		Path string `json:"path"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/api/tasks/add", body, &out); err != nil {
+		return "", err
+	}
+	return out.Path, nil
+}
+
 // --------------------------------------------------------------------- notes
 
 type SearchResult struct {
@@ -290,6 +309,20 @@ func (c *Client) PatchCard(ctx context.Context, boardName, cardID string, patch 
 	var card board.Card
 	path := "/kanban/api/boards/" + url.PathEscape(boardName) + "/cards/" + url.PathEscape(cardID)
 	if err := c.do(ctx, http.MethodPut, path, patch, &card); err != nil {
+		return nil, err
+	}
+	return &card, nil
+}
+
+// CreateCard adds a card with the given title to a board column.
+func (c *Client) CreateCard(ctx context.Context, boardName, title string, status board.Status) (*board.Card, error) {
+	body := struct {
+		Title  string       `json:"title"`
+		Status board.Status `json:"status"`
+	}{title, status}
+	var card board.Card
+	path := "/kanban/api/boards/" + url.PathEscape(boardName) + "/cards"
+	if err := c.do(ctx, http.MethodPost, path, body, &card); err != nil {
 		return nil, err
 	}
 	return &card, nil

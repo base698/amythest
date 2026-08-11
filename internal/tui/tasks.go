@@ -152,6 +152,10 @@ func (v *tasksView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.busy = true
 		return v, tea.Batch(v.loadCmd(), flash("due date saved"))
 
+	case taskAddedMsg:
+		v.busy = true
+		return v, v.loadCmd()
+
 	case tea.KeyMsg:
 		if v.find.active() {
 			committed, cmd := v.find.handleKey(msg)

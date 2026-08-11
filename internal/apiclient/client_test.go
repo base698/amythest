@@ -76,6 +76,34 @@ func newFakeServer(t *testing.T) *fakeServer {
 		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "recurred": false})
 	}))
+	mux.HandleFunc("POST /api/tasks/add", authed(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Slug  string `json:"slug"`
+			Daily bool   `json:"daily"`
+			Text  string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.Text == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		path := payload.Slug + ".md"
+		if payload.Daily {
+			path = "Daily Notes/2026-08-11.md"
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "path": path})
+	}))
+	mux.HandleFunc("POST /kanban/api/boards/{board}/cards", authed(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Title  string `json:"title"`
+			Status string `json:"status"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.Title == "" || payload.Status == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{"id": "new1", "title": payload.Title, "status": payload.Status})
+	}))
 	mux.HandleFunc("GET /kanban/api/boards", authed(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]map[string]any{{"name": "personal", "displayName": "Personal"}})
 	}))
@@ -267,6 +295,37 @@ func TestAddCommentPostsWithCSRFAndReturnsCard(t *testing.T) {
 	}
 	if got := srv.sawCSRF["/kanban/api/boards/personal/cards/c3/comments"]; got != "csrf-token" {
 		t.Fatalf("comment CSRF = %q", got)
+	}
+}
+
+func TestAddTaskDailyAndSlugDestinations(t *testing.T) {
+	srv := newFakeServer(t)
+	c := testClient(t, srv)
+	path, err := c.AddTask(context.Background(), "", true, "water the ferns")
+	if err != nil || path != "Daily Notes/2026-08-11.md" {
+		t.Fatalf("daily add: path=%q err=%v", path, err)
+	}
+	path, err = c.AddTask(context.Background(), "Inbox", false, "sweep")
+	if err != nil || path != "Inbox.md" {
+		t.Fatalf("slug add: path=%q err=%v", path, err)
+	}
+	if got := srv.sawCSRF["/api/tasks/add"]; got != "" {
+		t.Fatalf("task add CSRF = %q, want empty (notes-side write)", got)
+	}
+}
+
+func TestCreateCardPostsTitleAndStatus(t *testing.T) {
+	srv := newFakeServer(t)
+	c := testClient(t, srv)
+	card, err := c.CreateCard(context.Background(), "personal", "Try the hose", board.Ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if card.ID != "new1" || card.Status != board.Ready {
+		t.Fatalf("card = %+v", card)
+	}
+	if got := srv.sawCSRF["/kanban/api/boards/personal/cards"]; got != "csrf-token" {
+		t.Fatalf("create card CSRF = %q", got)
 	}
 }
 

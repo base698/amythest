@@ -220,6 +220,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "4":
 			a.stack = []view{newNotesView(a.client)}
 			return a, a.top().Init()
+		case "+":
+			// On a board, + creates a card there; everywhere else it's
+			// the quick-add task flow.
+			if _, onBoard := a.top().(*boardView); !onBoard {
+				v := newAddTaskView(a.client)
+				a.stack = append(a.stack, v)
+				return a, v.Init()
+			}
 		}
 		next, cmd := a.top().Update(msg)
 		a.stack[len(a.stack)-1] = next
@@ -252,6 +260,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.status = fmt.Sprintf("card restored to %s", msg.status)
 	case cardMovedBoardMsg:
 		a.status = fmt.Sprintf("card moved to %s ✓", msg.to)
+	case taskAddedMsg:
+		a.status = fmt.Sprintf("task added to %s ✓", msg.path)
+	case cardCreatedMsg:
+		a.status = fmt.Sprintf("card %q created ✓", msg.card.Title)
 	}
 
 	// Data messages go to every view so parents can react to child mutations.
@@ -311,6 +323,8 @@ const helpText = `
   h/l             switch board column
   enter           open board / card
   space           toggle task, checkbox, or complete card
+  +               add: task (daily note or searched note),
+                  or a card when viewing a board
   d               mark card done (archives it)
   m               move card: picker with lanes and
                   other boards (t/b/y/i/v/d shortcuts)

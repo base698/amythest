@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -47,15 +48,28 @@ type boardView struct {
 	loaded  bool
 	find    finder
 	picker  movePicker
+
+	newCard    textinput.Model
+	addingCard bool
 }
 
 func newBoardView(client *apiclient.Client, name string) *boardView {
-	return &boardView{client: client, name: name, find: newFinder()}
+	ci := textinput.New()
+	ci.CharLimit = 200
+	return &boardView{client: client, name: name, find: newFinder(), newCard: ci}
 }
 
-func (v *boardView) Title() string   { return v.name }
-func (v *boardView) Busy() bool      { return v.busy }
-func (v *boardView) Capturing() bool { return v.find.active() || v.picker.active }
+func (v *boardView) Title() string { return v.name }
+func (v *boardView) Busy() bool    { return v.busy }
+func (v *boardView) Capturing() bool {
+	return v.find.active() || v.picker.active || v.addingCard
+}
+
+// cardCreatedMsg announces a new card so board views refresh.
+type cardCreatedMsg struct {
+	board string
+	card  *board.Card
+}
 
 // boardMovePickerMsg carries the board list needed to offer cross-board
 // destinations; typed per-view so the stack broadcast can't open two pickers.
@@ -242,6 +256,13 @@ func (v *boardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.busy = true
 		return v, v.loadCmd()
 
+	case cardCreatedMsg:
+		if msg.board != v.name {
+			return v, nil
+		}
+		v.busy = true
+		return v, v.loadCmd()
+
 	case tea.KeyMsg:
 		if v.find.active() {
 			committed, cmd := v.find.handleKey(msg)
@@ -259,6 +280,9 @@ func (v *boardView) Update(msg tea.Msg) (view, tea.Cmd) {
 				return v.moveCurrentToBoard(choice.boardName)
 			}
 			return v.moveCurrent(choice.status)
+		}
+		if v.addingCard {
+			return v.handleNewCardKey(msg)
 		}
 		switch msg.String() {
 		case "/":
@@ -303,6 +327,12 @@ func (v *boardView) Update(msg tea.Msg) (view, tea.Cmd) {
 			if card := v.currentCard(); card != nil {
 				return v, pushView(newCardView(v.client, v.name, *card))
 			}
+		case "+":
+			target := v.newCardStatus()
+			v.newCard.Prompt = "new card (" + statusLabels[target] + "): "
+			v.newCard.SetValue("")
+			v.addingCard = true
+			return v, v.newCard.Focus()
 		case "d":
 			return v.moveCurrent(board.Done)
 		case "m":
@@ -320,6 +350,44 @@ func (v *boardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		}
 	}
 	return v, nil
+}
+
+// newCardStatus is the column a "+" card lands in: the focused column, or
+// Triage when the Done archive is focused.
+func (v *boardView) newCardStatus() board.Status {
+	status := boardColumns[v.col]
+	if status == board.Done {
+		return board.Triage
+	}
+	return status
+}
+
+func (v *boardView) handleNewCardKey(msg tea.KeyMsg) (view, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		v.addingCard = false
+		v.newCard.Blur()
+		return v, nil
+	case tea.KeyEnter:
+		title := strings.TrimSpace(v.newCard.Value())
+		v.addingCard = false
+		v.newCard.Blur()
+		if title == "" {
+			return v, nil
+		}
+		v.busy = true
+		client, name, status := v.client, v.name, v.newCardStatus()
+		return v, func() tea.Msg {
+			card, err := client.CreateCard(context.Background(), name, title, status)
+			if err != nil {
+				return fail(err)
+			}
+			return cardCreatedMsg{board: name, card: card}
+		}
+	}
+	var cmd tea.Cmd
+	v.newCard, cmd = v.newCard.Update(msg)
+	return v, cmd
 }
 
 func (v *boardView) moveCurrentToBoard(destination string) (view, tea.Cmd) {
@@ -419,9 +487,12 @@ func (v *boardView) View(width, height int) string {
 		columns = append(columns, style.Width(colWidth).Render(strings.Join(lines, "\n")))
 	}
 	view := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
-	hint := dimStyle.Render(" enter open · e edit · d done · m move · / search · h/l columns")
+	hint := dimStyle.Render(" enter open · + new card · e edit · d done · m move · / search · h/l columns")
 	if bar := v.find.bar(); bar != "" {
 		hint = " " + bar
+	}
+	if v.addingCard {
+		hint = " " + v.newCard.View()
 	}
 	return view + "\n" + hint
 }

@@ -239,6 +239,10 @@ func (v *todayView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.busy = true
 		return v, tea.Batch(v.loadCmd(), flash("due date saved"))
 
+	case taskAddedMsg:
+		v.busy = true
+		return v, v.loadCmd()
+
 	case errMsg:
 		v.busy = false
 		return v, nil
