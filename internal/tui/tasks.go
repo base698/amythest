@@ -90,7 +90,17 @@ func toggleTaskCmd(client *apiclient.Client, t tasks.Task, done bool) tea.Cmd {
 		if err != nil {
 			return fail(err)
 		}
-		return taskToggledMsg{slug: t.Slug, text: t.Text, done: done, recurred: recurred}
+		msg := taskToggledMsg{slug: t.Slug, text: t.Text, done: done, recurred: recurred}
+		if recurred {
+			// Surface where the spawned occurrence went — it is usually
+			// due tomorrow, i.e. no longer on today's screen.
+			if groups, err := client.ListTasks(ctx, "not done;description includes "+t.Text); err == nil {
+				if fresh, ok := findTask(groups, t.Slug, t.Text); ok {
+					msg.nextDue = fresh.Due
+				}
+			}
+		}
+		return msg
 	}
 }
 

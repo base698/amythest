@@ -44,6 +44,7 @@ type (
 		text     string
 		done     bool
 		recurred bool
+		nextDue  string // due date of the spawned occurrence, when recurred
 	}
 	boardsLoadedMsg  struct{ boards []board.BoardSummary }
 	boardLoadedMsg   struct{ b *board.Board }
@@ -247,6 +248,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case taskToggledMsg:
 		switch {
+		case msg.recurred && msg.nextDue != "":
+			a.status = fmt.Sprintf("task completed ✓ — recurring: next occurrence due %s", msg.nextDue)
 		case msg.recurred:
 			a.status = "task completed ✓ — next occurrence created"
 		case msg.done:
