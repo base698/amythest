@@ -115,9 +115,15 @@ to avoid unbounded path cardinality.
 
 ### amy — terminal client
 
-`amy` is an interactive TUI for a running server: browse open vault tasks
-and kanban boards, toggle tasks and card checklist items (with Obsidian-style
-`✅` done-dates), and move or complete cards.
+`amy` is an interactive TUI for a running server: a today view of what's
+due, vault tasks, kanban boards, and notes with wikilink navigation —
+toggle tasks and card checklist items (with Obsidian-style `✅`
+done-dates), quick-add tasks and cards, move or complete cards, and hand
+notes or cards to a running herdr agent as context.
+
+![amy today view](docs/amy-today.png)
+
+![amy board view](docs/amy-board.png)
 
 ```sh
 make install-amy          # builds and installs to ~/bin/amy

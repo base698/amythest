@@ -622,6 +622,8 @@ func (s *Store) MoveArchivedCardToBoard(sourceName, destinationName, id, actor s
 	return moved, err
 }
 
+// DeleteCard permanently removes a card from the active board or, when it is
+// not there, from the done archive.
 func (s *Store) DeleteCard(name, id string) (Card, error) {
 	var deleted Card
 	err := s.withLock(name, func() error {
@@ -631,7 +633,7 @@ func (s *Store) DeleteCard(name, id string) (Card, error) {
 		}
 		index := cardIndex(value.Cards, id)
 		if index < 0 {
-			return os.ErrNotExist
+			return s.deleteArchivedCardUnlocked(name, id, value, &deleted)
 		}
 		deleted = value.Cards[index]
 		var attachmentDir, quarantine string
@@ -661,6 +663,48 @@ func (s *Store) DeleteCard(name, id string) (Card, error) {
 		return nil
 	})
 	return deleted, err
+}
+
+// deleteArchivedCardUnlocked removes a card from the done file, using the
+// same journaled two-file commit as restore so a crash can't lose either
+// board image. Caller holds the board lock; active is the current board file.
+func (s *Store) deleteArchivedCardUnlocked(name, id string, active Board, deleted *Card) error {
+	archived, err := readBoard(s.donePath(name))
+	if err != nil {
+		return err
+	}
+	index := cardIndex(archived.Cards, id)
+	if index < 0 {
+		return os.ErrNotExist
+	}
+	*deleted = archived.Cards[index]
+	var attachmentDir, quarantine string
+	if len(deleted.Attachments) > 0 {
+		attachmentDir, err = s.attachmentDirUnlocked(name, id, false)
+		if err != nil {
+			return err
+		}
+		quarantine = filepath.Join(filepath.Dir(attachmentDir), ".deleting-card-"+id)
+		if err := os.Rename(attachmentDir, quarantine); err != nil {
+			return err
+		}
+	}
+	archived.Cards = append(archived.Cards[:index], archived.Cards[index+1:]...)
+	copyBoardMetadata(&archived, active)
+	now := s.now().UTC()
+	if err := s.commitArchiveUnlocked(name, archiveJournal{
+		BoardImage: renderBoard(active, false, now),
+		DoneImage:  renderBoard(archived, true, now),
+	}); err != nil {
+		if quarantine != "" {
+			_ = os.Rename(quarantine, attachmentDir)
+		}
+		return err
+	}
+	if quarantine != "" {
+		return os.RemoveAll(quarantine)
+	}
+	return nil
 }
 
 // DeleteTaskMoveCardResult removes a newly-created task card while reporting

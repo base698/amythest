@@ -95,3 +95,41 @@ func TestRenderBoardHasNoTrailingWhitespaceAndOneFinalNewline(t *testing.T) {
 		t.Fatal("rendered board must end in exactly one newline")
 	}
 }
+
+func TestDeleteCardAlsoReachesArchivedCards(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	if err := store.EnsureBoard("operations"); err != nil {
+		t.Fatal(err)
+	}
+	card, err := store.CreateCard("operations", CardInput{Title: "Old junk", Status: Ready})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keep, err := store.CreateCard("operations", CardInput{Title: "Recent win", Status: Ready})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Archive both, then delete one from the archive.
+	for _, id := range []string{card.ID, keep.ID} {
+		if _, err := store.MoveCard("operations", id, Done, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deleted, err := store.DeleteCard("operations", card.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted.ID != card.ID {
+		t.Fatalf("deleted id = %q, want %q", deleted.ID, card.ID)
+	}
+	archived, err := store.ListArchived("operations", "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archived) != 1 || archived[0].ID != keep.ID {
+		t.Fatalf("archive after delete = %#v", archived)
+	}
+	if _, err := store.DeleteCard("operations", card.ID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("second delete error = %v, want os.ErrNotExist", err)
+	}
+}

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -61,6 +62,8 @@ type todayView struct {
 	phase    int  // shimmer phase, advanced by the root App
 	find     finder
 	prompt   duePrompt
+	del      confirm
+	delItem  todayItem
 	now      func() time.Time
 }
 
@@ -71,7 +74,7 @@ func newTodayView(client *apiclient.Client) *todayView {
 func (v *todayView) Title() string { return "today" }
 func (v *todayView) Busy() bool    { return v.busy }
 func (v *todayView) Capturing() bool {
-	return v.find.active() || v.prompt.active()
+	return v.find.active() || v.prompt.active() || v.del.active
 }
 
 func (v *todayView) Init() tea.Cmd {
@@ -243,11 +246,25 @@ func (v *todayView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.busy = true
 		return v, v.loadCmd()
 
+	case taskCancelledMsg, taskPurgedMsg, cardDeletedMsg:
+		v.busy = true
+		return v, v.loadCmd()
+
 	case errMsg:
 		v.busy = false
 		return v, nil
 
 	case tea.KeyMsg:
+		if v.del.active {
+			if v.del.handleKey(msg) {
+				v.busy = true
+				if v.delItem.task != nil {
+					return v, deleteTaskCmd(v.client, *v.delItem.task)
+				}
+				return v, deleteCardCmd(v.client, v.delItem.board, v.delItem.card.ID, v.delItem.card.Title)
+			}
+			return v, nil
+		}
 		if v.find.active() {
 			committed, cmd := v.find.handleKey(msg)
 			if committed {
@@ -308,6 +325,22 @@ func (v *todayView) Update(msg tea.Msg) (view, tea.Cmd) {
 				return v, v.prompt.start(*it.task)
 			}
 			return v, pushView(newCardViewEditing(v.client, it.board, *it.card))
+		case "D":
+			it := v.current()
+			if it == nil {
+				return v, nil
+			}
+			v.delItem = *it
+			if it.task != nil {
+				if it.task.Status == tasks.StatusCancelled {
+					v.del.open(fmt.Sprintf("permanently delete cancelled task %q?", it.task.Text))
+				} else {
+					v.del.open(fmt.Sprintf("cancel task %q?", it.task.Text))
+				}
+			} else {
+				v.del.open(fmt.Sprintf("permanently delete card %q (comments and attachments too)?", it.card.Title))
+			}
+			return v, nil
 		}
 	}
 	return v, nil
@@ -395,6 +428,9 @@ func (v *todayView) View(width, height int) string {
 	}
 	if v.prompt.active() {
 		b.WriteString(" " + v.prompt.view() + "\n")
+	}
+	if v.del.active {
+		b.WriteString(v.del.bar() + "\n")
 	}
 	list := b.String()
 	if !showGem {

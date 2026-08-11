@@ -36,6 +36,7 @@ type cardView struct {
 	commenting  bool
 	picker      movePicker
 	agents      agentPicker
+	del         confirm
 }
 
 // cardAgentsMsg carries the herdr agent list for this card's send picker.
@@ -84,7 +85,7 @@ func (v *cardView) setDescription(desc string) {
 func (v *cardView) Title() string   { return v.card.Title }
 func (v *cardView) Busy() bool      { return v.busy }
 func (v *cardView) Capturing() bool {
-	return v.find.active() || v.commenting || v.picker.active || v.agents.active
+	return v.find.active() || v.commenting || v.picker.active || v.agents.active || v.del.active
 }
 
 func (v *cardView) Init() tea.Cmd {
@@ -214,6 +215,13 @@ func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		}
 		return v, nil
 
+	case cardDeletedMsg:
+		v.busy = false
+		if msg.cardID == v.card.ID {
+			return v, popView()
+		}
+		return v, nil
+
 	case errMsg:
 		v.busy = false
 		return v, nil
@@ -247,6 +255,13 @@ func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {
 			v.busy = true
 			return v, sendToAgentCmd(*agent, v.card.Title, cardContextPrompt(v.card, v.boardName, v.client.Endpoint()))
 		}
+		if v.del.active {
+			if v.del.handleKey(msg) {
+				v.busy = true
+				return v, deleteCardCmd(v.client, v.boardName, v.card.ID, v.card.Title)
+			}
+			return v, nil
+		}
 		switch msg.String() {
 		case "j", "down":
 			if v.focus < len(v.checkIdxs)-1 {
@@ -273,6 +288,8 @@ func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {
 			return v, v.toggleCmd(lineIdx, m[2] == " ")
 		case "d":
 			return v.moveSelf(board.Done)
+		case "D":
+			v.del.open(fmt.Sprintf("permanently delete card %q (comments and attachments too)?", v.card.Title))
 		case "m":
 			if v.busy {
 				return v, nil
@@ -566,6 +583,9 @@ func (v *cardView) View(width, height int) string {
 	}
 	if v.commenting {
 		hint = " " + v.comment.View()
+	}
+	if v.del.active {
+		hint = v.del.bar()
 	}
 	b.WriteString(hint)
 	return b.String()

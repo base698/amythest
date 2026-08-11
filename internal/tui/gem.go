@@ -27,8 +27,8 @@ const gemCaption = "amythest"
 // Purple-to-lavender sweep; index by (col+row+phase) so the band moves
 // diagonally, which reads as light passing over the stone.
 var gemPalette = []lipgloss.Style{
-	lipgloss.NewStyle().Foreground(lipgloss.Color("54")),
-	lipgloss.NewStyle().Foreground(lipgloss.Color("55")),
+	lipgloss.NewStyle().Foreground(lipgloss.Color("99")),
+	lipgloss.NewStyle().Foreground(lipgloss.Color("105")),
 	lipgloss.NewStyle().Foreground(lipgloss.Color("92")),
 	lipgloss.NewStyle().Foreground(lipgloss.Color("93")),
 	lipgloss.NewStyle().Foreground(lipgloss.Color("129")),

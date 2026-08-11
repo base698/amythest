@@ -51,6 +51,9 @@ type boardView struct {
 
 	newCard    textinput.Model
 	addingCard bool
+	del        confirm
+	delID      string
+	delTitle   string
 }
 
 func newBoardView(client *apiclient.Client, name string) *boardView {
@@ -62,7 +65,7 @@ func newBoardView(client *apiclient.Client, name string) *boardView {
 func (v *boardView) Title() string { return v.name }
 func (v *boardView) Busy() bool    { return v.busy }
 func (v *boardView) Capturing() bool {
-	return v.find.active() || v.picker.active || v.addingCard
+	return v.find.active() || v.picker.active || v.addingCard || v.del.active
 }
 
 // cardCreatedMsg announces a new card so board views refresh.
@@ -263,6 +266,14 @@ func (v *boardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.busy = true
 		return v, v.loadCmd()
 
+	case cardDeletedMsg:
+		if msg.board != v.name {
+			return v, nil
+		}
+		v.busy = true
+		v.archiveLoaded = false
+		return v, tea.Batch(v.loadCmd(), v.maybeLoadArchive())
+
 	case tea.KeyMsg:
 		if v.find.active() {
 			committed, cmd := v.find.handleKey(msg)
@@ -283,6 +294,13 @@ func (v *boardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		}
 		if v.addingCard {
 			return v.handleNewCardKey(msg)
+		}
+		if v.del.active {
+			if v.del.handleKey(msg) {
+				v.busy = true
+				return v, deleteCardCmd(v.client, v.name, v.delID, v.delTitle)
+			}
+			return v, nil
 		}
 		switch msg.String() {
 		case "/":
@@ -326,6 +344,11 @@ func (v *boardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		case "enter":
 			if card := v.currentCard(); card != nil {
 				return v, pushView(newCardView(v.client, v.name, *card))
+			}
+		case "D":
+			if card := v.currentCard(); card != nil {
+				v.delID, v.delTitle = card.ID, card.Title
+				v.del.open(fmt.Sprintf("permanently delete card %q (comments and attachments too)?", card.Title))
 			}
 		case "+":
 			target := v.newCardStatus()
@@ -493,6 +516,9 @@ func (v *boardView) View(width, height int) string {
 	}
 	if v.addingCard {
 		hint = " " + v.newCard.View()
+	}
+	if v.del.active {
+		hint = v.del.bar()
 	}
 	return view + "\n" + hint
 }

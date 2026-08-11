@@ -264,6 +264,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.status = fmt.Sprintf("task added to %s ✓", msg.path)
 	case cardCreatedMsg:
 		a.status = fmt.Sprintf("card %q created ✓", msg.card.Title)
+	case taskCancelledMsg:
+		a.status = "task cancelled ❌ — recoverable in the note; D again deletes permanently"
+	case taskPurgedMsg:
+		a.status = "cancelled task deleted permanently"
+	case cardDeletedMsg:
+		a.status = fmt.Sprintf("card %q deleted permanently", msg.title)
 	}
 
 	// Data messages go to every view so parents can react to child mutations.
@@ -326,6 +332,8 @@ const helpText = `
   +               add: task (daily note or searched note),
                   or a card when viewing a board
   d               mark card done (archives it)
+  D               delete with confirm: task → cancel,
+                  again → purge; card → permanent delete
   m               move card: picker with lanes and
                   other boards (t/b/y/i/v/d shortcuts)
   e               edit: task due date, or card

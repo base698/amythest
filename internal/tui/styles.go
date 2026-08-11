@@ -17,7 +17,9 @@ var (
 
 	searchHitStyle = lipgloss.NewStyle().Bold(true).
 			Foreground(lipgloss.Color("16")).Background(lipgloss.Color("179"))
-	linkStyle = lipgloss.NewStyle().Underline(true).Foreground(lipgloss.Color("111"))
+	linkStyle   = lipgloss.NewStyle().Underline(true).Foreground(lipgloss.Color("111"))
+	dangerStyle = lipgloss.NewStyle().Bold(true).
+			Foreground(lipgloss.Color("15")).Background(lipgloss.Color("124"))
 
 	columnStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).
