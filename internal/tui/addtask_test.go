@@ -84,6 +84,41 @@ func TestAddTaskViewSearchPicksAnotherNote(t *testing.T) {
 	}
 }
 
+func TestAddTaskViewEscStepsBackToDefaultSelectionNotCancel(t *testing.T) {
+	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
+	v := newAddTaskView(client)
+	v.Init()
+	for _, r := range "call plumber" {
+		v.Update(keyMsg(string(r)))
+	}
+	v.Update(enterMsg()) // destination step
+	v.Update(keyMsg("/"))
+	for _, r := range "inbox" {
+		v.Update(keyMsg(string(r)))
+	}
+	v.Update(enterMsg())
+	v.Update(addTaskResultsMsg{results: []apiclient.SearchResult{{Slug: "Tasks/Task-Inbox", Title: "Task Inbox"}}})
+	if v.cursor != 1 {
+		t.Fatalf("cursor = %d", v.cursor)
+	}
+	if !v.Capturing() {
+		t.Fatal("modal view must always capture so esc never pops it")
+	}
+	// esc: back to the default (daily) selection with results cleared…
+	v.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if v.cursor != 0 || len(v.results) != 0 || v.step != 1 {
+		t.Fatalf("after esc: cursor=%d results=%d step=%d", v.cursor, len(v.results), v.step)
+	}
+	// …and only the next esc returns to editing the task text.
+	v.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if v.step != 0 {
+		t.Fatalf("second esc should return to text step, step=%d", v.step)
+	}
+	if v.text.Value() != "call plumber" {
+		t.Fatalf("task text lost: %q", v.text.Value())
+	}
+}
+
 func TestBoardViewPlusOpensCardPromptInFocusedColumn(t *testing.T) {
 	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
 	v := newBoardView(client, "personal")

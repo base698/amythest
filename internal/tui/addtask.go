@@ -39,9 +39,13 @@ func newAddTaskView(client *apiclient.Client) *addTaskView {
 	return &addTaskView{client: client, text: text, search: search}
 }
 
-func (v *addTaskView) Title() string   { return "add task" }
-func (v *addTaskView) Busy() bool      { return v.busy }
-func (v *addTaskView) Capturing() bool { return v.step == 0 || v.typing }
+func (v *addTaskView) Title() string { return "add task" }
+func (v *addTaskView) Busy() bool    { return v.busy }
+
+// Capturing is always true: the quick-add is modal, so esc steps back through
+// the flow (search → default selection → task text → cancel) instead of the
+// root treating it as view navigation.
+func (v *addTaskView) Capturing() bool { return true }
 
 func (v *addTaskView) Init() tea.Cmd { return v.text.Focus() }
 
@@ -109,8 +113,18 @@ func (v *addTaskView) Update(msg tea.Msg) (view, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "esc":
+			// First esc returns to the default (daily note) selection;
+			// from there esc goes back to editing the task text.
+			if v.cursor != 0 || len(v.results) > 0 {
+				v.cursor = 0
+				v.results = nil
+				v.search.SetValue("")
+				return v, nil
+			}
 			v.step = 0
 			return v, v.text.Focus()
+		case "ctrl+c", "q":
+			return v, popView()
 		case "j", "down":
 			if v.cursor < len(v.results) {
 				v.cursor++
