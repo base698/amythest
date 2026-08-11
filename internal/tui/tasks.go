@@ -36,6 +36,8 @@ type tasksView struct {
 	loaded bool
 	find   finder
 	prompt duePrompt
+	del    confirm
+	target tasks.Task // task the delete prompt refers to
 	now    func() time.Time
 }
 
@@ -46,7 +48,7 @@ func newTasksView(client *apiclient.Client) *tasksView {
 func (v *tasksView) Title() string { return "tasks (" + taskPresets[v.preset] + ")" }
 func (v *tasksView) Busy() bool    { return v.busy }
 func (v *tasksView) Capturing() bool {
-	return v.find.active() || v.prompt.active()
+	return v.find.active() || v.prompt.active() || v.del.active
 }
 
 func (v *tasksView) Init() tea.Cmd {
@@ -156,7 +158,27 @@ func (v *tasksView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.busy = true
 		return v, v.loadCmd()
 
+	case taskCancelledMsg:
+		v.busy = false
+		for _, row := range v.rows {
+			if row.task != nil && row.task.Slug == msg.slug && row.task.Text == msg.text {
+				row.task.Status = tasks.StatusCancelled
+			}
+		}
+		return v, nil
+
+	case taskPurgedMsg:
+		v.busy = true
+		return v, v.loadCmd()
+
 	case tea.KeyMsg:
+		if v.del.active {
+			if v.del.handleKey(msg) {
+				v.busy = true
+				return v, deleteTaskCmd(v.client, v.target)
+			}
+			return v, nil
+		}
 		if v.find.active() {
 			committed, cmd := v.find.handleKey(msg)
 			if committed {
@@ -201,6 +223,21 @@ func (v *tasksView) Update(msg tea.Msg) (view, tea.Cmd) {
 				}
 				return v, v.prompt.start(*t)
 			}
+		case "D":
+			t := v.current()
+			if t == nil {
+				return v, nil
+			}
+			if strings.HasPrefix(t.Path, "kanban/") {
+				return v, flash("card tasks are managed from the board view (3)")
+			}
+			v.target = *t
+			if t.Status == tasks.StatusCancelled {
+				v.del.open(fmt.Sprintf("permanently delete cancelled task %q?", t.Text))
+			} else {
+				v.del.open(fmt.Sprintf("cancel task %q? (D again on it deletes permanently)", t.Text))
+			}
+			return v, nil
 		case "p":
 			v.preset = (v.preset + 1) % len(taskPresets)
 			v.cursor, v.offset = 0, 0
@@ -313,6 +350,9 @@ func (v *tasksView) View(width, height int) string {
 	if v.prompt.active() {
 		b.WriteString(" " + v.prompt.view() + "\n")
 	}
+	if v.del.active {
+		b.WriteString(v.del.bar() + "\n")
+	}
 	return b.String()
 }
 
@@ -332,7 +372,7 @@ func renderTaskLine(t *tasks.Task, selected bool, width int) string {
 		text = text[:maxText-1] + "…"
 	}
 	line := marker + " " + text
-	if t.Status == tasks.StatusDone {
+	if t.Status == tasks.StatusDone || t.Status == tasks.StatusCancelled {
 		line = doneStyle.Render(line)
 	} else if selected {
 		line = cursorStyle.Render(line)

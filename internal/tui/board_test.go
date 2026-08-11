@@ -120,3 +120,28 @@ func TestBoardViewPickerEscCancels(t *testing.T) {
 		t.Fatal("esc must close the picker without moving")
 	}
 }
+
+func TestBoardViewShiftDConfirmsBeforeDeleting(t *testing.T) {
+	v := newBoardView(nil, "personal")
+	next, _ := v.Update(loadedBoard())
+	bv := next.(*boardView)
+	bv.Update(keyMsg("D"))
+	if !bv.del.active || !bv.Capturing() {
+		t.Fatal("D should open the delete confirm")
+	}
+	out := bv.View(120, 40)
+	if !strings.Contains(out, `delete card "First"`) {
+		t.Fatalf("confirm render:\n%s", out)
+	}
+	// Any key but y backs out without deleting.
+	_, cmd := bv.Update(keyMsg("n"))
+	if bv.del.active || bv.Busy() || cmd != nil {
+		t.Fatal("n must cancel the delete")
+	}
+	// y proceeds.
+	bv.Update(keyMsg("D"))
+	_, cmd = bv.Update(keyMsg("y"))
+	if cmd == nil || !bv.Busy() {
+		t.Fatal("y must start the delete")
+	}
+}

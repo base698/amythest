@@ -204,6 +204,34 @@ func (c *Client) SetTaskDue(ctx context.Context, t tasks.Task, due string) error
 	return c.do(ctx, http.MethodPost, "/api/tasks/due", body, &out)
 }
 
+// CancelTask soft-deletes a vault task: the line becomes "- [-] … ❌ date",
+// still visible in the note and recoverable by editing it.
+func (c *Client) CancelTask(ctx context.Context, t tasks.Task) error {
+	body := struct {
+		Slug            string `json:"slug"`
+		ExpectedVersion string `json:"expectedVersion"`
+		Items           []struct {
+			Line         int    `json:"line"`
+			ExpectedText string `json:"expectedText"`
+		} `json:"items"`
+	}{Slug: t.Slug, ExpectedVersion: t.Version}
+	body.Items = append(body.Items, struct {
+		Line         int    `json:"line"`
+		ExpectedText string `json:"expectedText"`
+	}{t.Line, t.Text})
+	return c.do(ctx, http.MethodPost, "/api/tasks/cancel", body, nil)
+}
+
+// PurgeTask permanently removes an already-cancelled task line.
+func (c *Client) PurgeTask(ctx context.Context, t tasks.Task) error {
+	body := struct {
+		Slug            string `json:"slug"`
+		ExpectedVersion string `json:"expectedVersion"`
+		Lines           []int  `json:"lines"`
+	}{t.Slug, t.Version, []int{t.Line}}
+	return c.do(ctx, http.MethodPost, "/api/tasks/purge", body, nil)
+}
+
 // AddTask appends a "- [ ] text" line to a note: today's daily note when
 // daily is true (created if missing), otherwise the note named by slug.
 // Returns the vault-relative path written to.
@@ -339,6 +367,13 @@ func (c *Client) AddComment(ctx context.Context, boardName, cardID, bodyText str
 		return nil, err
 	}
 	return &card, nil
+}
+
+// DeleteCard permanently deletes a card (active or archived) — comments and
+// attachments included. There is no server-side undo.
+func (c *Client) DeleteCard(ctx context.Context, boardName, cardID string) error {
+	path := "/kanban/api/boards/" + url.PathEscape(boardName) + "/cards/" + url.PathEscape(cardID)
+	return c.do(ctx, http.MethodDelete, path, nil, nil)
 }
 
 // RestoreCard moves an archived (done) card back onto the board in the given

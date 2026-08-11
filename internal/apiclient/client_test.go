@@ -8,10 +8,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/base698/amythest/internal/kanban/board"
+	"github.com/base698/amythest/internal/tasks"
 )
 
 var frozenNow = time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
@@ -75,6 +77,36 @@ func newFakeServer(t *testing.T) *fakeServer {
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "recurred": false})
+	}))
+	mux.HandleFunc("POST /api/tasks/cancel", authed(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Slug            string `json:"slug"`
+			ExpectedVersion string `json:"expectedVersion"`
+			Items           []struct {
+				Line         int    `json:"line"`
+				ExpectedText string `json:"expectedText"`
+			} `json:"items"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || len(payload.Items) != 1 || len(payload.ExpectedVersion) != 64 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+	mux.HandleFunc("POST /api/tasks/purge", authed(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Slug            string `json:"slug"`
+			ExpectedVersion string `json:"expectedVersion"`
+			Lines           []int  `json:"lines"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || len(payload.Lines) != 1 || len(payload.ExpectedVersion) != 64 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+	mux.HandleFunc("DELETE /kanban/api/boards/{board}/cards/{card}", authed(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
 	}))
 	mux.HandleFunc("POST /api/tasks/add", authed(func(w http.ResponseWriter, r *http.Request) {
 		var payload struct {
@@ -295,6 +327,25 @@ func TestAddCommentPostsWithCSRFAndReturnsCard(t *testing.T) {
 	}
 	if got := srv.sawCSRF["/kanban/api/boards/personal/cards/c3/comments"]; got != "csrf-token" {
 		t.Fatalf("comment CSRF = %q", got)
+	}
+}
+
+func TestCancelPurgeAndDeleteCard(t *testing.T) {
+	srv := newFakeServer(t)
+	c := testClient(t, srv)
+	task := tasks.Task{Slug: "chores", Line: 3, Text: "water the ferns", Status: tasks.StatusOpen, Version: strings.Repeat("a", 64)}
+	if err := c.CancelTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	task.Status = tasks.StatusCancelled
+	if err := c.PurgeTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DeleteCard(context.Background(), "personal", "c1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.sawCSRF["/kanban/api/boards/personal/cards/c1"]; got != "csrf-token" {
+		t.Fatalf("delete card CSRF = %q", got)
 	}
 }
 
