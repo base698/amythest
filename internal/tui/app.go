@@ -339,8 +339,8 @@ const helpText = `
                   again → purge; card → permanent delete
   m               move card: picker with lanes and
                   other boards (t/b/y/i/v/d shortcuts)
-  e               edit: task due date, or card
-                  description in $EDITOR
+  e               edit: task due date + 🔁 repeat rule
+                  (two steps), or card in $EDITOR
   x               show/hide "Done today" (today view)
   /               search (enter commit, esc cancel)
   n / N           next / previous match

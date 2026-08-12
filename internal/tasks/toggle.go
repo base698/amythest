@@ -157,6 +157,41 @@ func parseRecurrence(rule string) (func(time.Time) time.Time, bool) {
 		}, whenDone
 	}
 
+	// "N weeks on wednesday[, saturday]" — jump N-1 weeks, then land on the
+	// next listed weekday. Vault data uses this form (e.g. haircut).
+	if fields := strings.Fields(r); len(fields) >= 4 &&
+		(fields[1] == "week" || fields[1] == "weeks") && fields[2] == "on" {
+		count := 0
+		if _, err := fmt.Sscanf(fields[0], "%d", &count); err != nil || count < 1 {
+			if n, ok := wordNumbers[fields[0]]; ok {
+				count = n
+			} else {
+				return nil, false
+			}
+		}
+		var days []time.Weekday
+		for _, part := range strings.FieldsFunc(strings.Join(fields[3:], " "), func(c rune) bool { return c == ',' || c == ' ' }) {
+			if wd, ok := weekdayNames[strings.TrimSpace(part)]; ok {
+				days = append(days, wd)
+			}
+		}
+		if len(days) == 0 {
+			return nil, false
+		}
+		return func(t time.Time) time.Time {
+			base := t.AddDate(0, 0, 7*(count-1))
+			for i := 1; i <= 7; i++ {
+				n := base.AddDate(0, 0, i)
+				for _, wd := range days {
+					if n.Weekday() == wd {
+						return n
+					}
+				}
+			}
+			return t
+		}, whenDone
+	}
+
 	count := 1
 	fields := strings.Fields(r)
 	unit := r

@@ -238,9 +238,9 @@ func (v *todayView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.busy = true
 		return v, v.loadCmd()
 
-	case dueSavedMsg:
+	case editSavedMsg:
 		v.busy = true
-		return v, tea.Batch(v.loadCmd(), flash("due date saved"))
+		return v, tea.Batch(v.loadCmd(), flash(msg.summary))
 
 	case taskAddedMsg:
 		v.busy = true
@@ -407,7 +407,17 @@ func (v *todayView) View(width, height int) string {
 	if v.cursor < v.offset {
 		v.offset = v.cursor
 	}
-	rowsAvail := height - 3
+	reserved := 0
+	if v.find.bar() != "" {
+		reserved++
+	}
+	if v.prompt.active() {
+		reserved++
+	}
+	if v.del.active {
+		reserved++
+	}
+	rowsAvail := max(3, height-3-reserved)
 	if v.cursor >= v.offset+rowsAvail {
 		v.offset = v.cursor - rowsAvail + 1
 	}
@@ -465,6 +475,9 @@ func (v *todayView) renderItem(it todayItem, selected bool, width int) string {
 		meta = append(meta, dueStyle.Render(it.due()))
 	}
 	if it.task != nil {
+		if it.task.Recurrence != "" {
+			meta = append(meta, dimStyle.Render("🔁 "+it.task.Recurrence))
+		}
 		meta = append(meta, dimStyle.Render(it.task.Path))
 	} else {
 		meta = append(meta, dimStyle.Render(it.board))

@@ -5,9 +5,11 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
+	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/kanban/board"
 	"github.com/base698/amythest/internal/tasks"
 )
@@ -207,4 +209,56 @@ func stripANSI(s string) string {
 		}
 	}
 	return b.String()
+}
+
+func TestEditPromptTwoStepsDueThenRepeat(t *testing.T) {
+	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
+	p := newDuePrompt()
+	task := tasks.Task{Slug: "chores", Line: 1, Text: "Shave", Status: tasks.StatusOpen,
+		Due: "2026-08-12", Recurrence: "every week on Wednesday, Saturday", Version: strings.Repeat("a", 64)}
+	p.start(task)
+	if !p.active() || p.step != 0 || p.input.Value() != "2026-08-12" {
+		t.Fatalf("start state: step=%d value=%q", p.step, p.input.Value())
+	}
+	now := time.Date(2026, 8, 12, 9, 0, 0, 0, time.UTC)
+
+	// Enter through the due step unchanged → repeat step, prefilled.
+	save, _ := p.handleKey(enterMsg(), client, now)
+	if save != nil || p.step != 1 || p.input.Value() != "every week on Wednesday, Saturday" {
+		t.Fatalf("after due enter: step=%d value=%q", p.step, p.input.Value())
+	}
+
+	// Invalid rule flashes and stays.
+	p.input.SetValue("every blue moon")
+	save, cmd := p.handleKey(enterMsg(), client, now)
+	if save != nil || cmd == nil || !p.active() {
+		t.Fatal("invalid rule must flash and keep the prompt open")
+	}
+
+	// Valid rule commits and returns the save command.
+	p.input.SetValue("every 4 days when done")
+	save, _ = p.handleKey(enterMsg(), client, now)
+	if save == nil || p.active() {
+		t.Fatal("valid rule must produce the save command and close")
+	}
+
+	// Esc on the repeat step goes back to due, not out.
+	p.start(task)
+	p.handleKey(enterMsg(), client, now)
+	p.handleKey(tea.KeyMsg{Type: tea.KeyEsc}, client, now)
+	if !p.active() || p.step != 0 {
+		t.Fatalf("esc from repeat: active=%v step=%d", p.active(), p.step)
+	}
+	p.handleKey(tea.KeyMsg{Type: tea.KeyEsc}, client, now)
+	if p.active() {
+		t.Fatal("esc from due must close the prompt")
+	}
+
+	// No changes at all → flash, no save.
+	p.start(task)
+	p.handleKey(enterMsg(), client, now)
+	save, cmd = p.handleKey(enterMsg(), client, now)
+	if save != nil || cmd == nil {
+		t.Fatal("unchanged edit should flash 'no changes'")
+	}
 }
