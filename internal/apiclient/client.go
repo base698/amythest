@@ -204,6 +204,24 @@ func (c *Client) SetTaskDue(ctx context.Context, t tasks.Task, due string) error
 	return c.do(ctx, http.MethodPost, "/api/tasks/due", body, &out)
 }
 
+// SetTaskRecurrence sets, changes, or clears (rule="") a task's 🔁 rule.
+func (c *Client) SetTaskRecurrence(ctx context.Context, t tasks.Task, rule string) error {
+	body := struct {
+		Slug               string `json:"slug"`
+		Line               int    `json:"line"`
+		ExpectedText       string `json:"expectedText"`
+		ExpectedStatus     string `json:"expectedStatus"`
+		ExpectedRecurrence string `json:"expectedRecurrence"`
+		ExpectedVersion    string `json:"expectedVersion"`
+		Recurrence         string `json:"recurrence"`
+	}{t.Slug, t.Line, t.Text, t.Status, t.Recurrence, t.Version, rule}
+	var out struct {
+		OK         bool   `json:"ok"`
+		Recurrence string `json:"recurrence"`
+	}
+	return c.do(ctx, http.MethodPost, "/api/tasks/recurrence", body, &out)
+}
+
 // CancelTask soft-deletes a vault task: the line becomes "- [-] … ❌ date",
 // still visible in the note and recoverable by editing it.
 func (c *Client) CancelTask(ctx context.Context, t tasks.Task) error {

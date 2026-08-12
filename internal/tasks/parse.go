@@ -23,6 +23,8 @@ var emojiMarkers = []struct {
 	{"⏳", "scheduled"},
 	{"🛫", "start"},
 	{"🔁", "recurrence"},
+	{"🏁", "oncompletion"}, // Obsidian's on-completion action; recognized so it
+	// terminates neighboring field values (🔁 must not swallow "🏁 delete")
 	{"✅", "done"},
 	{"❌", "cancelled"},
 	{"🔺", "prio0"},
@@ -160,6 +162,9 @@ func parseTask(statusChar byte, rest string) Task {
 			t.DoneDate = firstDate(after)
 		case "recurrence":
 			t.Recurrence = untilNextMarker(after)
+		case "oncompletion":
+			// The action itself (delete/keep) is not implemented; the
+			// marker exists for field-boundary parsing.
 		case "prio0":
 			t.Priority = 0
 		case "prio1":

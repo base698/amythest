@@ -78,6 +78,19 @@ func newFakeServer(t *testing.T) *fakeServer {
 		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "recurred": false})
 	}))
+	mux.HandleFunc("POST /api/tasks/recurrence", authed(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Slug            string `json:"slug"`
+			Line            int    `json:"line"`
+			ExpectedVersion string `json:"expectedVersion"`
+			Recurrence      string `json:"recurrence"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || len(payload.ExpectedVersion) != 64 || payload.Line < 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "recurrence": payload.Recurrence})
+	}))
 	mux.HandleFunc("POST /api/tasks/cancel", authed(func(w http.ResponseWriter, r *http.Request) {
 		var payload struct {
 			Slug            string `json:"slug"`
@@ -327,6 +340,19 @@ func TestAddCommentPostsWithCSRFAndReturnsCard(t *testing.T) {
 	}
 	if got := srv.sawCSRF["/kanban/api/boards/personal/cards/c3/comments"]; got != "csrf-token" {
 		t.Fatalf("comment CSRF = %q", got)
+	}
+}
+
+func TestSetTaskRecurrencePostsExpectedTriple(t *testing.T) {
+	srv := newFakeServer(t)
+	c := testClient(t, srv)
+	task := tasks.Task{Slug: "chores", Line: 1, Text: "Shave", Status: tasks.StatusOpen,
+		Recurrence: "every week on Wednesday, Saturday", Version: strings.Repeat("a", 64)}
+	if err := c.SetTaskRecurrence(context.Background(), task, "every 4 days when done"); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.sawCSRF["/api/tasks/recurrence"]; got != "" {
+		t.Fatalf("recurrence CSRF = %q, want empty (notes-side write)", got)
 	}
 }
 

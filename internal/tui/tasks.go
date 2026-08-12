@@ -160,9 +160,9 @@ func (v *tasksView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.busy = false
 		return v, nil
 
-	case dueSavedMsg:
+	case editSavedMsg:
 		v.busy = true
-		return v, tea.Batch(v.loadCmd(), flash("due date saved"))
+		return v, tea.Batch(v.loadCmd(), flash(msg.summary))
 
 	case taskAddedMsg:
 		v.busy = true
@@ -338,14 +338,27 @@ func (v *tasksView) View(width, height int) string {
 	if len(v.rows) == 0 {
 		return "\n  no tasks match: " + taskPresets[v.preset]
 	}
+	// Reserve rows for the bars appended below the list, or a full screen
+	// of tasks pushes them past the height budget and they get trimmed.
+	reserved := 0
+	if v.find.bar() != "" {
+		reserved++
+	}
+	if v.prompt.active() {
+		reserved++
+	}
+	if v.del.active {
+		reserved++
+	}
+	avail := max(3, height-1-reserved)
 	if v.cursor < v.offset {
 		v.offset = v.cursor
 	}
-	if v.cursor >= v.offset+height-1 {
-		v.offset = v.cursor - height + 2
+	if v.cursor >= v.offset+avail {
+		v.offset = v.cursor - avail + 1
 	}
 	var b strings.Builder
-	end := min(len(v.rows), v.offset+height-1)
+	end := min(len(v.rows), v.offset+avail)
 	for i := v.offset; i < end; i++ {
 		row := v.rows[i]
 		if row.task == nil {
@@ -390,6 +403,9 @@ func renderTaskLine(t *tasks.Task, selected bool, width int) string {
 	var meta []string
 	if t.Due != "" {
 		meta = append(meta, dueStyle.Render("due "+t.Due))
+	}
+	if t.Recurrence != "" {
+		meta = append(meta, dimStyle.Render("🔁 "+t.Recurrence))
 	}
 	if badge := taskPriorityBadge(t.Priority); badge != "" {
 		meta = append(meta, badge)
