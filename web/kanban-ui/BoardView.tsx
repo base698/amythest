@@ -27,7 +27,8 @@ export interface Card {
 	milestone?: string
 	priority: Priority
 	status: Status
-  assignee: string
+  // Omitted by the API when empty — always guard before calling string methods.
+  assignee?: string
   agent?: string
   blocked?: boolean
   labels: string[]
