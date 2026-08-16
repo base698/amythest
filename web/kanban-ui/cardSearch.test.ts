@@ -35,3 +35,19 @@ test('searches card text and metadata without changing card order', () => {
 test('requires every search term to match some field', () => {
   assert.deepEqual(searchCards(cards, 'release latency'), [])
 })
+
+// The API omits assignee/milestone when empty and can send labels as null, so a
+// card straight off the wire may be missing the fields the search reads. Typing
+// into the board search box crashed the whole view on those cards.
+test('searches cards whose optional fields are missing from the API payload', () => {
+  const sparse = [
+    { id: 'card-201', title: 'Unassigned work' },
+    { id: 'card-202', title: 'Null labels', labels: null },
+    { id: 'card-203', title: 'Empty everything', description: '', assignee: '', labels: [] },
+  ] as SearchableCard[]
+
+  assert.deepEqual(searchCards(sparse, 'unassigned').map((card) => card.id), ['card-201'])
+  assert.deepEqual(searchCards(sparse, 'null labels').map((card) => card.id), ['card-202'])
+  assert.deepEqual(searchCards(sparse, 'card-203').map((card) => card.id), ['card-203'])
+  assert.deepEqual(searchCards(sparse, 'nothingmatches'), [])
+})
