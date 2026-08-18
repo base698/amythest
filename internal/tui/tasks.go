@@ -81,7 +81,12 @@ func toggleTaskCmd(client *apiclient.Client, t tasks.Task, done bool) tea.Cmd {
 			if qerr != nil {
 				return fail(qerr)
 			}
-			fresh, ok := findTask(groups, t.Slug, t.Text)
+			// Completing wants an open line; reopening wants a done one.
+			wantStatus := tasks.StatusOpen
+			if !done {
+				wantStatus = tasks.StatusDone
+			}
+			fresh, ok := findTask(groups, t.Slug, t.Text, wantStatus)
 			if !ok {
 				return fail(fmt.Errorf("task changed on server; refresh (r) and retry"))
 			}
@@ -95,7 +100,7 @@ func toggleTaskCmd(client *apiclient.Client, t tasks.Task, done bool) tea.Cmd {
 			// Surface where the spawned occurrence went — it is usually
 			// due tomorrow, i.e. no longer on today's screen.
 			if groups, err := client.ListTasks(ctx, "not done;description includes "+t.Text); err == nil {
-				if fresh, ok := findTask(groups, t.Slug, t.Text); ok {
+				if fresh, ok := findTask(groups, t.Slug, t.Text, tasks.StatusOpen); ok {
 					msg.nextDue = fresh.Due
 				}
 			}
@@ -118,10 +123,14 @@ func applyTaskToggle(t *tasks.Task, done bool, today string) {
 	}
 }
 
-func findTask(groups []apiclient.TaskGroup, slug, text string) (tasks.Task, bool) {
+// findTask re-locates a task by identity plus status. Status matters:
+// recurring tasks leave many identically-worded completed copies in the same
+// file, so a status-blind match can hand back a done line and a "successful"
+// retry silently no-ops against it.
+func findTask(groups []apiclient.TaskGroup, slug, text, status string) (tasks.Task, bool) {
 	for _, g := range groups {
 		for _, t := range g.Tasks {
-			if t.Slug == slug && t.Text == text {
+			if t.Slug == slug && t.Text == text && t.Status == status {
 				return t, true
 			}
 		}

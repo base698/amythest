@@ -98,3 +98,25 @@ func TestTasksViewRenderShowsDoneStrikethroughAndDue(t *testing.T) {
 		t.Fatalf("render:\n%s", out)
 	}
 }
+
+func TestFindTaskPrefersRequestedStatusAmongIdenticalCopies(t *testing.T) {
+	// A daily recurring task leaves many identically-worded done copies in
+	// the same file; the done copies sort first. A status-blind match would
+	// return line 7 and a completion retry would no-op against it.
+	groups := []apiclient.TaskGroup{{Tasks: []tasks.Task{
+		{Slug: "workout", Line: 7, Text: "Ensure I worked out today", Status: tasks.StatusDone, Version: strings.Repeat("a", 64)},
+		{Slug: "workout", Line: 5, Text: "Ensure I worked out today", Status: tasks.StatusDone, Version: strings.Repeat("a", 64)},
+		{Slug: "workout", Line: 1, Text: "Ensure I worked out today", Status: tasks.StatusOpen, Version: strings.Repeat("b", 64)},
+	}}}
+	open, ok := findTask(groups, "workout", "Ensure I worked out today", tasks.StatusOpen)
+	if !ok || open.Line != 1 {
+		t.Fatalf("open match = %+v ok=%v, want line 1", open, ok)
+	}
+	done, ok := findTask(groups, "workout", "Ensure I worked out today", tasks.StatusDone)
+	if !ok || done.Line != 7 {
+		t.Fatalf("done match = %+v, want line 7", done)
+	}
+	if _, ok := findTask(groups, "workout", "Ensure I worked out today", tasks.StatusCancelled); ok {
+		t.Fatal("cancelled match should not exist")
+	}
+}
