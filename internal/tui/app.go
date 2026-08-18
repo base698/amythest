@@ -247,7 +247,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// like "d" always has visible feedback, whatever the view does.
 	switch msg := msg.(type) {
 	case taskToggledMsg:
+		today := time.Now().Format("2006-01-02")
 		switch {
+		case msg.recurred && msg.nextDue != "" && msg.nextDue <= today:
+			// Overdue recurrence catching up: the spawned occurrence is
+			// itself already due, so the task will look "still open".
+			a.status = fmt.Sprintf("completed ✓ — next occurrence (due %s) is already pending: space again to catch up, or e → repeat 'every day when done'", msg.nextDue)
 		case msg.recurred && msg.nextDue != "":
 			a.status = fmt.Sprintf("task completed ✓ — recurring: next occurrence due %s", msg.nextDue)
 		case msg.recurred:

@@ -158,7 +158,7 @@ func refetchTask(ctx context.Context, client *apiclient.Client, t tasks.Task) (t
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	fresh, ok := findTask(groups, t.Slug, t.Text)
+	fresh, ok := findTask(groups, t.Slug, t.Text, t.Status)
 	if !ok {
 		return tasks.Task{}, fmt.Errorf("task changed on server; refresh (r) and retry")
 	}

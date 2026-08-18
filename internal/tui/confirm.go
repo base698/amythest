@@ -57,7 +57,7 @@ func deleteTaskCmd(client *apiclient.Client, t tasks.Task) tea.Cmd {
 			if qerr != nil {
 				return fail(qerr)
 			}
-			fresh, ok := findTask(groups, t.Slug, t.Text)
+			fresh, ok := findTask(groups, t.Slug, t.Text, t.Status)
 			if !ok {
 				return fail(fmt.Errorf("task changed on server; refresh (r) and retry"))
 			}
