@@ -69,8 +69,14 @@ func (p *agentPicker) view() string {
 	return b.String()
 }
 
-// agentPromptSentMsg confirms a context prompt was delivered.
-type agentPromptSentMsg struct{ subject string }
+// agentPromptSentMsg confirms a context prompt was delivered. id identifies
+// the sender (note slug, card ID, issue key) — the stack broadcasts every
+// message to all views, so without it one view's send would clear another
+// view's busy state.
+type agentPromptSentMsg struct {
+	id      string
+	subject string
+}
 
 func listAgentsCmd(wrap func(agents []herdr.Agent) tea.Msg) tea.Cmd {
 	return func() tea.Msg {
@@ -85,12 +91,12 @@ func listAgentsCmd(wrap func(agents []herdr.Agent) tea.Msg) tea.Cmd {
 	}
 }
 
-func sendToAgentCmd(agent herdr.Agent, subject, text string) tea.Cmd {
+func sendToAgentCmd(agent herdr.Agent, id, subject, text string) tea.Cmd {
 	return func() tea.Msg {
 		if err := herdr.Prompt(context.Background(), agent.PaneID, text); err != nil {
 			return fail(err)
 		}
-		return agentPromptSentMsg{subject: subject}
+		return agentPromptSentMsg{id: id, subject: subject}
 	}
 }
 

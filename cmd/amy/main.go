@@ -16,11 +16,18 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/base698/amythest/internal/apiclient"
+	"github.com/base698/amythest/internal/source"
+	"github.com/base698/amythest/internal/source/amythest"
+	"github.com/base698/amythest/internal/source/jira"
 	"github.com/base698/amythest/internal/tui"
 )
 
 func main() {
 	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "source" {
+		runSource(args[1:])
+		return
+	}
 	check := false
 	filtered := args[:0]
 	for _, a := range args {
@@ -43,7 +50,14 @@ func main() {
 		return
 	}
 
-	program := tea.NewProgram(tui.NewApp(client), tea.WithAltScreen())
+	sources := []source.Source{amythest.New(client)}
+	if jcfg, ok, jerr := jira.LoadConfig(cfg.File); jerr != nil {
+		fmt.Fprintln(os.Stderr, "warning: sources config:", jerr)
+	} else if ok {
+		sources = append(sources, jira.New(jcfg, cfg.EnvFile))
+	}
+
+	program := tea.NewProgram(tui.NewApp(client, source.NewRegistry(sources...)), tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

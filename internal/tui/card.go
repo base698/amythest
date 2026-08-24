@@ -205,6 +205,9 @@ func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		return v, nil
 
 	case agentPromptSentMsg:
+		if msg.id != v.card.ID {
+			return v, nil
+		}
 		v.busy = false
 		return v, flash("sent to agent ✓")
 
@@ -253,7 +256,7 @@ func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {
 				return v, nil
 			}
 			v.busy = true
-			return v, sendToAgentCmd(*agent, v.card.Title, cardContextPrompt(v.card, v.boardName, v.client.Endpoint()))
+			return v, sendToAgentCmd(*agent, v.card.ID, v.card.Title, cardContextPrompt(v.card, v.boardName, v.client.Endpoint()))
 		}
 		if v.del.active {
 			if v.del.handleKey(msg) {

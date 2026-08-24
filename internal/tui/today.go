@@ -12,47 +12,53 @@ import (
 
 	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/kanban/board"
+	"github.com/base698/amythest/internal/source"
+	srcamythest "github.com/base698/amythest/internal/source/amythest"
 	"github.com/base698/amythest/internal/tasks"
 )
 
-// todayItem is one row of the focus view: either a vault task or a kanban
-// card, normalized so toggling/searching/rendering can treat them alike.
+// todayItem is one row of the focus view: a normalized source.Item plus its
+// assigned section. Amythest-native behaviors (toggle, delete, edit, open)
+// reach the underlying task/card through Payload type-switches; items from
+// other sources fall back to read-only handling here and full interaction in
+// their own view.
 type todayItem struct {
 	section string // "Focus" | "Overdue" | "Due today" | "Done today"
-	task    *tasks.Task
-	card    *board.Card
-	board   string // owning board for cards
-	// done marks a card completed (archived); prevStatus is where space
-	// restores it to. Task doneness lives on task.Status.
-	done       bool
-	prevStatus board.Status
+	item    source.Item
 }
 
-func (it todayItem) isDone() bool {
-	if it.task != nil {
-		return it.task.Status == tasks.StatusDone
+func (it *todayItem) task() *tasks.Task {
+	if p, ok := it.item.Payload.(srcamythest.TaskPayload); ok {
+		return p.Task
 	}
-	return it.done
+	return nil
 }
 
-func (it todayItem) text() string {
-	if it.task != nil {
-		return it.task.Text
+func (it *todayItem) card() *srcamythest.CardPayload {
+	if p, ok := it.item.Payload.(*srcamythest.CardPayload); ok {
+		return p
 	}
-	return it.card.Title
+	return nil
 }
 
-func (it todayItem) due() string {
-	if it.task != nil {
-		return it.task.Due
+func (it *todayItem) isDone() bool {
+	if t := it.task(); t != nil {
+		return t.Status == tasks.StatusDone
 	}
-	return it.card.DueDate
+	return it.item.Done
 }
 
-type todayLoadedMsg struct{ items []todayItem }
+func (it *todayItem) text() string { return it.item.Title }
+func (it *todayItem) due() string  { return it.item.Due }
+
+type todayLoadedMsg struct {
+	items   []todayItem
+	srcErrs map[string]error
+}
 
 type todayView struct {
 	client   *apiclient.Client
+	reg      *source.Registry
 	items    []todayItem
 	cursor   int
 	offset   int
@@ -67,8 +73,8 @@ type todayView struct {
 	now      func() time.Time
 }
 
-func newTodayView(client *apiclient.Client) *todayView {
-	return &todayView{client: client, find: newFinder(), prompt: newDuePrompt(), now: time.Now}
+func newTodayView(client *apiclient.Client, reg *source.Registry) *todayView {
+	return &todayView{client: client, reg: reg, find: newFinder(), prompt: newDuePrompt(), now: time.Now}
 }
 
 func (v *todayView) Title() string { return "today" }
@@ -82,93 +88,25 @@ func (v *todayView) Init() tea.Cmd {
 	return v.loadCmd()
 }
 
-// loadCmd assembles the focus list: overdue/today vault tasks plus kanban
-// cards that are due (or explicitly focused via the board's focus card).
-// With showDone it also gathers what was finished today, so a completion can
-// always be seen — and undone — after the fact.
+// loadCmd aggregates every registered source's due items. An amythest error
+// fails the view (matching pre-registry behavior); other sources degrade to
+// a status-bar note with partial results.
 func (v *todayView) loadCmd() tea.Cmd {
-	client := v.client
-	today := v.now().Format("2006-01-02")
+	reg := v.reg
+	day := v.now().Format("2006-01-02")
 	showDone := v.showDone
 	return func() tea.Msg {
 		ctx := context.Background()
-		groups, err := client.ListTasks(ctx, "not done;due before tomorrow;sort by due")
-		if err != nil {
+		found, errs := reg.DueItems(ctx, day, showDone)
+		if err := errs["amythest"]; err != nil {
 			return fail(err)
 		}
-		var items []todayItem
-		for gi := range groups {
-			for ti := range groups[gi].Tasks {
-				t := &groups[gi].Tasks[ti]
-				if strings.HasPrefix(t.Path, "kanban/") {
-					continue // card checkboxes surface through their card
-				}
-				section := "Due today"
-				if t.Due < today {
-					section = "Overdue"
-				}
-				items = append(items, todayItem{section: section, task: t})
-			}
-		}
-		if showDone {
-			doneGroups, err := client.ListTasks(ctx, "done;done on today")
-			if err != nil {
-				return fail(err)
-			}
-			for gi := range doneGroups {
-				for ti := range doneGroups[gi].Tasks {
-					t := &doneGroups[gi].Tasks[ti]
-					if strings.HasPrefix(t.Path, "kanban/") {
-						continue
-					}
-					items = append(items, todayItem{section: "Done today", task: t})
-				}
-			}
-		}
-		boards, err := client.ListBoards(ctx)
-		if err != nil {
-			return fail(err)
-		}
-		for _, bs := range boards {
-			if bs.Archived {
-				continue
-			}
-			b, err := client.GetBoard(ctx, bs.Name)
-			if err != nil {
-				return fail(err)
-			}
-			for i := range b.Cards {
-				card := b.Cards[i]
-				switch {
-				case card.ID == b.FocusCardID:
-					items = append(items, todayItem{section: "Focus", card: &b.Cards[i], board: b.Name})
-				case card.DueDate != "" && card.DueDate <= today:
-					section := "Due today"
-					if card.DueDate < today {
-						section = "Overdue"
-					}
-					items = append(items, todayItem{section: section, card: &b.Cards[i], board: b.Name})
-				}
-			}
-			if showDone {
-				archived, err := client.ListArchive(ctx, bs.Name, 50)
-				if err != nil {
-					return fail(err)
-				}
-				for i := range archived {
-					card := archived[i]
-					if card.DoneAt == nil || card.DoneAt.Local().Format("2006-01-02") != today {
-						continue
-					}
-					items = append(items, todayItem{
-						section: "Done today", card: &archived[i], board: bs.Name,
-						done: true, prevStatus: board.Triage,
-					})
-				}
-			}
+		items := make([]todayItem, 0, len(found))
+		for _, it := range found {
+			items = append(items, todayItem{section: source.SectionFor(it, day), item: it})
 		}
 		sortTodayItems(items)
-		return todayLoadedMsg{items}
+		return todayLoadedMsg{items: items, srcErrs: errs}
 	}
 }
 
@@ -200,6 +138,17 @@ func (v *todayView) Update(msg tea.Msg) (view, tea.Cmd) {
 		if v.cursor >= len(v.items) {
 			v.cursor = max(0, len(v.items)-1)
 		}
+		if len(msg.srcErrs) > 0 {
+			var notes []string
+			for name, err := range msg.srcErrs {
+				if name != "amythest" {
+					notes = append(notes, fmt.Sprintf("%s: %v", name, err))
+				}
+			}
+			if len(notes) > 0 {
+				return v, flash(strings.Join(notes, " · "))
+			}
+		}
 		return v, nil
 
 	case taskToggledMsg:
@@ -209,7 +158,7 @@ func (v *todayView) Update(msg tea.Msg) (view, tea.Cmd) {
 			return v, v.loadCmd()
 		}
 		for i := range v.items {
-			if t := v.items[i].task; t != nil && t.Slug == msg.slug && t.Text == msg.text {
+			if t := v.items[i].task(); t != nil && t.Slug == msg.slug && t.Text == msg.text {
 				applyTaskToggle(t, msg.done, v.now().Format("2006-01-02"))
 			}
 		}
@@ -218,9 +167,9 @@ func (v *todayView) Update(msg tea.Msg) (view, tea.Cmd) {
 	case cardArchivedMsg:
 		v.busy = false
 		for i := range v.items {
-			if c := v.items[i].card; c != nil && c.ID != "" && msg.card != nil && c.ID == msg.card.ID {
-				v.items[i].done = true
-				v.items[i].prevStatus = msg.prevStatus
+			if c := v.items[i].card(); c != nil && msg.card != nil && c.Card.ID == msg.card.ID {
+				v.items[i].item.Done = true
+				c.PrevStatus = msg.prevStatus
 			}
 		}
 		return v, nil
@@ -228,8 +177,8 @@ func (v *todayView) Update(msg tea.Msg) (view, tea.Cmd) {
 	case cardRestoredMsg:
 		v.busy = false
 		for i := range v.items {
-			if c := v.items[i].card; c != nil && c.ID == msg.cardID {
-				v.items[i].done = false
+			if c := v.items[i].card(); c != nil && c.Card.ID == msg.cardID {
+				v.items[i].item.Done = false
 			}
 		}
 		return v, nil
@@ -258,10 +207,13 @@ func (v *todayView) Update(msg tea.Msg) (view, tea.Cmd) {
 		if v.del.active {
 			if v.del.handleKey(msg) {
 				v.busy = true
-				if v.delItem.task != nil {
-					return v, deleteTaskCmd(v.client, *v.delItem.task)
+				if t := v.delItem.task(); t != nil {
+					return v, deleteTaskCmd(v.client, *t)
 				}
-				return v, deleteCardCmd(v.client, v.delItem.board, v.delItem.card.ID, v.delItem.card.Title)
+				if c := v.delItem.card(); c != nil {
+					return v, deleteCardCmd(v.client, c.Board, c.Card.ID, c.Card.Title)
+				}
+				return v, nil
 			}
 			return v, nil
 		}
@@ -313,37 +265,57 @@ func (v *todayView) Update(msg tea.Msg) (view, tea.Cmd) {
 		case " ", "d":
 			return v.toggleCurrent()
 		case "enter":
-			if it := v.current(); it != nil && it.card != nil {
-				return v, pushView(newCardView(v.client, it.board, *it.card))
+			it := v.current()
+			if it == nil {
+				return v, nil
+			}
+			if c := it.card(); c != nil {
+				return v, pushView(newCardView(v.client, c.Board, *c.Card))
+			}
+			if it.task() == nil && it.item.URL != "" {
+				return v, openURLCmd(it.item.URL)
 			}
 		case "e":
 			it := v.current()
 			if it == nil {
 				return v, nil
 			}
-			if it.task != nil {
-				return v, v.prompt.start(*it.task)
+			if t := it.task(); t != nil {
+				return v, v.prompt.start(*t)
 			}
-			return v, pushView(newCardViewEditing(v.client, it.board, *it.card))
+			if c := it.card(); c != nil {
+				return v, pushView(newCardViewEditing(v.client, c.Board, *c.Card))
+			}
+			return v, v.foreignItemFlash(it)
 		case "D":
 			it := v.current()
 			if it == nil {
 				return v, nil
 			}
-			v.delItem = *it
-			if it.task != nil {
-				if it.task.Status == tasks.StatusCancelled {
-					v.del.open(fmt.Sprintf("permanently delete cancelled task %q?", it.task.Text))
+			if t := it.task(); t != nil {
+				v.delItem = *it
+				if t.Status == tasks.StatusCancelled {
+					v.del.open(fmt.Sprintf("permanently delete cancelled task %q?", t.Text))
 				} else {
-					v.del.open(fmt.Sprintf("cancel task %q?", it.task.Text))
+					v.del.open(fmt.Sprintf("cancel task %q?", t.Text))
 				}
-			} else {
-				v.del.open(fmt.Sprintf("permanently delete card %q (comments and attachments too)?", it.card.Title))
+				return v, nil
 			}
-			return v, nil
+			if c := it.card(); c != nil {
+				v.delItem = *it
+				v.del.open(fmt.Sprintf("permanently delete card %q (comments and attachments too)?", c.Card.Title))
+				return v, nil
+			}
+			return v, v.foreignItemFlash(it)
 		}
 	}
 	return v, nil
+}
+
+// foreignItemFlash explains that items from external sources are read-only
+// on the Today view.
+func (v *todayView) foreignItemFlash(it *todayItem) tea.Cmd {
+	return flash(fmt.Sprintf("%s items are read-only here — press 5 for the %s view", it.item.Source, it.item.Source))
 }
 
 func (v *todayView) current() *todayItem {
@@ -355,20 +327,25 @@ func (v *todayView) current() *todayItem {
 
 // toggleCurrent completes the selected item, or brings it back when it is
 // already done: tasks re-open in place, archived cards restore to the column
-// they were completed from.
+// they were completed from. Foreign items are read-only here.
 func (v *todayView) toggleCurrent() (view, tea.Cmd) {
 	it := v.current()
 	if it == nil || v.busy {
 		return v, nil
 	}
+	if t := it.task(); t != nil {
+		v.busy = true
+		return v, toggleTaskCmd(v.client, *t, t.Status != tasks.StatusDone)
+	}
+	c := it.card()
+	if c == nil {
+		return v, v.foreignItemFlash(it)
+	}
 	v.busy = true
 	client := v.client
-	if it.task != nil {
-		return v, toggleTaskCmd(client, *it.task, it.task.Status != tasks.StatusDone)
-	}
-	boardName, cardID := it.board, it.card.ID
+	boardName, cardID := c.Board, c.Card.ID
 	if it.isDone() {
-		status := it.prevStatus
+		status := c.PrevStatus
 		if status == "" || status == board.Done {
 			status = board.Triage
 		}
@@ -379,7 +356,7 @@ func (v *todayView) toggleCurrent() (view, tea.Cmd) {
 			return cardRestoredMsg{board: boardName, cardID: cardID, status: status}
 		}
 	}
-	prev := it.card.Status
+	prev := c.Card.Status
 	return v, func() tea.Msg {
 		done := board.Done
 		card, err := client.PatchCard(context.Background(), boardName, cardID, apiclient.CardPatch{Status: &done})
@@ -454,14 +431,27 @@ func (v *todayView) View(width, height int) string {
 	)
 }
 
+// kindBadgeStyles maps item kinds to their badge style; unknown kinds share
+// the issue style so a future source needs no TUI change to render.
+func kindBadge(kind string) string {
+	switch kind {
+	case "task":
+		return dimStyle.Render("[task]")
+	case "card":
+		return dueStyle.Render("[card]")
+	default:
+		return linkStyle.Render("[" + kind + "]")
+	}
+}
+
 func (v *todayView) renderItem(it todayItem, selected bool, width int) string {
 	prefix := "  "
 	if selected {
 		prefix = cursorStyle.Render("▸ ")
 	}
-	kind := dimStyle.Render("[task]")
-	if it.card != nil {
-		kind = dueStyle.Render("[card]")
+	badge := kindBadge(it.item.Kind)
+	if it.item.Source != "amythest" {
+		badge = linkStyle.Render("[" + it.item.Source + "]")
 	}
 	text := highlight(it.text(), v.find.query)
 	if selected {
@@ -474,16 +464,11 @@ func (v *todayView) renderItem(it todayItem, selected bool, width int) string {
 	if it.due() != "" {
 		meta = append(meta, dueStyle.Render(it.due()))
 	}
-	if it.task != nil {
-		if it.task.Recurrence != "" {
-			meta = append(meta, dimStyle.Render("🔁 "+it.task.Recurrence))
-		}
-		meta = append(meta, dimStyle.Render(it.task.Path))
-	} else {
-		meta = append(meta, dimStyle.Render(it.board))
-		if it.card.Blocked {
-			meta = append(meta, blockedStyle.Render("[blocked]"))
-		}
+	for _, b := range it.item.Badges {
+		meta = append(meta, blockedStyle.Render("["+b+"]"))
 	}
-	return prefix + kind + " " + text + "  " + strings.Join(meta, " ")
+	if it.item.Meta != "" {
+		meta = append(meta, dimStyle.Render(it.item.Meta))
+	}
+	return prefix + badge + " " + text + "  " + strings.Join(meta, " ")
 }

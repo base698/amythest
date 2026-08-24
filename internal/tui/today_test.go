@@ -11,8 +11,25 @@ import (
 
 	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/kanban/board"
+	"github.com/base698/amythest/internal/source"
+	srcamythest "github.com/base698/amythest/internal/source/amythest"
 	"github.com/base698/amythest/internal/tasks"
 )
+
+func taskFixtureItem(section string, t *tasks.Task) todayItem {
+	return todayItem{section: section, item: source.Item{
+		Source: "amythest", ID: t.Slug, Kind: "task", Title: t.Text, Due: t.Due,
+		Meta: t.Path, Payload: srcamythest.TaskPayload{Task: t},
+	}}
+}
+
+func cardFixtureItem(section string, c *board.Card, boardName string, focused bool) todayItem {
+	return todayItem{section: section, item: source.Item{
+		Source: "amythest", ID: c.ID, Kind: "card", Title: c.Title, Due: c.DueDate,
+		Focused: focused, Meta: boardName,
+		Payload: &srcamythest.CardPayload{Card: c, Board: boardName, PrevStatus: c.Status},
+	}}
+}
 
 func loadedToday() todayLoadedMsg {
 	overdueTask := tasks.Task{Slug: "chores", Path: "chores.md", Line: 2, Text: "water the ferns", Status: tasks.StatusOpen, Due: "2026-08-08", Priority: 3, Version: strings.Repeat("a", 64)}
@@ -20,17 +37,17 @@ func loadedToday() todayLoadedMsg {
 	focusCard := board.Card{ID: "f1", Title: "Ship the release", Status: board.InProgress}
 	dueCard := board.Card{ID: "d1", Title: "Renew domain", Status: board.Ready, DueDate: "2026-08-10"}
 	items := []todayItem{
-		{section: "Due today", task: &todayTask},
-		{section: "Overdue", task: &overdueTask},
-		{section: "Focus", card: &focusCard, board: "work"},
-		{section: "Due today", card: &dueCard, board: "personal"},
+		taskFixtureItem("Due today", &todayTask),
+		taskFixtureItem("Overdue", &overdueTask),
+		cardFixtureItem("Focus", &focusCard, "work", true),
+		cardFixtureItem("Due today", &dueCard, "personal", false),
 	}
 	sortTodayItems(items)
-	return todayLoadedMsg{items}
+	return todayLoadedMsg{items: items}
 }
 
 func TestTodayViewSectionsOrderFocusOverdueThenDueToday(t *testing.T) {
-	v := newTodayView(nil)
+	v := newTodayView(nil, nil)
 	next, _ := v.Update(loadedToday())
 	tv := next.(*todayView)
 	if len(tv.items) != 4 {
@@ -43,13 +60,13 @@ func TestTodayViewSectionsOrderFocusOverdueThenDueToday(t *testing.T) {
 			t.Fatalf("section order = %v", order)
 		}
 	}
-	if tv.items[0].card == nil || tv.items[0].card.ID != "f1" {
+	if tv.items[0].card() == nil || tv.items[0].card().Card.ID != "f1" {
 		t.Fatalf("focus first: %+v", tv.items[0])
 	}
 }
 
 func TestTodayViewRendersSectionsAndKinds(t *testing.T) {
-	v := newTodayView(nil)
+	v := newTodayView(nil, nil)
 	next, _ := v.Update(loadedToday())
 	tv := next.(*todayView)
 	out := tv.View(80, 30) // narrow: no gem
@@ -65,7 +82,7 @@ func TestTodayViewRendersSectionsAndKinds(t *testing.T) {
 }
 
 func TestTodayViewSlashSearchJumpsAndNCycles(t *testing.T) {
-	v := newTodayView(nil)
+	v := newTodayView(nil, nil)
 	next, _ := v.Update(loadedToday())
 	tv := next.(*todayView)
 	if tv.cursor != 0 {
@@ -93,11 +110,11 @@ func TestTodayViewSlashSearchJumpsAndNCycles(t *testing.T) {
 }
 
 func TestTodayViewDKeyCompletesCardAndSpaceUndoes(t *testing.T) {
-	v := newTodayView(nil)
+	v := newTodayView(nil, nil)
 	next, _ := v.Update(loadedToday())
 	tv := next.(*todayView)
 	// Move to the focus card (first row).
-	if tv.current().card == nil {
+	if tv.current().card() == nil {
 		t.Fatalf("expected card first: %+v", tv.current())
 	}
 	_, cmd := tv.Update(keyMsg("d"))
@@ -105,7 +122,7 @@ func TestTodayViewDKeyCompletesCardAndSpaceUndoes(t *testing.T) {
 		t.Fatal("d on a card must start the archive request")
 	}
 	// Server confirms: item stays in the list, marked done.
-	archived := *tv.current().card
+	archived := *tv.current().card().Card
 	archived.Status = board.Done
 	tv.Update(cardArchivedMsg{board: "work", card: &archived, prevStatus: board.InProgress})
 	if !tv.current().isDone() {
@@ -127,11 +144,11 @@ func TestTodayViewDKeyCompletesCardAndSpaceUndoes(t *testing.T) {
 }
 
 func TestTodayViewTaskToggleMarksInPlace(t *testing.T) {
-	v := newTodayView(nil)
+	v := newTodayView(nil, nil)
 	next, _ := v.Update(loadedToday())
 	tv := next.(*todayView)
 	tv.Update(keyMsg("j")) // onto the overdue task
-	task := tv.current().task
+	task := tv.current().task()
 	if task == nil || task.Text != "water the ferns" {
 		t.Fatalf("cursor on %+v", tv.current())
 	}

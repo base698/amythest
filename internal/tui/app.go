@@ -13,6 +13,7 @@ import (
 
 	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/kanban/board"
+	"github.com/base698/amythest/internal/source"
 )
 
 // view is one screen in the navigation stack. Update returns the replacement
@@ -77,6 +78,7 @@ func flash(text string) tea.Cmd {
 
 type App struct {
 	client *apiclient.Client
+	reg    *source.Registry
 	stack  []view
 	width  int
 	height int
@@ -85,12 +87,13 @@ type App struct {
 	help   bool
 }
 
-func NewApp(client *apiclient.Client) *App {
+func NewApp(client *apiclient.Client, reg *source.Registry) *App {
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	return &App{
 		client: client,
-		stack:  []view{newTodayView(client)},
+		reg:    reg,
+		stack:  []view{newTodayView(client, reg)},
 		spin:   sp,
 	}
 }
@@ -210,7 +213,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return a, nil
 		case "1":
-			a.stack = []view{newTodayView(a.client)}
+			a.stack = []view{newTodayView(a.client, a.reg)}
 			return a, tea.Batch(a.top().Init(), shimmerTick())
 		case "2":
 			a.stack = []view{newTasksView(a.client)}
@@ -220,6 +223,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, a.top().Init()
 		case "4":
 			a.stack = []view{newNotesView(a.client)}
+			return a, a.top().Init()
+		case "5":
+			if src, ok := a.reg.Get("jira"); ok {
+				a.stack = []view{newSourceView(a.client, src)}
+				return a, a.top().Init()
+			}
+			return a, flash("no jira source configured — run: amy source init jira")
+		case "0":
+			a.stack = []view{newSourcesView(a.reg)}
 			return a, a.top().Init()
 		case "+":
 			// On a board, + creates a card there; everywhere else it's
@@ -352,6 +364,9 @@ const helpText = `
   p               cycle task query preset (tasks view)
   r               refresh current view
   1 / 2 / 3 / 4   today / tasks / boards / notes
+  5 / 0           jira issues / sources status
+                  (jira view: o open · c comment ·
+                  p pull into a board · a to agent)
   tab / enter     cycle & follow note links (note view)
   a               send note to a herdr agent (note view)
   c               comment on a card (card view)

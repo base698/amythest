@@ -31,6 +31,9 @@ type Config struct {
 	// EnvFile is a shell-style KEY=VALUE file consulted for credentials
 	// when KANBAN_USERNAME/KANBAN_PASSWORD are not in the environment.
 	EnvFile string
+	// File is the yaml config path actually read ("" when none existed);
+	// the sources loader shares it.
+	File string
 }
 
 type fileConfig struct {
@@ -66,6 +69,7 @@ func LoadConfig(args []string) (Config, error) {
 		if fc.Endpoint != "" {
 			cfg.Endpoint = fc.Endpoint
 		}
+		cfg.File = path
 	} else if *configPath != "" {
 		// An explicitly named config file must exist.
 		return Config{}, fmt.Errorf("read config: %w", err)
