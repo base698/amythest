@@ -75,6 +75,9 @@ func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
 		return v, nil
 
 	case agentPromptSentMsg:
+		if msg.id != v.note.Slug {
+			return v, nil
+		}
 		v.busy = false
 		return v, flash("sent to agent ✓")
 
@@ -96,7 +99,7 @@ func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
 				return v, nil
 			}
 			v.busy = true
-			return v, sendToAgentCmd(*agent, v.note.Title, agentContextPrompt(v.note, v.client.Endpoint()))
+			return v, sendToAgentCmd(*agent, v.note.Slug, v.note.Title, agentContextPrompt(v.note, v.client.Endpoint()))
 		}
 		switch msg.String() {
 		case "j", "down":

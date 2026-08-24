@@ -8,7 +8,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"github.com/base698/amythest/internal/envfile"
 )
 
 const sessionCookie = "amythest_kanban_session"
@@ -93,20 +94,7 @@ func (c *Client) credentials() (user, password string, err error) {
 }
 
 func parseEnvFile(path string) (map[string]string, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	values := map[string]string{}
-	for _, line := range strings.Split(string(raw), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, "=") {
-			continue
-		}
-		key, value, _ := strings.Cut(line, "=")
-		values[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(value), `'"`)
-	}
-	return values, nil
+	return envfile.Parse(path)
 }
 
 // login authenticates and caches the new session. Callers hold c.mu.

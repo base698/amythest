@@ -137,6 +137,14 @@ come from `KANBAN_USERNAME`/`KANBAN_PASSWORD` or `~/.config/amythest/env`.
 Sessions are cached in `~/.cache/amythest-kanban/session.json`, shared with
 the kanban.py skill client.
 
+amy can also aggregate external ticketing sources (Jira today, Azure DevOps
+planned) behind `internal/source`: issues merge into the Today view tagged
+`[jira]` and get their own view on `5` (open in browser, comment, pull onto
+a board as a card, send to an agent — never writing state back). Run
+`amy source init jira` to scaffold the `sources:` config (starts in stub
+mode with demo data; real credentials are env-only: `JIRA_EMAIL`,
+`JIRA_API_TOKEN`). `0` shows each source's health.
+
 ## Layout
 
 ```

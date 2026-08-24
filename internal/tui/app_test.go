@@ -8,13 +8,14 @@ import (
 
 	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/kanban/board"
+	"github.com/base698/amythest/internal/source"
 )
 
 // drive the real App model without a terminal: size it, feed data and keys,
 // and assert on rendered frames.
 func TestAppRendersTasksNavigatesToBoardsAndBack(t *testing.T) {
 	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
-	app := NewApp(client)
+	app := NewApp(client, source.NewRegistry())
 	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	// Home is the today view.
@@ -80,7 +81,7 @@ func TestAppRendersTasksNavigatesToBoardsAndBack(t *testing.T) {
 
 func TestHelpOverlayClosesOnEscape(t *testing.T) {
 	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
-	app := NewApp(client)
+	app := NewApp(client, source.NewRegistry())
 	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	app.Update(keyMsg("?"))
 	if !strings.Contains(app.View(), "Keys") {
@@ -103,7 +104,7 @@ func TestHelpOverlayClosesOnEscape(t *testing.T) {
 
 func TestCoalescedRunesReplayAsIndividualKeys(t *testing.T) {
 	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
-	app := NewApp(client)
+	app := NewApp(client, source.NewRegistry())
 	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	app.Update(keyMsg("2")) // tasks view
 	app.Update(loadedTasks())
@@ -117,7 +118,7 @@ func TestCoalescedRunesReplayAsIndividualKeys(t *testing.T) {
 
 func TestCompletionFeedbackAppearsInStatusBar(t *testing.T) {
 	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
-	app := NewApp(client)
+	app := NewApp(client, source.NewRegistry())
 	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	app.Update(cardArchivedMsg{board: "personal", card: &board.Card{ID: "c1"}})
 	if !strings.Contains(app.View(), "card archived ✓") {
