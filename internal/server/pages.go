@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -398,7 +399,52 @@ func buildTree(v *vault.Vault, base string) *treeNode {
 		node.Children = append(node.Children, &treeNode{Name: n.Title, URL: kanbanAwareURL(base, n.Slug)})
 	}
 	sortTree(root)
+	groupDateLeaves(root)
 	return root
+}
+
+var dayNoteNameRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}`)
+
+// groupDateLeaves rewrites any folder dominated by day-named notes (Daily
+// Notes, journals) into collapsible YYYY-MM month subfolders, newest first —
+// otherwise the explorer becomes one endless scroll of dates.
+func groupDateLeaves(n *treeNode) {
+	for _, c := range n.Children {
+		if c.IsDir {
+			groupDateLeaves(c)
+		}
+	}
+	var dated, rest []*treeNode
+	for _, c := range n.Children {
+		if !c.IsDir && dayNoteNameRe.MatchString(c.Name) {
+			dated = append(dated, c)
+		} else {
+			rest = append(rest, c)
+		}
+	}
+	if len(dated) <= 12 {
+		return // small enough to browse flat
+	}
+	months := map[string]*treeNode{}
+	for _, c := range dated {
+		key := c.Name[:7] // YYYY-MM
+		if months[key] == nil {
+			months[key] = &treeNode{Name: key, IsDir: true}
+		}
+		months[key].Children = append(months[key].Children, c)
+	}
+	keys := make([]string, 0, len(months))
+	for key := range months {
+		keys = append(keys, key)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(keys))) // newest month first
+	monthNodes := make([]*treeNode, 0, len(keys))
+	for _, key := range keys {
+		m := months[key]
+		sort.SliceStable(m.Children, func(i, j int) bool { return m.Children[i].Name > m.Children[j].Name })
+		monthNodes = append(monthNodes, m)
+	}
+	n.Children = append(rest, monthNodes...)
 }
 
 func parentPath(p string) string {

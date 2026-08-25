@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"html/template"
 	"net/http"
 	"net/http/httptest"
@@ -86,5 +87,49 @@ func TestRenderPageStatusReturnsCleanTemplateError(t *testing.T) {
 	}
 	if got := rec.Body.String(); got == "prefix" {
 		t.Fatalf("partial template output leaked: %q", got)
+	}
+}
+
+func TestBuildTreeGroupsDailyNotesByMonth(t *testing.T) {
+	root := t.TempDir()
+	daily := filepath.Join(root, "Daily Notes")
+	if err := os.MkdirAll(daily, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// 15 day-notes across two months plus one non-dated note.
+	for day := 1; day <= 10; day++ {
+		os.WriteFile(filepath.Join(daily, fmt.Sprintf("2026-08-%02d.md", day)), []byte("x"), 0o644)
+	}
+	for day := 1; day <= 5; day++ {
+		os.WriteFile(filepath.Join(daily, fmt.Sprintf("2026-07-%02d.md", day)), []byte("x"), 0o644)
+	}
+	os.WriteFile(filepath.Join(daily, "Template.md"), []byte("x"), 0o644)
+
+	s, err := New(config.Config{Vault: root, DataDir: t.TempDir(), BaseURL: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	tree := s.tree.Load()
+	var dailyNode *treeNode
+	for _, c := range tree.Children {
+		if c.Name == "Daily Notes" {
+			dailyNode = c
+		}
+	}
+	if dailyNode == nil {
+		t.Fatal("Daily Notes folder missing")
+	}
+	// Template stays flat; months are dirs, newest first; days newest first.
+	var names []string
+	for _, c := range dailyNode.Children {
+		names = append(names, c.Name)
+	}
+	if len(names) != 3 || names[0] != "Template" || names[1] != "2026-08" || names[2] != "2026-07" {
+		t.Fatalf("children = %v", names)
+	}
+	aug := dailyNode.Children[1]
+	if !aug.IsDir || len(aug.Children) != 10 || aug.Children[0].Name != "2026-08-10" {
+		t.Fatalf("august = %+v first=%v", len(aug.Children), aug.Children[0].Name)
 	}
 }

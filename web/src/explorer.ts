@@ -6,7 +6,10 @@ const KEY = "explorer-open"
 // morph kept alive.
 const wired = new WeakSet<Element>()
 
+const DRAWER_KEY = "sidebar-drawer-open"
+
 export function setupExplorer() {
+  setupDrawer()
   const explorer = document.querySelector(".explorer")
   if (!explorer) return
 
@@ -28,6 +31,26 @@ export function setupExplorer() {
       saved[path] = d.open
       localStorage.setItem(KEY, JSON.stringify(saved))
     })
+  })
+}
+
+// setupDrawer wires the mobile ☰ toggle: on narrow screens the whole
+// navigation drawer folds away so the note content leads the page.
+function setupDrawer() {
+  const toggle = document.getElementById("sidebar-toggle")
+  const sidebar = document.querySelector(".sidebar-left")
+  if (!toggle || !sidebar) return
+  const apply = (open: boolean) => {
+    sidebar.classList.toggle("drawer-open", open)
+    toggle.setAttribute("aria-expanded", String(open))
+  }
+  apply(localStorage.getItem(DRAWER_KEY) === "1")
+  if (wired.has(toggle)) return
+  wired.add(toggle)
+  toggle.addEventListener("click", () => {
+    const open = !sidebar.classList.contains("drawer-open")
+    apply(open)
+    localStorage.setItem(DRAWER_KEY, open ? "1" : "0")
   })
 }
 
