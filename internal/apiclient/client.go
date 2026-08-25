@@ -9,10 +9,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/base698/amythest/internal/bases"
 	"github.com/base698/amythest/internal/kanban/board"
 	"github.com/base698/amythest/internal/tasks"
 )
@@ -41,6 +43,10 @@ type Client struct {
 
 	mu      sync.Mutex
 	session *session
+
+	ciMu      sync.Mutex
+	ciData    map[string]ContentEntry
+	ciFetched time.Time
 }
 
 func New(cfg Config) *Client {
@@ -271,6 +277,122 @@ func (c *Client) AddTask(ctx context.Context, slug string, daily bool, text stri
 
 // --------------------------------------------------------------------- notes
 
+// NoteEntry is one row of the vault listing (browse view sort keys).
+type NoteEntry struct {
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+	Path  string `json:"path"`
+	MTime int64  `json:"mtime"`
+	Size  int64  `json:"size"`
+}
+
+// ListNotes returns the vault's full note listing.
+func (c *Client) ListNotes(ctx context.Context) ([]NoteEntry, error) {
+	var notes []NoteEntry
+	if err := c.do(ctx, http.MethodGet, "/api/notes", nil, &notes); err != nil {
+		return nil, err
+	}
+	return notes, nil
+}
+
+// ContentEntry mirrors /api/contentIndex: per-note outgoing links and tags.
+type ContentEntry struct {
+	Title string   `json:"title"`
+	Links []string `json:"links"`
+	Tags  []string `json:"tags"`
+}
+
+// ContentIndex returns the link/tag index, cached client-side for a minute —
+// backlinks, tag filters, and graph neighborhoods all derive from it.
+func (c *Client) ContentIndex(ctx context.Context) (map[string]ContentEntry, error) {
+	c.ciMu.Lock()
+	defer c.ciMu.Unlock()
+	if c.ciData != nil && c.now().Sub(c.ciFetched) < time.Minute {
+		return c.ciData, nil
+	}
+	var index map[string]ContentEntry
+	if err := c.do(ctx, http.MethodGet, "/api/contentIndex", nil, &index); err != nil {
+		if c.ciData != nil {
+			return c.ciData, nil // stale beats broken
+		}
+		return nil, err
+	}
+	c.ciData = index
+	c.ciFetched = c.now()
+	return index, nil
+}
+
+// Backlinks inverts the content index for one slug.
+func (c *Client) Backlinks(ctx context.Context, slug string) ([]string, error) {
+	index, err := c.ContentIndex(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var backlinks []string
+	for from, entry := range index {
+		if from == slug {
+			continue
+		}
+		for _, to := range entry.Links {
+			if to == slug {
+				backlinks = append(backlinks, from)
+				break
+			}
+		}
+	}
+	sort.Strings(backlinks)
+	return backlinks, nil
+}
+
+// SaveNote replaces a note's markdown body; frontmatter is preserved
+// server-side. ErrConflict when the note changed since it was read.
+func (c *Client) SaveNote(ctx context.Context, slug, markdown, expectedVersion string) error {
+	body := struct {
+		Slug            string `json:"slug"`
+		Markdown        string `json:"markdown"`
+		ExpectedVersion string `json:"expectedVersion"`
+	}{slug, markdown, expectedVersion}
+	return c.do(ctx, http.MethodPut, "/api/note", body, nil)
+}
+
+// SetNoteProperty writes one frontmatter property on a note.
+func (c *Client) SetNoteProperty(ctx context.Context, slug, key, value string) error {
+	body := struct {
+		Slug  string `json:"slug"`
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}{slug, key, value}
+	return c.do(ctx, http.MethodPost, "/api/notes/property", body, nil)
+}
+
+// --------------------------------------------------------------------- bases
+
+// BaseData is one evaluated base view plus the base's view names.
+type BaseData struct {
+	Name  string         `json:"name"`
+	Views []string       `json:"views"`
+	Data  bases.ViewData `json:"data"`
+}
+
+// ListBases returns the vault's .base file names.
+func (c *Client) ListBases(ctx context.Context) ([]string, error) {
+	var names []string
+	if err := c.do(ctx, http.MethodGet, "/api/bases", nil, &names); err != nil {
+		return nil, err
+	}
+	return names, nil
+}
+
+// GetBase evaluates the view at index view of the named base.
+func (c *Client) GetBase(ctx context.Context, name string, view int) (*BaseData, error) {
+	var data BaseData
+	path := fmt.Sprintf("/api/base?name=%s&view=%d", url.QueryEscape(name), view)
+	if err := c.do(ctx, http.MethodGet, path, nil, &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
 type SearchResult struct {
 	Slug     string `json:"slug"`
 	Title    string `json:"title"`
@@ -293,6 +415,7 @@ type Note struct {
 	Title    string `json:"title"`
 	Path     string `json:"path"`
 	Markdown string `json:"markdown"`
+	Version  string `json:"version"` // whole-file hash; SaveNote's lock
 }
 
 // GetNote fetches a note's raw markdown. ref may be a slug or a raw

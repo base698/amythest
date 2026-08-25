@@ -230,6 +230,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, a.top().Init()
 			}
 			return a, flash("no jira source configured — run: amy source init jira")
+		case "6":
+			a.stack = []view{newBasesView(a.client)}
+			return a, a.top().Init()
 		case "0":
 			a.stack = []view{newSourcesView(a.reg)}
 			return a, a.top().Init()
@@ -364,7 +367,10 @@ const helpText = `
   p               cycle task query preset (tasks view)
   r               refresh current view
   1 / 2 / 3 / 4   today / tasks / boards / notes
-  5 / 0           jira issues / sources status
+  5 / 6 / 0       jira / bases (dataview) / sources
+  notes: tab      browse (folders, tags, recent);
+                  p preview pane · s sort · / filter
+                  reader: b backlinks · e edit in $EDITOR
                   (jira view: o open · c comment ·
                   p pull into a board · a to agent)
   tab / enter     cycle & follow note links (note view)

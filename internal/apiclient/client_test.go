@@ -23,10 +23,11 @@ type fakeServer struct {
 	*httptest.Server
 	logins      int
 	sawCSRF     map[string]string // path -> X-CSRF-Token header value
-	failFirst   bool              // return 401 on the first authed request
-	failedOnce  bool
-	toggleCode  int
-	toggleCalls int
+	failFirst        bool // return 401 on the first authed request
+	failedOnce       bool
+	toggleCode       int
+	toggleCalls      int
+	contentIndexHits int
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -151,6 +152,32 @@ func newFakeServer(t *testing.T) *fakeServer {
 	}))
 	mux.HandleFunc("GET /kanban/api/boards", authed(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]map[string]any{{"name": "personal", "displayName": "Personal"}})
+	}))
+	mux.HandleFunc("GET /api/contentIndex", authed(func(w http.ResponseWriter, r *http.Request) {
+		fs.contentIndexHits++
+		json.NewEncoder(w).Encode(map[string]any{
+			"Garden":      map[string]any{"title": "Garden", "links": []string{"Chores-List"}},
+			"Chores-List": map[string]any{"title": "Chores List", "links": []string{"Garden"}},
+			"Home":        map[string]any{"title": "Home", "links": []string{"Garden", "Chores-List"}},
+		})
+	}))
+	mux.HandleFunc("GET /api/notes", authed(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]map[string]any{
+			{"slug": "Garden", "title": "Garden", "path": "Garden.md", "mtime": 1756000000, "size": 120},
+			{"slug": "Home", "title": "Home", "path": "Home.md", "mtime": 1756000500, "size": 80},
+		})
+	}))
+	mux.HandleFunc("GET /api/bases", authed(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]string{"Projects"})
+	}))
+	mux.HandleFunc("GET /api/base", authed(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"name": "Projects", "views": []string{"All"},
+			"data": map[string]any{
+				"view": "All", "columns": []string{"Name", "Status"},
+				"groups": []map[string]any{{"rows": [][]string{{"Garden", "active"}}, "slugs": []string{"Garden"}}},
+			},
+		})
 	}))
 	mux.HandleFunc("POST /kanban/api/boards/{board}/cards/{card}/comments", authed(func(w http.ResponseWriter, r *http.Request) {
 		var payload struct {
@@ -452,5 +479,43 @@ func TestCredentialsFallBackToEnvFile(t *testing.T) {
 	}
 	if srv.logins != 1 {
 		t.Fatalf("logins = %d", srv.logins)
+	}
+}
+
+func TestContentIndexCachesAndComputesBacklinks(t *testing.T) {
+	srv := newFakeServer(t)
+	c := testClient(t, srv)
+	if _, err := c.Backlinks(context.Background(), "Garden"); err != nil {
+		t.Fatal(err)
+	}
+	backlinks, err := c.Backlinks(context.Background(), "Garden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backlinks) != 2 || backlinks[0] != "Chores-List" || backlinks[1] != "Home" {
+		t.Fatalf("backlinks = %v", backlinks)
+	}
+	if srv.contentIndexHits != 1 {
+		t.Fatalf("contentIndex fetched %d times, want 1 (cached)", srv.contentIndexHits)
+	}
+}
+
+func TestListNotesAndBaseData(t *testing.T) {
+	srv := newFakeServer(t)
+	c := testClient(t, srv)
+	notes, err := c.ListNotes(context.Background())
+	if err != nil || len(notes) != 2 || notes[0].Slug != "Garden" || notes[0].MTime == 0 {
+		t.Fatalf("notes = %+v err=%v", notes, err)
+	}
+	names, err := c.ListBases(context.Background())
+	if err != nil || len(names) != 1 || names[0] != "Projects" {
+		t.Fatalf("bases = %v err=%v", names, err)
+	}
+	data, err := c.GetBase(context.Background(), "Projects", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.Name != "Projects" || len(data.Data.Groups) != 1 || data.Data.Groups[0].Slugs[0] != "Garden" {
+		t.Fatalf("base data = %+v", data)
 	}
 }
