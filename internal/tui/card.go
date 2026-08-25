@@ -116,6 +116,14 @@ func (v *cardView) editCmd() tea.Cmd {
 		return func() tea.Msg { return fail(err) }
 	}
 	tmp.Close()
+	cardID := v.card.ID
+	return tea.ExecProcess(editorExec(tmp.Name()), func(err error) tea.Msg {
+		return editorDoneMsg{cardID: cardID, path: tmp.Name(), err: err}
+	})
+}
+
+// editorExec builds the $VISUAL/$EDITOR/vi invocation for a file.
+func editorExec(path string) *exec.Cmd {
 	editor := os.Getenv("VISUAL")
 	if editor == "" {
 		editor = os.Getenv("EDITOR")
@@ -124,11 +132,7 @@ func (v *cardView) editCmd() tea.Cmd {
 		editor = "vi"
 	}
 	parts := strings.Fields(editor)
-	args := append(parts[1:], tmp.Name())
-	cardID := v.card.ID
-	return tea.ExecProcess(exec.Command(parts[0], args...), func(err error) tea.Msg {
-		return editorDoneMsg{cardID: cardID, path: tmp.Name(), err: err}
-	})
+	return exec.Command(parts[0], append(parts[1:], path)...)
 }
 
 func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {

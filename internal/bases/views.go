@@ -145,6 +145,9 @@ type ViewData struct {
 type ViewDataGroup struct {
 	Name string     `json:"name,omitempty"`
 	Rows [][]string `json:"rows"`
+	// Slugs is row-parallel note identity so API clients (the amy TUI) can
+	// open the note behind a row.
+	Slugs []string `json:"slugs,omitempty"`
 }
 
 // Data evaluates a view into columns and cell text.
@@ -178,6 +181,7 @@ func (b *Base) Data(rows []*Row, viewIdx int) (*ViewData, error) {
 				row[i] = v.Text()
 			}
 			dg.Rows = append(dg.Rows, row)
+			dg.Slugs = append(dg.Slugs, env.row.Slug)
 		}
 		out.Groups = append(out.Groups, dg)
 	}

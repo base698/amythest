@@ -105,6 +105,24 @@ func UpdateRecurrenceInFileAndReindex(vaultRoot, relPath string, line int, expec
 	}, reindex)
 }
 
+// ReplaceNoteBodyAndReindex swaps a note's markdown body wholesale (its
+// frontmatter is preserved) with the standard version check, vault write
+// lock, and atomic replace.
+func ReplaceNoteBodyAndReindex(vaultRoot, relPath string, newBody []byte, expectedVersion string, reindex func() error) error {
+	return mutateTaskFileAndReindex(vaultRoot, relPath, func(src []byte) ([]byte, error) {
+		decoded, decodeErr := hex.DecodeString(expectedVersion)
+		if decodeErr != nil || len(decoded) != sha256.Size {
+			return nil, fmt.Errorf("note version is required; refresh and retry")
+		}
+		if FileVersion(src) != expectedVersion {
+			return nil, fmt.Errorf("note changed; refresh and retry")
+		}
+		_, body := vault.ParseFrontmatter(src)
+		prefix := src[:len(src)-len(body)]
+		return append(append([]byte{}, prefix...), newBody...), nil
+	}, reindex)
+}
+
 // squashSpaces collapses runs of spaces left behind by field surgery while
 // leaving leading indentation intact.
 func squashSpaces(line string) string {
