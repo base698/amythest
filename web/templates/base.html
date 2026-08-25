@@ -22,8 +22,10 @@
     <aside class="sidebar sidebar-left">
       <div class="site-header">
         <a class="site-title" href="{{.Base}}">{{.SiteName}}</a>
+        <button id="sidebar-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false">☰</button>
         <button id="darkmode-toggle" type="button" aria-label="Toggle dark mode">◐</button>
       </div>
+      <div class="sidebar-drawer">
       <button id="search-open" type="button" class="search-button">
         <span>Search</span><kbd>⌘K</kbd>
       </button>
@@ -38,6 +40,7 @@
         <h2 class="panel-title">Explorer</h2>
         {{template "tree" .Tree}}
       </nav>
+      </div>
     </aside>
 
     <main class="center">

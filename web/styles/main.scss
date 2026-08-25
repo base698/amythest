@@ -77,9 +77,24 @@ a {
   .page { grid-template-columns: minmax(0, 280px) minmax(0, 1fr); }
   .sidebar-right { display: none; }
 }
+#sidebar-toggle { display: none; }
+
 @media (max-width: 800px) {
   .page { grid-template-columns: minmax(0, 1fr); padding: 0 1rem; }
   .sidebar-left { position: static; height: auto; }
+  // Collapsible drawer: navigation folds away so content leads the page.
+  #sidebar-toggle {
+    display: inline-block;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--fg);
+    font-size: 1rem;
+    padding: 0.1rem 0.5rem;
+    cursor: pointer;
+  }
+  .sidebar-left .sidebar-drawer { display: none; }
+  .sidebar-left.drawer-open .sidebar-drawer { display: block; }
 }
 
 .panel-title {
