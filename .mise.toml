@@ -18,8 +18,8 @@ run = "go build -o bin/amythest ./cmd/amythest"
 depends = ["assets"]
 
 [tasks.run]
-description = "Run amythest on port 8640"
-run = "./bin/amythest -vault ~/llm-wiki -data data -listen 127.0.0.1:8640"
+description = "Run amythest with the production config (one instance, original port)"
+run = "./bin/amythest -config ~/.config/amythest/amythest.yaml"
 depends = ["build"]
 
 [tasks.test]
