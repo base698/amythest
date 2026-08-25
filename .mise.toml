@@ -25,3 +25,14 @@ depends = ["build"]
 [tasks.test]
 description = "Run all tests"
 run = "go test ./..."
+
+[tasks.deploy]
+description = "Build, install to ~/bin (atomic, with rollback copy), restart the service"
+run = """
+cp ~/bin/amythest ~/bin/amythest.previous 2>/dev/null || true
+cp bin/amythest ~/bin/amythest.new
+chmod +x ~/bin/amythest.new
+mv ~/bin/amythest.new ~/bin/amythest
+systemctl --user restart amythest
+"""
+depends = ["build"]
