@@ -26,6 +26,50 @@ type noteEditorDoneMsg struct {
 }
 
 type noteSavedMsg struct{ note *apiclient.Note }
+
+// taskBlock is a ```tasks fenced query in the note, rendered as live
+// results instead of raw query text — the dataview experience the web UI
+// gives these blocks.
+type taskBlock struct {
+	start, end int // 0-based line span, fences included
+	query      string
+	groups     []apiclient.TaskGroup
+	loaded     bool
+	err        string
+}
+
+type noteTasksMsg struct {
+	slug   string
+	block  int
+	groups []apiclient.TaskGroup
+	err    string
+}
+
+// parseTaskBlocks finds ```tasks fences.
+func parseTaskBlocks(lines []string) []taskBlock {
+	var blocks []taskBlock
+	for i := 0; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) != "```tasks" {
+			continue
+		}
+		end := -1
+		for j := i + 1; j < len(lines); j++ {
+			if strings.TrimSpace(lines[j]) == "```" {
+				end = j
+				break
+			}
+		}
+		if end == -1 {
+			break
+		}
+		blocks = append(blocks, taskBlock{
+			start: i, end: end,
+			query: strings.Join(lines[i+1:end], "\n"),
+		})
+		i = end
+	}
+	return blocks
+}
 type noteView struct {
 	client *apiclient.Client
 	note   *apiclient.Note
@@ -41,6 +85,8 @@ type noteView struct {
 	blOpen    bool     // backlinks panel
 	blLinks   []string
 	blCursor  int
+
+	blocks []taskBlock // live-rendered ```tasks queries
 }
 
 type noteMetaMsg struct {
@@ -72,6 +118,7 @@ func newNoteView(client *apiclient.Client, note *apiclient.Note) *noteView {
 			v.links = append(v.links, noteLink{target: strings.TrimSpace(m[1]), label: label, line: i})
 		}
 	}
+	v.blocks = parseTaskBlocks(v.lines)
 	return v
 }
 
@@ -86,7 +133,7 @@ func (v *noteView) Init() tea.Cmd {
 	if client == nil {
 		return nil
 	}
-	return func() tea.Msg {
+	cmds := []tea.Cmd{func() tea.Msg {
 		ctx := context.Background()
 		index, err := client.ContentIndex(ctx)
 		if err != nil {
@@ -94,7 +141,18 @@ func (v *noteView) Init() tea.Cmd {
 		}
 		backlinks, _ := client.Backlinks(ctx, slug)
 		return noteMetaMsg{slug: slug, tags: index[slug].Tags, backlinks: backlinks}
+	}}
+	for i, block := range v.blocks {
+		idx, query := i, block.query
+		cmds = append(cmds, func() tea.Msg {
+			groups, err := client.ListTasks(context.Background(), query)
+			if err != nil {
+				return noteTasksMsg{slug: slug, block: idx, err: err.Error()}
+			}
+			return noteTasksMsg{slug: slug, block: idx, groups: groups}
+		})
 	}
+	return tea.Batch(cmds...)
 }
 
 func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
@@ -110,6 +168,15 @@ func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
 		}
 		v.tags = msg.tags
 		v.blLinks = msg.backlinks
+		return v, nil
+
+	case noteTasksMsg:
+		if msg.slug != v.note.Slug || msg.block >= len(v.blocks) {
+			return v, nil
+		}
+		v.blocks[msg.block].loaded = true
+		v.blocks[msg.block].groups = msg.groups
+		v.blocks[msg.block].err = msg.err
 		return v, nil
 
 	case noteEditorDoneMsg:
@@ -162,7 +229,8 @@ func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
 			}
 		}
 		v.linkAt = -1
-		return v, flash("note saved ✓")
+		v.blocks = parseTaskBlocks(v.lines)
+		return v, tea.Batch(v.Init(), flash("note saved ✓"))
 
 	case noteAgentsMsg:
 		if msg.slug != v.note.Slug {
@@ -359,6 +427,20 @@ func (v *noteView) View(width, height int) string {
 	bodyHeight := height - 4
 	rendered := 0
 	for i := v.offset; i < len(v.lines) && rendered < bodyHeight; i++ {
+		if blk := v.blockStartingAt(i); blk != nil {
+			for _, row := range v.renderTaskBlock(blk, bodyWidth) {
+				if rendered >= bodyHeight {
+					break
+				}
+				b.WriteString("  " + row + "\n")
+				rendered++
+			}
+			i = blk.end
+			continue
+		}
+		if v.insideBlock(i) {
+			continue // offset landed mid-block; its start already rendered
+		}
 		for _, row := range wrapLine(v.lines[i], bodyWidth) {
 			if rendered >= bodyHeight {
 				break
@@ -376,6 +458,52 @@ func (v *noteView) View(width, height int) string {
 	}
 	b.WriteString(dimStyle.Render(hint))
 	return b.String()
+}
+
+func (v *noteView) blockStartingAt(line int) *taskBlock {
+	for i := range v.blocks {
+		if v.blocks[i].start == line {
+			return &v.blocks[i]
+		}
+	}
+	return nil
+}
+
+func (v *noteView) insideBlock(line int) bool {
+	for _, blk := range v.blocks {
+		if line > blk.start && line <= blk.end {
+			return true
+		}
+	}
+	return false
+}
+
+// renderTaskBlock replaces a ```tasks fence with its live results.
+func (v *noteView) renderTaskBlock(blk *taskBlock, width int) []string {
+	switch {
+	case blk.err != "":
+		return []string{dimStyle.Render("┄ tasks query"), blockedStyle.Render("  " + blk.err)}
+	case !blk.loaded:
+		return []string{dimStyle.Render("┄ tasks query — loading…")}
+	}
+	total := 0
+	for _, g := range blk.groups {
+		total += len(g.Tasks)
+	}
+	rows := []string{dimStyle.Render(fmt.Sprintf("┄ tasks query — %d result(s)", total))}
+	for gi := range blk.groups {
+		g := &blk.groups[gi]
+		if g.Name != "" {
+			rows = append(rows, groupHeaderStyle.Render(g.Name))
+		}
+		for ti := range g.Tasks {
+			rows = append(rows, renderTaskLine(&g.Tasks[ti], false, width))
+		}
+	}
+	if total == 0 {
+		rows = append(rows, dimStyle.Render("  (no matching tasks)"))
+	}
+	return rows
 }
 
 // renderNoteLine styles a display row: wikilinks are underlined, the focused

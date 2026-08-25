@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/base698/amythest/internal/apiclient"
+	"github.com/base698/amythest/internal/tasks"
 )
 
 func fixtureNote() *apiclient.Note {
@@ -116,5 +117,44 @@ func TestNotesViewSearchFlow(t *testing.T) {
 	_, cmd = nv.Update(enterMsg())
 	if cmd == nil || !nv.Busy() {
 		t.Fatal("enter on a result must open the note")
+	}
+}
+
+func TestNoteViewRendersTasksBlocksAsLiveResults(t *testing.T) {
+	note := &apiclient.Note{
+		Slug: "Tasks/Dashboard", Title: "Dashboard", Path: "Tasks/Dashboard.md",
+		Markdown: "# Dashboard\n\n```tasks\nnot done\ndue before tomorrow\n```\n\nAfter text.\n",
+	}
+	v := newNoteView(nil, note)
+	if len(v.blocks) != 1 {
+		t.Fatalf("blocks = %+v", v.blocks)
+	}
+	if v.blocks[0].query != "not done\ndue before tomorrow" {
+		t.Fatalf("query = %q", v.blocks[0].query)
+	}
+	// Before results arrive the block shows loading, not the raw query.
+	out := stripANSI(v.View(100, 30))
+	if strings.Contains(out, "not done") || !strings.Contains(out, "loading") {
+		t.Fatalf("pre-load render:\n%s", out)
+	}
+	// Results replace the fence.
+	v.Update(noteTasksMsg{slug: "Tasks/Dashboard", block: 0, groups: []apiclient.TaskGroup{{
+		Tasks: []tasks.Task{{Slug: "chores", Line: 1, Text: "water the ferns", Status: tasks.StatusOpen, Due: "2026-08-25", Priority: 3, Version: strings.Repeat("a", 64)}},
+	}}})
+	out = stripANSI(v.View(100, 30))
+	if !strings.Contains(out, "1 result") || !strings.Contains(out, "water the ferns") {
+		t.Fatalf("post-load render:\n%s", out)
+	}
+	if strings.Contains(out, "```") || strings.Contains(out, "due before tomorrow") {
+		t.Fatalf("raw fence leaked:\n%s", out)
+	}
+	if !strings.Contains(out, "After text.") {
+		t.Fatalf("content after block missing:\n%s", out)
+	}
+	// Query errors render inline.
+	v.Update(noteTasksMsg{slug: "Tasks/Dashboard", block: 0, err: "unknown instruction"})
+	out = stripANSI(v.View(100, 30))
+	if !strings.Contains(out, "unknown instruction") {
+		t.Fatalf("error render:\n%s", out)
 	}
 }
