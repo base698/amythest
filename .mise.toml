@@ -1,0 +1,27 @@
+[tools]
+go = "1.27"
+node = "26"
+
+[tasks.assets]
+description = "Build web assets"
+run = "node web/build.mjs"
+depends = ["npm-install"]
+
+[tasks.npm-install]
+description = "Install node dependencies"
+run = "npm install --no-audit --no-fund"
+sources = ["package.json", "package-lock.json"]
+
+[tasks.build]
+description = "Build amythest binary with web assets"
+run = "go build -o bin/amythest ./cmd/amythest"
+depends = ["assets"]
+
+[tasks.run]
+description = "Run amythest on port 8640"
+run = "./bin/amythest -vault ~/llm-wiki -data data -listen 127.0.0.1:8640"
+depends = ["build"]
+
+[tasks.test]
+description = "Run all tests"
+run = "go test ./..."
