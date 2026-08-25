@@ -192,3 +192,29 @@ func TestNotesViewTabTogglesBrowseAndPreviewDebounces(t *testing.T) {
 		t.Fatal("narrow view must hide the preview")
 	}
 }
+
+func TestTabEntersBrowseDirectlyFromSearchInput(t *testing.T) {
+	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
+	v := newNotesView(client)
+	v.Init()
+	if !v.Capturing() {
+		t.Fatal("search input should be focused on open")
+	}
+	// Tab straight from the focused input — no esc needed.
+	_, cmd := v.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if !v.browsing || cmd == nil {
+		t.Fatal("tab from the search input must enter browse")
+	}
+	notes, index, _ := browseFixtures()
+	v.Update(browseLoadedMsg{notes: notes, index: index})
+
+	// And tab from the browse filter input flips back to search.
+	v.Update(keyMsg("/"))
+	if !v.bTyping {
+		t.Fatal("filter input should capture")
+	}
+	v.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if v.browsing || v.bTyping {
+		t.Fatal("tab from the filter must return to search mode")
+	}
+}

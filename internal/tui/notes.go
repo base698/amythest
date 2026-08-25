@@ -68,6 +68,7 @@ const previewMinWidth = 110
 func newNotesView(client *apiclient.Client) *notesView {
 	ti := textinput.New()
 	ti.Prompt = "search notes: "
+	ti.Placeholder = "type to search · tab to browse"
 	ti.CharLimit = 200
 	bf := textinput.New()
 	bf.Prompt = "filter (t:tag f:folder text): "
@@ -221,6 +222,13 @@ func (v *notesView) Update(msg tea.Msg) (view, tea.Cmd) {
 func (v *notesView) updateSearch(msg tea.KeyMsg) (view, tea.Cmd) {
 	if v.typing {
 		switch msg.Type {
+		case tea.KeyTab:
+			// Tab means "flip to browse" everywhere in the notes view —
+			// including from inside the search input, where it would
+			// otherwise be swallowed and force an esc first.
+			v.typing = false
+			v.input.Blur()
+			return v.enterBrowse()
 		case tea.KeyEsc:
 			v.typing = false
 			v.input.Blur()
@@ -241,12 +249,7 @@ func (v *notesView) updateSearch(msg tea.KeyMsg) (view, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "tab":
-		v.browsing = true
-		if !v.browse.loaded {
-			v.busy = true
-			return v, v.browseLoadCmd()
-		}
-		return v, v.schedulePreview()
+		return v.enterBrowse()
 	case "j", "down":
 		if v.cursor < len(v.results)-1 {
 			v.cursor++
@@ -272,9 +275,25 @@ func (v *notesView) updateSearch(msg tea.KeyMsg) (view, tea.Cmd) {
 	return v, nil
 }
 
+// enterBrowse flips to the browse layer, loading the vault listing once.
+func (v *notesView) enterBrowse() (view, tea.Cmd) {
+	v.browsing = true
+	if !v.browse.loaded {
+		v.busy = true
+		return v, v.browseLoadCmd()
+	}
+	return v, v.schedulePreview()
+}
+
 func (v *notesView) updateBrowse(msg tea.KeyMsg) (view, tea.Cmd) {
 	if v.bTyping {
 		switch msg.Type {
+		case tea.KeyTab:
+			// Symmetric: tab from the filter input flips back to search.
+			v.bTyping = false
+			v.bfilter.Blur()
+			v.browsing = false
+			return v, v.schedulePreview()
 		case tea.KeyEsc:
 			v.bTyping = false
 			v.bfilter.Blur()
@@ -308,6 +327,11 @@ func (v *notesView) updateBrowse(msg tea.KeyMsg) (view, tea.Cmd) {
 			return v, nil
 		}
 		v.browsing = false
+		if len(v.results) == 0 {
+			// Nothing to land on — put the cursor back in the search box.
+			v.typing = true
+			return v, v.input.Focus()
+		}
 		return v, v.schedulePreview()
 	case "j", "down":
 		if b.cursor < len(b.rows)-1 {
