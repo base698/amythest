@@ -67,6 +67,7 @@ type metricsResponseWriter struct {
 	http.ResponseWriter
 	status      int
 	wroteHeader bool
+	bytes       int64
 }
 
 func (w *metricsResponseWriter) WriteHeader(status int) {
@@ -84,7 +85,9 @@ func (w *metricsResponseWriter) Write(p []byte) (int, error) {
 		w.wroteHeader = true
 		w.status = http.StatusOK
 	}
-	return w.ResponseWriter.Write(p)
+	n, err := w.ResponseWriter.Write(p)
+	w.bytes += int64(n)
+	return n, err
 }
 
 // Flush preserves streaming behavior for endpoints such as MCP.

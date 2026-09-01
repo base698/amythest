@@ -108,6 +108,46 @@ rescan interval). Secrets are env-only:
 Amythest binds loopback by default; put Tailscale Serve or any
 TLS-terminating proxy in front.
 
+### Running as a managed service
+
+Three opt-in capabilities support container/orchestrator deployments; all
+defaults preserve plain local behavior. Every setting is available as a flag
+(`-log-format`) and an env var (`AMYTHEST_LOG_FORMAT`); flags > env > defaults.
+
+**Health probes** — `/probes/liveness` (process up; never touches
+dependencies) and `/probes/readiness` (200 only when the vault + index are
+ready, else 503 naming the failing checks). Paths configurable via
+`AMYTHEST_LIVENESS_PATH` / `AMYTHEST_READINESS_PATH`; the legacy `/health`
+stays as a readiness alias. Probes are always unauthenticated.
+
+**Structured logging** — `AMYTHEST_LOG_FORMAT` (`text`|`json`),
+`AMYTHEST_LOG_LEVEL` (`debug|info|warn|error`), `AMYTHEST_LOG_OUTPUT`
+(`stdout`|`stderr`), `AMYTHEST_LOG_SOURCE`. One access-log line per request
+(method, path, status, duration, bytes, correlation id) with probe requests
+demoted to debug; tokens/cookies are never logged. Each request carries a
+correlation id (`AMYTHEST_REQUEST_ID_HEADER`, default `X-Request-Id` —
+honored inbound, generated otherwise, always echoed). Downstream builds can
+wrap the handler via `logging.Wrap`.
+
+**Auth** — `AMYTHEST_AUTH_MODE`: `off` (default), `static` (the existing
+`AMYTHEST_MCP_TOKEN` bearer check), or `jwt` (JWKS-validated bearer tokens:
+`AMYTHEST_AUTH_JWKS_URI`, optional `_ISSUER`/`_AUDIENCE` enforced when set,
+`_ALGS` allowlist defaulting to `RS256,ES256`, `_LEEWAY`, `_JWKS_REFRESH`
+with unknown-`kid` refresh for key rotation, optional `_REQUIRED_SCOPE` →
+403). `AMYTHEST_AUTH_PROTECT` selects the surface: `mcp` (default), `ui`, or
+`all`. jwt mode fails startup fast on missing/unreachable JWKS.
+
+Example — JSON logs, JWT protecting only the API/MCP surface:
+
+```sh
+AMYTHEST_LOG_FORMAT=json \
+AMYTHEST_AUTH_MODE=jwt \
+AMYTHEST_AUTH_JWKS_URI=https://issuer.example/.well-known/jwks.json \
+AMYTHEST_AUTH_ISSUER=https://issuer.example \
+AMYTHEST_AUTH_AUDIENCE=amythest \
+./amythest -vault ~/notes
+```
+
 Prometheus metrics are exposed at `/metrics`, including HTTP request counts
 and duration histograms, vault note/asset gauges, rescan health, heap usage,
 and goroutine count. The HTTP series use only method and status-code labels
