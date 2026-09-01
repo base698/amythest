@@ -43,16 +43,7 @@ func Handler(deps Deps) http.Handler {
 	if token == "" {
 		return nil
 	}
-
-	server := sdk.NewServer(&sdk.Implementation{Name: "amythest", Version: "0.1.0"}, nil)
-	registerNoteTools(server, deps)
-	registerTaskTools(server, deps)
-	registerBaseTools(server, deps)
-	if deps.Kanban != nil {
-		registerKanbanTools(server, deps)
-	}
-
-	inner := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
+	inner := HandlerNoAuth(deps)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
@@ -61,6 +52,19 @@ func Handler(deps Deps) http.Handler {
 		}
 		inner.ServeHTTP(w, r)
 	})
+}
+
+// HandlerNoAuth builds the MCP handler without the static-token gate, for
+// servers that wrap it with their own auth layer (e.g. JWT mode).
+func HandlerNoAuth(deps Deps) http.Handler {
+	server := sdk.NewServer(&sdk.Implementation{Name: "amythest", Version: "0.1.0"}, nil)
+	registerNoteTools(server, deps)
+	registerTaskTools(server, deps)
+	registerBaseTools(server, deps)
+	if deps.Kanban != nil {
+		registerKanbanTools(server, deps)
+	}
+	return sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
 }
 
 // ---- notes ----

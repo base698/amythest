@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/base698/amythest/internal/config"
+	"github.com/base698/amythest/internal/logging"
 	"github.com/base698/amythest/internal/server"
 )
 
@@ -25,6 +26,13 @@ func main() {
 		slog.Error("config", "err", err)
 		os.Exit(1)
 	}
+
+	logging.Setup(logging.Config{
+		Format: cfg.LogFormat,
+		Level:  cfg.LogLevel,
+		Output: cfg.LogOutput,
+		Source: cfg.LogSource,
+	})
 
 	srv, err := server.New(cfg)
 	if err != nil {

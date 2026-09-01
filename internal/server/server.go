@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"html/template"
@@ -24,6 +25,7 @@ import (
 	"github.com/base698/amythest/internal/kanban/auth"
 	"github.com/base698/amythest/internal/kanban/board"
 	"github.com/base698/amythest/internal/kanban/httpapi"
+	"github.com/base698/amythest/internal/logging"
 	"github.com/base698/amythest/internal/markdown"
 	"github.com/base698/amythest/internal/mcp"
 	"github.com/base698/amythest/internal/share"
@@ -45,6 +47,11 @@ type Server struct {
 	rescanMu    sync.Mutex
 	taskWriteMu sync.Mutex
 
+	ready      readiness
+	indexReady atomic.Bool
+	handler    http.Handler    // mux, wrapped by the auth guard when enabled
+	baseCtx    context.Context // lifetime ctx for background workers (JWKS refresh)
+
 	// Coalescing state for scheduleFullReconcile. reconcileDelay is the quiet
 	// period before a background pass; zero means the default (tests shorten it).
 	reconcileMu      sync.Mutex
@@ -52,12 +59,12 @@ type Server struct {
 	reconcilePending bool
 	reconcileDelay   time.Duration
 
-	chromaCSS   []byte
-	kanban      *board.Store   // nil when kanban is not configured
-	kanbanAuth  *auth.Manager  // gates vault writes when set
-	catalog     *bases.Catalog // sqlite tabular data store
-	share       *share.Store
-	metrics     serverMetrics
+	chromaCSS  []byte
+	kanban     *board.Store   // nil when kanban is not configured
+	kanbanAuth *auth.Manager  // gates vault writes when set
+	catalog    *bases.Catalog // sqlite tabular data store
+	share      *share.Store
+	metrics    serverMetrics
 }
 
 // kanbanSessionCookie mirrors httpapi.SessionCookie without importing the
@@ -82,6 +89,14 @@ func New(cfg config.Config) (*Server, error) {
 		return nil, fmt.Errorf("resolve vault path %q: %w", cfg.Vault, err)
 	}
 	cfg.Vault = resolvedVault
+	// Tests and embedders construct Config directly; probe paths must never
+	// be empty mux patterns.
+	if cfg.LivenessPath == "" {
+		cfg.LivenessPath = "/probes/liveness"
+	}
+	if cfg.ReadinessPath == "" {
+		cfg.ReadinessPath = "/probes/readiness"
+	}
 	tmpl, err := template.ParseFS(web.FS, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -96,6 +111,7 @@ func New(cfg config.Config) (*Server, error) {
 	}
 	s := &Server{
 		cfg:     cfg,
+		baseCtx: context.Background(),
 		tmpl:    tmpl,
 		mux:     http.NewServeMux(),
 		engine:  markdown.New(cfg.BaseURL),
@@ -115,6 +131,19 @@ func New(cfg config.Config) (*Server, error) {
 	if err := s.Rescan(); err != nil {
 		return nil, err
 	}
+	s.indexReady.Store(true)
+	s.ready.register("vault", func() error {
+		if s.vault.Load() == nil {
+			return errors.New("vault not loaded")
+		}
+		return nil
+	})
+	s.ready.register("index", func() error {
+		if !s.indexReady.Load() {
+			return errors.New("initial reconcile pending")
+		}
+		return nil
+	})
 
 	s.chromaCSS = []byte(markdown.ChromaCSS("github", "") +
 		markdown.ChromaCSS("github-dark", `[data-theme="dark"]`))
@@ -129,9 +158,9 @@ func New(cfg config.Config) (*Server, error) {
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 		_, _ = w.Write(s.chromaCSS)
 	})
-	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("ok"))
-	})
+	s.mux.HandleFunc("GET /health", s.handleHealthLegacy)
+	s.mux.HandleFunc("GET "+cfg.LivenessPath, s.handleLiveness)
+	s.mux.HandleFunc("GET "+cfg.ReadinessPath, s.handleReadiness)
 	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
 
 	s.mux.HandleFunc("GET /api/search", s.handleSearch)
@@ -174,19 +203,39 @@ func New(cfg config.Config) (*Server, error) {
 		s.handleNote(w, r)
 	})
 
-	if h := mcp.Handler(mcp.Deps{
+	mcpDeps := mcp.Deps{
 		DB:      s.db,
 		Catalog: s.catalog,
 		Kanban:  s.kanban,
 		Vault:   func() *vault.Vault { return s.vault.Load() },
 		BaseURL: s.base(),
 		Rescan:  s.rescanWhileVaultLocked,
-	}); h != nil {
+	}
+	jwtProtectsMCP := strings.ToLower(cfg.AuthMode) == "jwt" &&
+		(cfg.AuthProtect == "" || cfg.AuthProtect == "mcp" || cfg.AuthProtect == "all")
+	if jwtProtectsMCP {
+		// JWT replaces the static token gate on the MCP surface; the guard
+		// installed below authenticates it.
+		h := mcp.HandlerNoAuth(mcpDeps)
+		s.mux.Handle("/mcp", h)
+		s.mux.Handle("/mcp/", h)
+		slog.Info("mcp enabled at /mcp (jwt auth)")
+	} else if h := mcp.Handler(mcpDeps); h != nil {
 		s.mux.Handle("/mcp", h)
 		s.mux.Handle("/mcp/", h)
 		slog.Info("mcp enabled at /mcp")
 	} else {
 		slog.Info("mcp disabled: set AMYTHEST_MCP_TOKEN to enable")
+	}
+
+	s.handler = s.mux
+	guard, err := s.buildAuthGuard(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if guard != nil {
+		s.handler = guard(s.mux)
+		slog.Info("auth enabled", "mode", cfg.AuthMode, "protect", cfg.AuthProtect)
 	}
 	return s, nil
 }
@@ -307,9 +356,42 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.metrics.inFlight.Add(1)
 	defer s.metrics.inFlight.Add(-1)
 
+	// Correlation id: honor the inbound header, generate otherwise, always
+	// echo back, and attach a request-scoped logger to the context.
+	header := s.cfg.RequestIDHeader
+	if header == "" {
+		header = "X-Request-Id"
+	}
+	requestID := r.Header.Get(header)
+	if requestID == "" {
+		requestID = logging.NewRequestID()
+	}
+	w.Header().Set(header, requestID)
+	reqLogger := slog.Default().With("request_id", requestID)
+	r = r.WithContext(logging.IntoContext(r.Context(), reqLogger))
+
 	mw := &metricsResponseWriter{ResponseWriter: w, status: http.StatusOK}
-	s.mux.ServeHTTP(mw, r)
-	s.metrics.observeRequest(r.Method, mw.status, time.Since(start))
+	handler := s.handler
+	if handler == nil {
+		handler = s.mux
+	}
+	handler.ServeHTTP(mw, r)
+	duration := time.Since(start)
+	s.metrics.observeRequest(r.Method, mw.status, duration)
+
+	// One structured access line per request; probes drop to debug so they
+	// don't drown real traffic. Never logs headers, cookies, or tokens.
+	level := slog.LevelInfo
+	if s.isProbePath(r.URL.Path) {
+		level = slog.LevelDebug
+	}
+	reqLogger.Log(r.Context(), level, "request",
+		"method", r.Method,
+		"path", r.URL.Path,
+		"status", mw.status,
+		"duration_ms", duration.Milliseconds(),
+		"bytes", mw.bytes,
+	)
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, v any) {
