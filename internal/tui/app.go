@@ -99,11 +99,16 @@ func NewApp(client *apiclient.Client, reg *source.Registry) *App {
 }
 
 // shimmerMsg drives the gem animation; the root re-arms the tick only while
-// the today view is on top so other screens stay idle.
+// the today view is on top so other screens stay idle. The ttfx intro runs
+// at a faster cadence than the built-in shimmer.
 type shimmerMsg struct{}
 
 func shimmerTick() tea.Cmd {
 	return tea.Tick(140*time.Millisecond, func(time.Time) tea.Msg { return shimmerMsg{} })
+}
+
+func fxTick() tea.Cmd {
+	return tea.Tick(40*time.Millisecond, func(time.Time) tea.Msg { return shimmerMsg{} })
 }
 
 func (a *App) Init() tea.Cmd {
@@ -144,6 +149,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case shimmerMsg:
 		if tv, ok := a.top().(*todayView); ok {
+			if tv.fxActive() {
+				tv.fxIdx++
+				if tv.fxActive() {
+					return a, fxTick()
+				}
+			}
 			tv.phase++
 			return a, shimmerTick()
 		}
