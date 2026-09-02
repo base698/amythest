@@ -279,3 +279,46 @@ func TestEditPromptTwoStepsDueThenRepeat(t *testing.T) {
 		t.Fatal("unchanged edit should flash 'no changes'")
 	}
 }
+
+func TestParseTTFXFrames(t *testing.T) {
+	raw := []byte("5\nhello\n7\nworld!!\n")
+	frames, err := parseTTFXFrames(raw)
+	if err != nil || len(frames) != 2 || frames[0] != "hello" || frames[1] != "world!!" {
+		t.Fatalf("frames = %q err = %v", frames, err)
+	}
+	if _, err := parseTTFXFrames([]byte("nonsense\n")); err == nil {
+		t.Fatal("bad header must error")
+	}
+	if _, err := parseTTFXFrames([]byte("99\nshort\n")); err == nil {
+		t.Fatal("truncated frame must error")
+	}
+	if _, err := parseTTFXFrames(nil); err == nil {
+		t.Fatal("empty stream must error")
+	}
+}
+
+func TestGemFXFramesReplaceShimmerUntilExhausted(t *testing.T) {
+	v := newTodayView(nil, nil)
+	v.Update(loadedToday())
+	v.Update(gemFXMsg{frames: []string{"FRAME-ONE", "FRAME-TWO"}})
+	if !v.fxActive() {
+		t.Fatal("fx should be active")
+	}
+	wide := v.View(140, 40)
+	if !strings.Contains(wide, "FRAME-ONE") {
+		t.Fatalf("first frame not rendered:\n%s", wide)
+	}
+	v.fxIdx++
+	wide = v.View(140, 40)
+	if !strings.Contains(wide, "FRAME-TWO") {
+		t.Fatal("second frame not rendered")
+	}
+	v.fxIdx++
+	if v.fxActive() {
+		t.Fatal("fx should be exhausted")
+	}
+	wide = v.View(140, 40)
+	if !strings.Contains(wide, "amythest") {
+		t.Fatal("builtin shimmer should take over")
+	}
+}

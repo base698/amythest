@@ -71,7 +71,14 @@ type todayView struct {
 	del      confirm
 	delItem  todayItem
 	now      func() time.Time
+
+	fxFrames []string // ttfx gem intro (AMY_GEM_FX); empty = builtin shimmer
+	fxIdx    int
 }
+
+// fxActive reports whether the ttfx intro is still playing — the root App
+// speeds up the animation tick while it is.
+func (v *todayView) fxActive() bool { return v.fxIdx < len(v.fxFrames) }
 
 func newTodayView(client *apiclient.Client, reg *source.Registry) *todayView {
 	return &todayView{client: client, reg: reg, find: newFinder(), prompt: newDuePrompt(), now: time.Now}
@@ -85,7 +92,11 @@ func (v *todayView) Capturing() bool {
 
 func (v *todayView) Init() tea.Cmd {
 	v.busy = true
-	return v.loadCmd()
+	cmds := []tea.Cmd{v.loadCmd()}
+	if binary, args, ok := gemFXSpec(); ok {
+		cmds = append(cmds, loadGemFXCmd(binary, args))
+	}
+	return tea.Batch(cmds...)
 }
 
 // loadCmd aggregates every registered source's due items. An amythest error
@@ -131,6 +142,14 @@ func (v *todayView) searchTexts() []string {
 
 func (v *todayView) Update(msg tea.Msg) (view, tea.Cmd) {
 	switch msg := msg.(type) {
+	case gemFXMsg:
+		if msg.err != nil {
+			return v, flash(msg.err.Error())
+		}
+		v.fxFrames = msg.frames
+		v.fxIdx = 0
+		return v, nil
+
 	case todayLoadedMsg:
 		v.busy = false
 		v.loaded = true
@@ -424,6 +443,9 @@ func (v *todayView) View(width, height int) string {
 		return list
 	}
 	gem := renderGem(v.phase)
+	if v.fxActive() {
+		gem = v.fxFrames[v.fxIdx]
+	}
 	return lipgloss.JoinHorizontal(lipgloss.Top,
 		lipgloss.NewStyle().Width(listWidth).Render(list),
 		"  ",
