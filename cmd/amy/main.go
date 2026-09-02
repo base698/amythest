@@ -18,6 +18,7 @@ import (
 	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/source"
 	"github.com/base698/amythest/internal/source/amythest"
+	"github.com/base698/amythest/internal/source/azboards"
 	"github.com/base698/amythest/internal/source/jira"
 	"github.com/base698/amythest/internal/tui"
 )
@@ -55,6 +56,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "warning: sources config:", jerr)
 	} else if ok {
 		sources = append(sources, jira.New(jcfg, cfg.EnvFile))
+	}
+	if acfg, ok, aerr := azboards.LoadConfig(cfg.File); aerr != nil {
+		fmt.Fprintln(os.Stderr, "warning: sources config:", aerr)
+	} else if ok {
+		sources = append(sources, azboards.New(acfg))
 	}
 
 	program := tea.NewProgram(tui.NewApp(client, source.NewRegistry(sources...)), tea.WithAltScreen())

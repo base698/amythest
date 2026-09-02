@@ -82,14 +82,12 @@ func (v *sourcesView) View(width, height int) string {
 		}
 		out += "  " + columnTitleStyle.Render(row.name) + "  " + state + "  " + dimStyle.Render(row.health.Detail) + "\n"
 	}
-	hasJira := false
+	have := map[string]bool{}
 	for _, row := range v.rows {
-		if row.name == "jira" {
-			hasJira = true
-		}
+		have[row.name] = true
 	}
-	if !hasJira {
-		out += "\n" + dimStyle.Render("  add a ticketing source: run `amy source init jira`, then restart amy")
+	if !have["jira"] || !have["azboards"] {
+		out += "\n" + dimStyle.Render("  add a ticketing source: run `amy source init jira` or `amy source init azboards`, then restart amy")
 	}
 	out += "\n" + dimStyle.Render("  r refresh · esc back")
 	return out

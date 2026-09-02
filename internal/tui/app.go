@@ -14,6 +14,7 @@ import (
 	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/kanban/board"
 	"github.com/base698/amythest/internal/source"
+	"github.com/base698/amythest/internal/source/azboards"
 )
 
 // view is one screen in the navigation stack. Update returns the replacement
@@ -116,6 +117,17 @@ func (a *App) Init() tea.Cmd {
 }
 
 func (a *App) top() view { return a.stack[len(a.stack)-1] }
+
+// azSource unwraps a registered Azure Boards source so the boards screen can
+// list its virtual boards; nil when cli.yaml has no sources.azboards.
+func (a *App) azSource() *azboards.Source {
+	if s, ok := a.reg.Get("azboards"); ok {
+		if az, ok := s.(*azboards.Source); ok {
+			return az
+		}
+	}
+	return nil
+}
 
 // restartShimmer re-arms the gem animation when navigation lands back on the
 // today view. Duplicate ticks from rapid nav collapse harmlessly: extras stop
@@ -230,7 +242,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.stack = []view{newTasksView(a.client)}
 			return a, a.top().Init()
 		case "3":
-			a.stack = []view{newBoardsView(a.client)}
+			a.stack = []view{newBoardsView(a.client, a.azSource())}
 			return a, a.top().Init()
 		case "4":
 			a.stack = []view{newNotesView(a.client)}
@@ -379,6 +391,8 @@ const helpText = `
   r               refresh current view
   1 / 2 / 3 / 4   today / tasks / boards / notes
   5 / 6 / 0       jira / bases (dataview) / sources
+  boards: [azure] rows are Azure Boards virtual boards
+                  (m move column · c comment · o browser)
   notes: tab      browse (folders, tags, recent);
                   p preview pane · s sort · / filter
                   reader: b backlinks · e edit in $EDITOR
