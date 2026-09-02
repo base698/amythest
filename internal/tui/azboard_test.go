@@ -144,11 +144,30 @@ func TestAZItemViewDetailRendering(t *testing.T) {
 		CommentCount: 2, Description: "<div>Hello <b>world</b></div>",
 	}})
 	iv := next.(*azItemView)
+	next, _ = iv.Update(azCommentsMsg{board: "my-team", id: 55, comments: []azboards.WorkItemComment{
+		{Author: "Grace Hopper", Date: "2026-08-30", Text: "Ship it"},
+		{Author: "Ada Lovelace", Date: "2026-08-29", Text: "Needs a rebase first"},
+	}})
+	iv = next.(*azItemView)
 	out := iv.View(100, 30)
-	for _, want := range []string{"#55", "Story", "Active", "Ada Lovelace", "2 comment(s)", "Hello world", "_workitems/edit/55"} {
+	for _, want := range []string{"#55", "Story", "Active", "Ada Lovelace", "Hello world",
+		"_workitems/edit/55", "Comments (2)", "Grace Hopper", "2026-08-30", "Ship it", "Needs a rebase first"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("detail missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestAZItemViewCommentsErrorIsNotFatal(t *testing.T) {
+	v := newAZItemView(azTestSource(), azTestSource().Boards()[0], 55)
+	next, _ := v.Update(azItemMsg{board: "my-team", item: azboards.WorkItem{ID: 55, Title: "Story", State: "New", CommentCount: 3}})
+	iv := next.(*azItemView)
+	next, _ = iv.Update(azCommentsMsg{board: "my-team", id: 55, err: fmt.Errorf("comments API: 404")})
+	iv = next.(*azItemView)
+	out := iv.View(100, 30)
+	if !strings.Contains(out, "Story") || !strings.Contains(out, "comments unavailable") ||
+		!strings.Contains(out, "Comments (3)") {
+		t.Fatalf("comments failure should degrade, not blank the card:\n%s", out)
 	}
 }
 

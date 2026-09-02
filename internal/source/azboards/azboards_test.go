@@ -2,8 +2,11 @@ package azboards
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -270,5 +273,109 @@ func TestBoardItemsEmptyOutputIsZeroRows(t *testing.T) {
 	}
 	if len(items) != 0 {
 		t.Fatalf("items = %+v", items)
+	}
+}
+
+func commentsServer(t *testing.T, wantAuth string) (*httptest.Server, *int) {
+	t.Helper()
+	hits := new(int)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*hits++
+		if got := r.Header.Get("Authorization"); got != wantAuth {
+			t.Errorf("Authorization = %q, want %q", got, wantAuth)
+		}
+		if !strings.Contains(r.URL.Path, "/My%20Project/_apis/wit/workItems/55/comments") &&
+			!strings.Contains(r.URL.Path, "/My Project/_apis/wit/workItems/55/comments") {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		fmt.Fprint(w, `{"totalCount":2,"count":2,"comments":[
+		  {"text":"<div>Ship it</div>","createdBy":{"displayName":"Grace Hopper"},"createdDate":"2026-08-30T10:00:00.00Z"},
+		  {"text":"Needs a rebase","createdBy":{"displayName":"Ada Lovelace"},"createdDate":"2026-08-29T09:00:00.00Z"}
+		]}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, hits
+}
+
+func TestCommentsWithPAT(t *testing.T) {
+	pat := "fake-pat"
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte(":"+pat))
+	srv, hits := commentsServer(t, want)
+	t.Setenv("AZURE_DEVOPS_EXT_PAT", pat)
+	t.Setenv("AMY_AZ", "/nonexistent-az") // PAT path must not shell out
+
+	cfg := testConfig()
+	cfg.Org = srv.URL
+	src := New(cfg)
+	comments, err := src.Comments(context.Background(), 55, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 2 || comments[0].Author != "Grace Hopper" ||
+		comments[0].Date != "2026-08-30" || comments[0].Text != "Ship it" {
+		t.Fatalf("comments = %+v", comments)
+	}
+	// Cached: a second read doesn't hit the API; force does.
+	if _, err := src.Comments(context.Background(), 55, false); err != nil || *hits != 1 {
+		t.Fatalf("cache miss: hits=%d err=%v", *hits, err)
+	}
+	if _, err := src.Comments(context.Background(), 55, true); err != nil || *hits != 2 {
+		t.Fatalf("force skipped API: hits=%d err=%v", *hits, err)
+	}
+}
+
+func TestCommentsWithAZToken(t *testing.T) {
+	srv, _ := commentsServer(t, "Bearer tok-123")
+	t.Setenv("AZURE_DEVOPS_EXT_PAT", "")
+	_, logPath := fakeAZ(t, "tok-123", "", 0)
+
+	cfg := testConfig()
+	cfg.Org = srv.URL
+	src := New(cfg)
+	if _, err := src.Comments(context.Background(), 55, false); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(logPath)
+	if !strings.Contains(string(raw), "account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798") {
+		t.Fatalf("token not requested with the ADO resource: %s", raw)
+	}
+	// The token is cached: a forced comments refetch reuses it.
+	if _, err := src.Comments(context.Background(), 55, true); err != nil {
+		t.Fatal(err)
+	}
+	if n := callCount(t, logPath); n != 1 {
+		t.Fatalf("token should be cached: %d az calls", n)
+	}
+}
+
+func TestCommentsUnauthorizedMapsToNotLoggedIn(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("AZURE_DEVOPS_EXT_PAT", "expired")
+	cfg := testConfig()
+	cfg.Org = srv.URL
+	src := New(cfg)
+	if _, err := src.Comments(context.Background(), 55, false); !errors.Is(err, ErrNotLoggedIn) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCommentInvalidatesCommentsCache(t *testing.T) {
+	srv, hits := commentsServer(t, "Basic "+base64.StdEncoding.EncodeToString([]byte(":p")))
+	t.Setenv("AZURE_DEVOPS_EXT_PAT", "p")
+	fakeAZ(t, "1", "", 0) // work-item update succeeds
+	cfg := testConfig()
+	cfg.Org = srv.URL
+	src := New(cfg)
+	if _, err := src.Comments(context.Background(), 55, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.Comment(context.Background(), 55, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.Comments(context.Background(), 55, false); err != nil || *hits != 2 {
+		t.Fatalf("posting a comment should drop the comments cache: hits=%d err=%v", *hits, err)
 	}
 }

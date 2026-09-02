@@ -62,6 +62,12 @@ type (
 		item  azboards.WorkItem
 		err   error
 	}
+	azCommentsMsg struct {
+		board    string
+		id       int
+		comments []azboards.WorkItemComment
+		err      error
+	}
 )
 
 func newAZBoardView(src *azboards.Source, cfg azboards.BoardConfig) *azBoardView {
@@ -446,11 +452,13 @@ type azItemView struct {
 	cfg azboards.BoardConfig
 	id  int
 
-	item    azboards.WorkItem
-	busy    bool
-	loaded  bool
-	loadErr error
-	picker  movePicker
+	item        azboards.WorkItem
+	comments    []azboards.WorkItemComment
+	commentsErr error
+	busy        bool
+	loaded      bool
+	loadErr     error
+	picker      movePicker
 
 	comment    textinput.Model
 	commenting bool
@@ -472,10 +480,16 @@ func (v *azItemView) Init() tea.Cmd { return v.loadCmd(false) }
 func (v *azItemView) loadCmd(force bool) tea.Cmd {
 	v.busy = true
 	src, name, id := v.src, v.cfg.Name, v.id
-	return func() tea.Msg {
-		item, err := src.Item(context.Background(), id, force)
-		return azItemMsg{board: name, item: item, err: err}
-	}
+	return tea.Batch(
+		func() tea.Msg {
+			item, err := src.Item(context.Background(), id, force)
+			return azItemMsg{board: name, item: item, err: err}
+		},
+		func() tea.Msg {
+			comments, err := src.Comments(context.Background(), id, force)
+			return azCommentsMsg{board: name, id: id, comments: comments, err: err}
+		},
+	)
 }
 
 func (v *azItemView) Update(msg tea.Msg) (view, tea.Cmd) {
@@ -489,6 +503,16 @@ func (v *azItemView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.loadErr = msg.err
 		if msg.err == nil {
 			v.item = msg.item
+		}
+		return v, nil
+
+	case azCommentsMsg:
+		if msg.board != v.cfg.Name || msg.id != v.id {
+			return v, nil
+		}
+		v.commentsErr = msg.err
+		if msg.err == nil {
+			v.comments = msg.comments
 		}
 		return v, nil
 
@@ -594,7 +618,6 @@ func (v *azItemView) View(width, height int) string {
 	if it.Assignee != "" {
 		meta = append(meta, it.Assignee)
 	}
-	meta = append(meta, dimStyle.Render(fmt.Sprintf("%d comment(s)", it.CommentCount)))
 	b.WriteString("  " + strings.Join(meta, "  ") + "\n")
 	b.WriteString("  " + dimStyle.Render(v.src.WebURL(it.ID)) + "\n\n")
 	if desc := azboards.StripHTML(it.Description); desc != "" {
@@ -605,6 +628,26 @@ func (v *azItemView) View(width, height int) string {
 		}
 	} else {
 		b.WriteString(dimStyle.Render("  no description") + "\n")
+	}
+	count := it.CommentCount
+	if v.commentsErr == nil {
+		count = len(v.comments)
+	}
+	b.WriteString("\n  " + columnTitleStyle.Render(fmt.Sprintf("Comments (%d)", count)) + "\n")
+	switch {
+	case v.commentsErr != nil:
+		b.WriteString(dimStyle.Render("  comments unavailable: "+v.commentsErr.Error()) + "\n")
+	case len(v.comments) == 0:
+		b.WriteString(dimStyle.Render("  no comments yet — c writes one") + "\n")
+	default:
+		for _, c := range v.comments {
+			b.WriteString("  " + dueStyle.Render(c.Author) + "  " + dimStyle.Render(c.Date) + "\n")
+			for _, line := range strings.Split(c.Text, "\n") {
+				for _, row := range wrapLine("    "+line, max(20, width-4)) {
+					b.WriteString(row + "\n")
+				}
+			}
+		}
 	}
 	hint := dimStyle.Render(" m move column · c comment · o browser · r refresh · esc back")
 	if v.commenting {
