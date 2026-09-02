@@ -322,3 +322,19 @@ func TestGemFXFramesReplaceShimmerUntilExhausted(t *testing.T) {
 		t.Fatal("builtin shimmer should take over")
 	}
 }
+
+func TestEmbeddedBeamsFramesLoadAndEndOnTheGem(t *testing.T) {
+	frames, err := embeddedGemFrames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frames) < 50 {
+		t.Fatalf("suspiciously few frames: %d", len(frames))
+	}
+	last := stripANSI(frames[len(frames)-1])
+	for _, want := range []string{`/____\/____\`, "amythest"} {
+		if !strings.Contains(last, want) {
+			t.Fatalf("final frame missing %q:\n%s", want, last)
+		}
+	}
+}
