@@ -17,7 +17,23 @@ sources:
     stub: true   # canned demo data; remove once url + credentials are real
 `
 
-// runSource handles `amy source init jira`: appends a commented sources
+const azboardsTemplate = `
+# Added by 'amy source init azboards'. Each entry under boards: is a virtual
+# board — it shows up in amy's boards screen (3) marked [azure]. Auth is the
+# az CLI's: az login, then az devops login --organization <org> (or export
+# AZURE_DEVOPS_EXT_PAT). Never put a PAT in this file.
+sources:
+  azboards:
+    org: https://dev.azure.com/yourorg
+    project: Your Project
+    boards:
+      - name: my-team
+        area: Your Project\Your Team   # System.AreaPath
+        type: User Story               # work item type; wrong type = zero rows
+        # columns: [New, Active, Resolved, Closed]  # optional; discovered when omitted
+`
+
+// runSource handles `amy source init jira|azboards`: appends a commented sources
 // template to cli.yaml (creating it when absent). If the file already has a
 // sources: section it prints the template instead — user yaml is never
 // rewritten structurally.
@@ -34,15 +50,17 @@ func runSource(args []string) {
 		}
 		words = append(words, args[i])
 	}
-	if len(words) != 2 || words[0] != "init" || words[1] != "jira" {
-		fmt.Fprintln(os.Stderr, "usage: amy source init jira [-config path]")
+	templates := map[string]string{"jira": jiraTemplate, "azboards": azboardsTemplate}
+	if len(words) != 2 || words[0] != "init" || templates[words[1]] == "" {
+		fmt.Fprintln(os.Stderr, "usage: amy source init jira|azboards [-config path]")
 		os.Exit(2)
 	}
+	name, template := words[1], templates[words[1]]
 	path := configPathFromArgs()
 	raw, err := os.ReadFile(path)
 	switch {
 	case err == nil && strings.Contains(string(raw), "sources:"):
-		fmt.Printf("%s already has a sources: section — merge this yourself:\n%s", path, jiraTemplate)
+		fmt.Printf("%s already has a sources: section — merge this yourself:\n%s", path, template)
 		return
 	case err != nil && !os.IsNotExist(err):
 		fmt.Fprintln(os.Stderr, "read config:", err)
@@ -58,13 +76,18 @@ func runSource(args []string) {
 		os.Exit(1)
 	}
 	defer f.Close()
-	if _, err := f.WriteString(jiraTemplate); err != nil {
+	if _, err := f.WriteString(template); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Printf("jira source template appended to %s\n", path)
-	fmt.Println("It starts in stub mode (demo data). For a real Jira: set url, remove 'stub: true',")
-	fmt.Println("and export JIRA_EMAIL / JIRA_API_TOKEN (env or ~/.config/amythest/env).")
+	fmt.Printf("%s source template appended to %s\n", name, path)
+	if name == "jira" {
+		fmt.Println("It starts in stub mode (demo data). For a real Jira: set url, remove 'stub: true',")
+		fmt.Println("and export JIRA_EMAIL / JIRA_API_TOKEN (env or ~/.config/amythest/env).")
+	} else {
+		fmt.Println("Edit org/project/boards, then: az login && az devops login --organization <org>")
+		fmt.Println("(needs `az extension add --name azure-devops`; PAT via env only).")
+	}
 }
 
 // configPathFromArgs honors -config, else the default cli.yaml location.

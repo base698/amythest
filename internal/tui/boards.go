@@ -9,10 +9,14 @@ import (
 
 	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/kanban/board"
+	"github.com/base698/amythest/internal/source/azboards"
 )
 
+// boardsView lists the amythest kanban boards plus any Azure Boards virtual
+// boards from cli.yaml (marked [azure]); both open with enter, transparently.
 type boardsView struct {
 	client *apiclient.Client
+	az     *azboards.Source // nil when no azboards source is configured
 	boards []board.BoardSummary
 	cursor int
 	busy   bool
@@ -20,18 +24,31 @@ type boardsView struct {
 	find   finder
 }
 
-func newBoardsView(client *apiclient.Client) *boardsView {
-	return &boardsView{client: client, find: newFinder()}
+func newBoardsView(client *apiclient.Client, az *azboards.Source) *boardsView {
+	return &boardsView{client: client, az: az, find: newFinder()}
 }
+
+func (v *boardsView) azBoards() []azboards.BoardConfig {
+	if v.az == nil {
+		return nil
+	}
+	return v.az.Boards()
+}
+
+// rowCount is the full cursor range: local boards then virtual ones.
+func (v *boardsView) rowCount() int { return len(v.boards) + len(v.azBoards()) }
 
 func (v *boardsView) Title() string   { return "boards" }
 func (v *boardsView) Busy() bool      { return v.busy }
 func (v *boardsView) Capturing() bool { return v.find.active() }
 
 func (v *boardsView) searchTexts() []string {
-	texts := make([]string, len(v.boards))
-	for i, b := range v.boards {
-		texts[i] = b.Name + " " + b.DisplayName
+	texts := make([]string, 0, v.rowCount())
+	for _, b := range v.boards {
+		texts = append(texts, b.Name+" "+b.DisplayName)
+	}
+	for _, b := range v.azBoards() {
+		texts = append(texts, b.Name+" azure")
 	}
 	return texts
 }
@@ -60,8 +77,8 @@ func (v *boardsView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.busy = false
 		v.loaded = true
 		v.boards = msg.boards
-		if v.cursor >= len(v.boards) {
-			v.cursor = max(0, len(v.boards)-1)
+		if v.cursor >= v.rowCount() {
+			v.cursor = max(0, v.rowCount()-1)
 		}
 		return v, nil
 
@@ -83,7 +100,7 @@ func (v *boardsView) Update(msg tea.Msg) (view, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "j", "down":
-			if v.cursor < len(v.boards)-1 {
+			if v.cursor < v.rowCount()-1 {
 				v.cursor++
 			}
 		case "k", "up":
@@ -106,6 +123,9 @@ func (v *boardsView) Update(msg tea.Msg) (view, tea.Cmd) {
 			if v.cursor < len(v.boards) {
 				return v, pushView(newBoardView(v.client, v.boards[v.cursor].Name))
 			}
+			if az := v.azBoards(); v.cursor-len(v.boards) < len(az) {
+				return v, pushView(newAZBoardView(v.az, az[v.cursor-len(v.boards)]))
+			}
 		}
 	}
 	return v, nil
@@ -115,7 +135,7 @@ func (v *boardsView) View(width, height int) string {
 	if !v.loaded {
 		return "\n  loading boards…"
 	}
-	if len(v.boards) == 0 {
+	if v.rowCount() == 0 {
 		return "\n  no boards"
 	}
 	var b strings.Builder
@@ -142,6 +162,16 @@ func (v *boardsView) View(width, height int) string {
 			pin = dueStyle.Render(" *")
 		}
 		b.WriteString(fmt.Sprintf("%s%s%s  %s\n", prefix, name, pin, counts))
+	}
+	for i, ab := range v.azBoards() {
+		row := len(v.boards) + i
+		prefix := "   "
+		name := ab.Name
+		if row == v.cursor {
+			prefix = cursorStyle.Render(" ▸ ")
+			name = cursorStyle.Render(name)
+		}
+		b.WriteString(fmt.Sprintf("%s%s  %s\n", prefix, name, dueStyle.Render("[azure]")))
 	}
 	if bar := v.find.bar(); bar != "" {
 		b.WriteString(" " + bar + "\n")
