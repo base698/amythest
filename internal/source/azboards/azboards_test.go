@@ -180,6 +180,11 @@ func TestItemParsesDetail(t *testing.T) {
 	if item.ID != 55 || item.CommentCount != 3 {
 		t.Fatalf("item = %+v", item)
 	}
+	// The API rejects the default --expand all when --fields is present.
+	raw, _ := os.ReadFile(logPath)
+	if !strings.Contains(string(raw), "--expand none") {
+		t.Fatalf("work-item show must pass --expand none with --fields: %s", raw)
+	}
 	if got := StripHTML(item.Description); got != "Hello world & more" {
 		t.Fatalf("StripHTML = %q", got)
 	}
