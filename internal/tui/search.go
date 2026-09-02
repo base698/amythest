@@ -63,8 +63,64 @@ func (f *finder) bar() string {
 	return ""
 }
 
+// liveQuery is the query as it is being typed, falling back to the last
+// committed one — board views filter with this so results narrow keystroke
+// by keystroke.
+func (f *finder) liveQuery() string {
+	if f.typing {
+		return strings.TrimSpace(f.input.Value())
+	}
+	return f.query
+}
+
+// filterBar is the committed-state bar for views where "/" filters rather
+// than jumps.
+func (f *finder) filterBar() string {
+	if f.typing {
+		return f.input.View()
+	}
+	if f.query != "" {
+		return dimStyle.Render("/" + f.query + "  filtering · / edit · esc in prompt clears")
+	}
+	return ""
+}
+
 func matches(text, query string) bool {
 	return query != "" && strings.Contains(strings.ToLower(text), strings.ToLower(query))
+}
+
+// fuzzyMatch is the board filter: every space-separated query token must be
+// a case-insensitive subsequence of some single word of text, in any order —
+// "dply pipln" finds "Ship the deploy pipeline". Scoping the subsequence to
+// one word keeps long titles from matching everything (a plain subsequence
+// over a whole title is far too permissive). Empty queries match.
+func fuzzyMatch(text, query string) bool {
+	words := strings.Fields(strings.ToLower(text))
+	for _, token := range strings.Fields(strings.ToLower(query)) {
+		matched := false
+		for _, w := range words {
+			if subsequence(w, token) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+// subsequence reports whether token's runes appear in word in order.
+func subsequence(word, token string) bool {
+	for _, r := range token {
+		i := strings.IndexRune(word, r)
+		if i < 0 {
+			return false
+		}
+		word = word[i+len(string(r)):]
+	}
+	return true
 }
 
 // findMatch returns the index of the next item matching query, scanning from

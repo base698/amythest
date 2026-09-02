@@ -100,20 +100,20 @@ func TestBoardItemsParsesAndCaches(t *testing.T) {
   {"id": 102, "title": "Second story", "state": "New", "assigned": null}
 ]`, "", 0)
 	src := New(testConfig())
-	items, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false)
+	items, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(items) != 2 || items[0].ID != 101 || items[0].Assignee != "Ada Lovelace" || items[1].State != "New" {
 		t.Fatalf("items = %+v", items)
 	}
-	if _, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false); err != nil {
+	if _, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false, false); err != nil {
 		t.Fatal(err)
 	}
 	if n := callCount(t, logPath); n != 1 {
 		t.Fatalf("cached call still hit az: %d calls", n)
 	}
-	if _, err := src.BoardItems(context.Background(), src.cfg.Boards[0], true); err != nil {
+	if _, err := src.BoardItems(context.Background(), src.cfg.Boards[0], true, false); err != nil {
 		t.Fatal(err)
 	}
 	if n := callCount(t, logPath); n != 2 {
@@ -126,11 +126,11 @@ func TestBoardItemsCacheExpires(t *testing.T) {
 	src := New(testConfig())
 	now := time.Now()
 	src.now = func() time.Time { return now }
-	if _, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false); err != nil {
+	if _, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false, false); err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(listTTL + time.Second)
-	if _, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false); err != nil {
+	if _, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false, false); err != nil {
 		t.Fatal(err)
 	}
 	if n := callCount(t, logPath); n != 2 {
@@ -141,7 +141,7 @@ func TestBoardItemsCacheExpires(t *testing.T) {
 func TestNotLoggedInDetection(t *testing.T) {
 	fakeAZ(t, "", "ERROR: TF400813: The user is not authorized to access this resource.", 1)
 	src := New(testConfig())
-	_, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false)
+	_, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false, false)
 	if !errors.Is(err, ErrNotLoggedIn) {
 		t.Fatalf("err = %v", err)
 	}
@@ -154,7 +154,7 @@ func TestNotLoggedInDetection(t *testing.T) {
 func TestSetStateInvalidatesCaches(t *testing.T) {
 	_, logPath := fakeAZ(t, `[{"id": 101, "title": "T", "state": "New", "assigned": null}]`, "", 0)
 	src := New(testConfig())
-	if _, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false); err != nil {
+	if _, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false, false); err != nil {
 		t.Fatal(err)
 	}
 	// SetState discards stdout, so the list-shaped fake output is fine.
@@ -162,7 +162,7 @@ func TestSetStateInvalidatesCaches(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := callCount(t, logPath)
-	if _, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false); err != nil {
+	if _, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false, false); err != nil {
 		t.Fatal(err)
 	}
 	if n := callCount(t, logPath); n != before+1 {
@@ -219,11 +219,36 @@ func TestWIQLEscapesQuotes(t *testing.T) {
 	cfg := testConfig()
 	cfg.Boards[0].Area = "It's a Team"
 	src := New(cfg)
-	if _, err := src.BoardItems(context.Background(), cfg.Boards[0], false); err != nil {
+	if _, err := src.BoardItems(context.Background(), cfg.Boards[0], false, false); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(logPath)
 	if !strings.Contains(string(raw), "It''s a Team") {
 		t.Fatalf("WIQL quote not escaped: %s", raw)
+	}
+}
+
+func TestBoardItemsMineFilter(t *testing.T) {
+	_, logPath := fakeAZ(t, `[]`, "", 0)
+	src := New(testConfig())
+	if _, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false, true); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(logPath)
+	if !strings.Contains(string(raw), "[System.AssignedTo] = @Me") {
+		t.Fatalf("mine query missing @Me clause: %s", raw)
+	}
+	// mine and all cache independently: the all-items call still queries az.
+	if _, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false, false); err != nil {
+		t.Fatal(err)
+	}
+	if n := callCount(t, logPath); n != 2 {
+		t.Fatalf("mine/all should not share a cache entry: %d calls", n)
+	}
+	// …and each is a cache hit the second time around.
+	src.BoardItems(context.Background(), src.cfg.Boards[0], false, true)
+	src.BoardItems(context.Background(), src.cfg.Boards[0], false, false)
+	if n := callCount(t, logPath); n != 2 {
+		t.Fatalf("expected cache hits: %d calls", n)
 	}
 }

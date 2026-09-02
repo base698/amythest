@@ -168,9 +168,15 @@ func isAuthError(stderr string) bool {
 func wiqlEscape(v string) string { return strings.ReplaceAll(v, "'", "''") }
 
 // BoardItems lists a virtual board's open work items, cached for a minute.
-func (s *Source) BoardItems(ctx context.Context, b BoardConfig, force bool) ([]WorkItem, error) {
+// mine narrows server-side to the signed-in user's items (WIQL @Me), cached
+// separately so toggling doesn't evict the full board.
+func (s *Source) BoardItems(ctx context.Context, b BoardConfig, force, mine bool) ([]WorkItem, error) {
+	key := b.Name
+	if mine {
+		key += "|@me"
+	}
 	s.mu.Lock()
-	if c, ok := s.lists[b.Name]; ok && !force && s.now().Sub(c.at) < listTTL {
+	if c, ok := s.lists[key]; ok && !force && s.now().Sub(c.at) < listTTL {
 		items := c.items
 		s.mu.Unlock()
 		return items, nil
@@ -182,6 +188,9 @@ func (s *Source) BoardItems(ctx context.Context, b BoardConfig, force bool) ([]W
 			"WHERE [System.WorkItemType] = '%s' AND [System.TeamProject] = '%s' AND [System.AreaPath] = '%s' "+
 			"AND [System.State] <> 'Closed' AND [System.State] <> 'Removed'",
 		wiqlEscape(b.Type), wiqlEscape(s.cfg.Project), wiqlEscape(b.Area))
+	if mine {
+		wiql += " AND [System.AssignedTo] = @Me"
+	}
 	out, err := s.run(ctx, "boards", "query", "--wiql", wiql,
 		"--project", s.cfg.Project, "--org", s.cfg.Org, "-o", "json",
 		"--query", `[].{id:id, title:fields."System.Title", state:fields."System.State", assigned:fields."System.AssignedTo".displayName}`)
@@ -193,7 +202,7 @@ func (s *Source) BoardItems(ctx context.Context, b BoardConfig, force bool) ([]W
 		return nil, fmt.Errorf("parse az boards query output: %w", err)
 	}
 	s.mu.Lock()
-	s.lists[b.Name] = cachedList{items: items, at: s.now()}
+	s.lists[key] = cachedList{items: items, at: s.now()}
 	s.mu.Unlock()
 	return items, nil
 }
