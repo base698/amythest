@@ -10,6 +10,7 @@
 package azboards
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -197,9 +198,13 @@ func (s *Source) BoardItems(ctx context.Context, b BoardConfig, force, mine bool
 	if err != nil {
 		return nil, err
 	}
+	// az writes zero bytes (not []) for a zero-row query result — routine
+	// once a filter like @Me is in play.
 	var items []WorkItem
-	if err := json.Unmarshal(out, &items); err != nil {
-		return nil, fmt.Errorf("parse az boards query output: %w", err)
+	if len(bytes.TrimSpace(out)) > 0 {
+		if err := json.Unmarshal(out, &items); err != nil {
+			return nil, fmt.Errorf("parse az boards query output: %w", err)
+		}
 	}
 	s.mu.Lock()
 	s.lists[key] = cachedList{items: items, at: s.now()}

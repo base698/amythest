@@ -252,3 +252,18 @@ func TestBoardItemsMineFilter(t *testing.T) {
 		t.Fatalf("expected cache hits: %d calls", n)
 	}
 }
+
+func TestBoardItemsEmptyOutputIsZeroRows(t *testing.T) {
+	// az boards query writes zero bytes (not []) when WIQL matches nothing —
+	// e.g. @Me on a board with no assigned items. That's an empty board, not
+	// a parse error.
+	fakeAZ(t, "", "", 0)
+	src := New(testConfig())
+	items, err := src.BoardItems(context.Background(), src.cfg.Boards[0], false, true)
+	if err != nil {
+		t.Fatalf("empty query output should not error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("items = %+v", items)
+	}
+}
