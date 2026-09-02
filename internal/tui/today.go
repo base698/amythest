@@ -93,8 +93,8 @@ func (v *todayView) Capturing() bool {
 func (v *todayView) Init() tea.Cmd {
 	v.busy = true
 	cmds := []tea.Cmd{v.loadCmd()}
-	if binary, args, ok := gemFXSpec(); ok {
-		cmds = append(cmds, loadGemFXCmd(binary, args))
+	if fx := gemFXCmd(); fx != nil {
+		cmds = append(cmds, fx)
 	}
 	return tea.Batch(cmds...)
 }

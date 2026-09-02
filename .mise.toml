@@ -26,6 +26,15 @@ depends = ["build"]
 description = "Run all tests"
 run = "go test ./..."
 
+[tasks.gemfx]
+description = "Regenerate the embedded gem intro frames (needs ttfx on PATH)"
+run = """
+printf '    ______\\n   /\\\\    /\\\\\\n  /  \\\\  /  \\\\\\n /____\\\\/____\\\\\\n \\\\    /\\\\    /\\n  \\\\  /  \\\\  /\\n   \\\\/____\\\\/\\n    \\\\    /\\n     \\\\  /\\n      \\\\/\\n   amythest\\n' \
+  | ttfx --parity-dump --seed 42 beams --final-gradient-stops 8A2BE2 D787FF \
+  > internal/tui/fxdata/beams.dump
+gzip -9f internal/tui/fxdata/beams.dump
+"""
+
 [tasks.deploy]
 description = "Build, install to ~/bin (atomic, with rollback copy), restart the service"
 run = """

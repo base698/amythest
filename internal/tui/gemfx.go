@@ -2,26 +2,34 @@ package tui
 
 import (
 	"bytes"
+	"compress/gzip"
+	_ "embed"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Experimental gem intro animation via ttfx (github.com/omacom/ttfx), the
-// Rust TerminalTextEffects port. Opt-in: set AMY_GEM_FX to an effect name
-// plus optional effect flags, e.g.
+// Gem intro animation, rendered with ttfx (github.com/omacom/ttfx — the
+// Rust port of ChrisBuilds' TerminalTextEffects; both MIT).
 //
-//	AMY_GEM_FX="decrypt"
-//	AMY_GEM_FX="beams --final-gradient-stops 8A2BE2 D787FF"
+// By default amy plays an embedded, pre-rendered purple "beams" pass over
+// the gem (frames baked at build time from ttfx --parity-dump: length-
+// prefixed, cursor-escape-free canvas blocks). When the pass finishes, the
+// built-in shimmer takes over and the amethyst stays put.
 //
-// The binary is found on PATH or via AMY_TTFX. Frames come from ttfx's
-// --parity-dump mode: length-prefixed, cursor-escape-free canvas blocks that
-// drop straight into the gem's slot. When the effect finishes, the built-in
-// shimmer takes over.
+// Overrides via AMY_GEM_FX:
+//
+//	AMY_GEM_FX=off                    # no intro, straight to the shimmer
+//	AMY_GEM_FX="decrypt"              # any live ttfx effect (needs the
+//	AMY_GEM_FX="fireworks --…flags"   # binary on PATH, or AMY_TTFX=/path)
+//
+// Regenerate the embedded frames with `mise run gemfx` (needs ttfx).
 
 const (
 	gemFXMaxFrames = 1200
@@ -33,21 +41,61 @@ type gemFXMsg struct {
 	err    error
 }
 
-// gemFXSpec returns the ttfx invocation from the environment, or ok=false.
-func gemFXSpec() (binary string, args []string, ok bool) {
+//go:embed fxdata/beams.dump.gz
+var embeddedBeams []byte
+
+var (
+	embeddedFramesOnce sync.Once
+	embeddedFrames     []string
+)
+
+// gemFXCmd picks the intro source: AMY_GEM_FX=off disables it, a set value
+// runs live ttfx, and the default is the embedded beams pass.
+func gemFXCmd() tea.Cmd {
 	spec := strings.Fields(os.Getenv("AMY_GEM_FX"))
-	if len(spec) == 0 {
-		return "", nil, false
+	if len(spec) == 1 && strings.EqualFold(spec[0], "off") {
+		return nil
 	}
-	binary = os.Getenv("AMY_TTFX")
-	if binary == "" {
-		path, err := exec.LookPath("ttfx")
-		if err != nil {
-			return "", nil, false
+	if len(spec) > 0 {
+		binary := os.Getenv("AMY_TTFX")
+		if binary == "" {
+			path, err := exec.LookPath("ttfx")
+			if err != nil {
+				return nil // requested a live effect but no binary: shimmer only
+			}
+			binary = path
 		}
-		binary = path
+		return loadGemFXCmd(binary, spec)
 	}
-	return binary, spec, true
+	return func() tea.Msg {
+		frames, err := embeddedGemFrames()
+		if err != nil {
+			return gemFXMsg{err: err}
+		}
+		return gemFXMsg{frames: frames}
+	}
+}
+
+// embeddedGemFrames decompresses and parses the baked beams pass once.
+func embeddedGemFrames() ([]string, error) {
+	var err error
+	embeddedFramesOnce.Do(func() {
+		zr, zerr := gzip.NewReader(bytes.NewReader(embeddedBeams))
+		if zerr != nil {
+			err = zerr
+			return
+		}
+		raw, rerr := io.ReadAll(io.LimitReader(zr, gemFXMaxBytes))
+		if rerr != nil {
+			err = rerr
+			return
+		}
+		embeddedFrames, err = parseTTFXFrames(raw)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("embedded gem frames: %w", err)
+	}
+	return embeddedFrames, nil
 }
 
 // loadGemFXCmd runs ttfx over the gem art and parses the frame stream.
