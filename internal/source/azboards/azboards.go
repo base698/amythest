@@ -12,9 +12,12 @@ package azboards
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -78,12 +81,25 @@ type WorkItem struct {
 	Description  string `json:"description"`
 }
 
+// WorkItemComment is one discussion entry, flattened for the terminal.
+type WorkItemComment struct {
+	Author string
+	Date   string // YYYY-MM-DD
+	Text   string // HTML stripped
+}
+
 // ErrNotLoggedIn is the surfaced auth failure; the UI renders the fix.
 var ErrNotLoggedIn = errors.New("not logged in to Azure DevOps")
 
 const (
 	listTTL   = 60 * time.Second
 	detailTTL = 5 * time.Minute
+	tokenTTL  = 10 * time.Minute
+
+	// adoResource is the well-known Azure DevOps AAD application id;
+	// az account get-access-token needs it or the token won't work
+	// against dev.azure.com.
+	adoResource = "499b84ac-1321-427f-aa17-267ca6975798"
 )
 
 type cachedList struct {
@@ -94,20 +110,30 @@ type cachedItem struct {
 	item WorkItem
 	at   time.Time
 }
+type cachedComments struct {
+	comments []WorkItemComment
+	at       time.Time
+}
 
 type Source struct {
 	cfg    Config
 	azPath string // "az" unless overridden (tests)
 	now    func() time.Time
+	http   *http.Client
 
-	mu    sync.Mutex
-	lists map[string]cachedList
-	items map[int]cachedItem
+	mu       sync.Mutex
+	lists    map[string]cachedList
+	items    map[int]cachedItem
+	comments map[int]cachedComments
+	token    string // cached AAD access token for the comments REST call
+	tokenAt  time.Time
 }
 
 func New(cfg Config) *Source {
 	return &Source{cfg: cfg, azPath: "az", now: time.Now,
-		lists: map[string]cachedList{}, items: map[int]cachedItem{}}
+		http:  &http.Client{Timeout: 30 * time.Second},
+		lists: map[string]cachedList{}, items: map[int]cachedItem{},
+		comments: map[int]cachedComments{}}
 }
 
 func (s *Source) Name() string          { return "azboards" }
@@ -244,6 +270,102 @@ func (s *Source) Item(ctx context.Context, id int, force bool) (WorkItem, error)
 	return item, nil
 }
 
+// Comments fetches a work item's discussion. az boards work-item show never
+// returns comment text (System.CommentCount is only a hint), and az devops
+// invoke's comments route has been seen to 404 — so this goes straight to
+// the REST API with a PAT (AZURE_DEVOPS_EXT_PAT, Basic) or an AAD token
+// from az account get-access-token (Bearer). Cached like details.
+func (s *Source) Comments(ctx context.Context, id int, force bool) ([]WorkItemComment, error) {
+	s.mu.Lock()
+	if c, ok := s.comments[id]; ok && !force && s.now().Sub(c.at) < detailTTL {
+		comments := c.comments
+		s.mu.Unlock()
+		return comments, nil
+	}
+	s.mu.Unlock()
+
+	auth, err := s.authHeader(ctx)
+	if err != nil {
+		return nil, err
+	}
+	u := strings.TrimRight(s.cfg.Org, "/") + "/" + url.PathEscape(s.cfg.Project) +
+		"/_apis/wit/workItems/" + fmt.Sprint(id) + "/comments?api-version=7.1-preview.4"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", auth)
+	req.Header.Set("Accept", "application/json")
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch comments: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, fmt.Errorf("fetch comments: %w", err)
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, ErrNotLoggedIn
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("comments API: %s", resp.Status)
+	}
+	var payload struct {
+		Comments []struct {
+			Text      string `json:"text"`
+			CreatedBy struct {
+				DisplayName string `json:"displayName"`
+			} `json:"createdBy"`
+			CreatedDate string `json:"createdDate"`
+		} `json:"comments"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("parse comments response: %w", err)
+	}
+	comments := make([]WorkItemComment, 0, len(payload.Comments))
+	for _, c := range payload.Comments {
+		date := c.CreatedDate
+		if len(date) > 10 {
+			date = date[:10]
+		}
+		comments = append(comments, WorkItemComment{
+			Author: c.CreatedBy.DisplayName, Date: date, Text: StripHTML(c.Text)})
+	}
+	s.mu.Lock()
+	s.comments[id] = cachedComments{comments: comments, at: s.now()}
+	s.mu.Unlock()
+	return comments, nil
+}
+
+// authHeader picks the REST credential: PAT from the environment when set
+// (works logged out), else an AAD token via az, cached briefly.
+func (s *Source) authHeader(ctx context.Context) (string, error) {
+	if pat := os.Getenv("AZURE_DEVOPS_EXT_PAT"); pat != "" {
+		return "Basic " + base64.StdEncoding.EncodeToString([]byte(":"+pat)), nil
+	}
+	s.mu.Lock()
+	if s.token != "" && s.now().Sub(s.tokenAt) < tokenTTL {
+		token := s.token
+		s.mu.Unlock()
+		return "Bearer " + token, nil
+	}
+	s.mu.Unlock()
+	out, err := s.run(ctx, "account", "get-access-token",
+		"--resource", adoResource, "--query", "accessToken", "-o", "tsv")
+	if err != nil {
+		return "", err
+	}
+	token := strings.TrimSpace(string(out))
+	if token == "" {
+		return "", ErrNotLoggedIn
+	}
+	s.mu.Lock()
+	s.token, s.tokenAt = token, s.now()
+	s.mu.Unlock()
+	return "Bearer " + token, nil
+}
+
 // SetState moves a work item to another column (state transition).
 func (s *Source) SetState(ctx context.Context, id int, state string) error {
 	_, err := s.run(ctx, "boards", "work-item", "update", "--id", fmt.Sprint(id),
@@ -269,6 +391,7 @@ func (s *Source) invalidate(id int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.items, id)
+	delete(s.comments, id)
 	s.lists = map[string]cachedList{}
 }
 
