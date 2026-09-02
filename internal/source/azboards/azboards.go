@@ -222,8 +222,13 @@ func (s *Source) Item(ctx context.Context, id int, force bool) (WorkItem, error)
 	}
 	s.mu.Unlock()
 
+	// --expand defaults to "all", and the API rejects expand together with
+	// fields ("The expand parameter can not be used with the fields
+	// parameter."), so ask for no expansion alongside the explicit field
+	// list. expand=all would also pull relations and links the detail view
+	// never reads.
 	out, err := s.run(ctx, "boards", "work-item", "show", "--id", fmt.Sprint(id),
-		"--org", s.cfg.Org, "-o", "json",
+		"--org", s.cfg.Org, "-o", "json", "--expand", "none",
 		"--fields", "System.Id,System.Title,System.State,System.AssignedTo,System.CommentCount,System.Description",
 		"--query", `{id:id, title:fields."System.Title", state:fields."System.State", assigned:fields."System.AssignedTo".displayName, comments:fields."System.CommentCount", description:fields."System.Description"}`)
 	if err != nil {
