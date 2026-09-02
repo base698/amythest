@@ -385,14 +385,16 @@ const helpText = `
   e               edit: task due date + 🔁 repeat rule
                   (two steps), or card in $EDITOR
   x               show/hide "Done today" (today view)
-  /               search (enter commit, esc cancel)
+  /               search lists; on boards: fuzzy filter
+                  (enter keeps it, / then esc clears)
   n / N           next / previous match
   p               cycle task query preset (tasks view)
   r               refresh current view
   1 / 2 / 3 / 4   today / tasks / boards / notes
   5 / 6 / 0       jira / bases (dataview) / sources
   boards: [azure] rows are Azure Boards virtual boards
-                  (m move column · c comment · o browser)
+                  (m move column · c comment · o browser ·
+                  f only your work items)
   notes: tab      browse (folders, tags, recent);
                   p preview pane · s sort · / filter
                   reader: b backlinks · e edit in $EDITOR

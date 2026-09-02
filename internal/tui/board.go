@@ -26,6 +26,26 @@ var statusLabels = map[board.Status]string{
 	board.Done:       "Done",
 }
 
+// columnWindow keeps a column's cursor visible inside a scroll window of
+// `visible` rows: it returns the adjusted scroll offset for the column.
+func columnWindow(total, cursor, offset, visible int) int {
+	if visible < 1 {
+		visible = 1
+	}
+	if cursor >= 0 {
+		if cursor < offset {
+			offset = cursor
+		}
+		if cursor >= offset+visible {
+			offset = cursor - visible + 1
+		}
+	}
+	if offset > total-visible {
+		offset = total - visible
+	}
+	return max(0, offset)
+}
+
 var moveKeys = map[string]board.Status{
 	"t": board.Triage,
 	"b": board.Backlog,
@@ -44,6 +64,7 @@ type boardView struct {
 
 	col     int
 	cursors [6]int // one per column in boardColumns order
+	offsets [6]int // scroll offset per column
 	busy    bool
 	loaded  bool
 	find    finder
@@ -87,48 +108,18 @@ type cardMovedBoardMsg struct {
 	from, to, cardID string
 }
 
-// flatCards enumerates every visible card in column order so search can jump
-// across columns; each entry remembers its (column, row) position.
-type flatCard struct {
-	col, row int
-	text     string
-}
-
-func (v *boardView) flatCards() []flatCard {
-	var flat []flatCard
+// focusFirstMatch moves focus off an emptied column after a filter commit.
+func (v *boardView) focusFirstMatch() {
+	if len(v.columnCards(v.col)) > 0 {
+		return
+	}
 	for col := range boardColumns {
-		for row, card := range v.columnCards(col) {
-			flat = append(flat, flatCard{col: col, row: row, text: card.Title + " " + card.Description})
+		if len(v.columnCards(col)) > 0 {
+			v.col = col
+			v.cursors[col] = 0
+			return
 		}
 	}
-	return flat
-}
-
-func (v *boardView) flatIndex(flat []flatCard) int {
-	for i, fc := range flat {
-		if fc.col == v.col && fc.row == v.cursors[v.col] {
-			return i
-		}
-	}
-	return 0
-}
-
-func (v *boardView) jumpFlat(flat []flatCard, i int) {
-	v.col = flat[i].col
-	v.cursors[v.col] = flat[i].row
-}
-
-func (v *boardView) searchJump(dir int) tea.Cmd {
-	flat := v.flatCards()
-	texts := make([]string, len(flat))
-	for i, fc := range flat {
-		texts[i] = fc.text
-	}
-	if hit := findMatch(texts, v.flatIndex(flat), dir, v.find.query); hit >= 0 {
-		v.jumpFlat(flat, hit)
-		return nil
-	}
-	return flash("no match: " + v.find.query)
 }
 
 func (v *boardView) Init() tea.Cmd {
@@ -158,20 +149,27 @@ func (v *boardView) loadArchiveCmd() tea.Cmd {
 	}
 }
 
-// columnCards returns the cards in the given column, preserving board order.
+// columnCards returns the cards in the given column, preserving board order
+// and applying the live "/" fuzzy filter.
 func (v *boardView) columnCards(col int) []board.Card {
 	status := boardColumns[col]
-	if status == board.Done {
-		return v.archive
-	}
-	if v.b == nil {
-		return nil
-	}
-	var cards []board.Card
-	for _, c := range v.b.Cards {
-		if c.Status == status {
-			cards = append(cards, c)
+	pool := v.archive
+	if status != board.Done {
+		if v.b == nil {
+			return nil
 		}
+		pool = v.b.Cards
+	}
+	query := v.find.liveQuery()
+	var cards []board.Card
+	for _, c := range pool {
+		if c.Status != status && status != board.Done {
+			continue
+		}
+		if query != "" && !fuzzyMatch(c.Title+" "+c.Description, query) {
+			continue
+		}
+		cards = append(cards, c)
 	}
 	return cards
 }
@@ -277,8 +275,9 @@ func (v *boardView) Update(msg tea.Msg) (view, tea.Cmd) {
 	case tea.KeyMsg:
 		if v.find.active() {
 			committed, cmd := v.find.handleKey(msg)
+			v.clampCursors() // the live filter narrows columns as it's typed
 			if committed {
-				return v, v.searchJump(1)
+				v.focusFirstMatch()
 			}
 			return v, cmd
 		}
@@ -305,14 +304,6 @@ func (v *boardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		switch msg.String() {
 		case "/":
 			return v, v.find.start()
-		case "n", "N":
-			if v.find.query != "" {
-				dir := 1
-				if msg.String() == "N" {
-					dir = -1
-				}
-				return v, v.searchJump(dir)
-			}
 		case "e":
 			if card := v.currentCard(); card != nil && boardColumns[v.col] != board.Done {
 				return v, pushView(newCardViewEditing(v.client, v.name, *card))
@@ -484,7 +475,8 @@ func (v *boardView) View(width, height int) string {
 		return v.picker.view()
 	}
 	colWidth := max(18, width/len(boardColumns)-2)
-	perColumn := max(3, height-4)
+	inner := colWidth - 2 // columnStyle pads one cell each side
+	maxRows := max(3, height-4)
 	var columns []string
 	for col, status := range boardColumns {
 		cards := v.columnCards(col)
@@ -493,12 +485,29 @@ func (v *boardView) View(width, height int) string {
 			title = columnTitleStyle.Render("Done (…)")
 		}
 		lines := []string{title}
-		for i, card := range cards {
-			if i >= perColumn {
-				lines = append(lines, dimStyle.Render(fmt.Sprintf("… %d more", len(cards)-perColumn)))
-				break
+		selectedRow := func(i int) bool { return col == v.col && i == v.cursors[col] }
+		if len(cards) <= maxRows {
+			v.offsets[col] = 0
+			for i, card := range cards {
+				lines = append(lines, renderCardLine(card, selectedRow(i), inner))
 			}
-			lines = append(lines, renderCardLine(card, col == v.col && i == v.cursors[v.col], colWidth-4))
+		} else {
+			// Scroll window: the cursor stays visible, markers show what's
+			// clipped above and below.
+			visible := max(1, maxRows-2)
+			v.offsets[col] = columnWindow(len(cards), v.cursors[col], v.offsets[col], visible)
+			off := v.offsets[col]
+			above := " "
+			if off > 0 {
+				above = fmt.Sprintf("↑ %d more", off)
+			}
+			lines = append(lines, dimStyle.Render(above))
+			for i := off; i < min(off+visible, len(cards)); i++ {
+				lines = append(lines, renderCardLine(cards[i], selectedRow(i), inner))
+			}
+			if below := len(cards) - (off + visible); below > 0 {
+				lines = append(lines, dimStyle.Render(fmt.Sprintf("↓ %d more", below)))
+			}
 		}
 		if len(cards) == 0 {
 			lines = append(lines, dimStyle.Render("—"))
@@ -510,8 +519,8 @@ func (v *boardView) View(width, height int) string {
 		columns = append(columns, style.Width(colWidth).Render(strings.Join(lines, "\n")))
 	}
 	view := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
-	hint := dimStyle.Render(" enter open · + new card · e edit · d done · m move · / search · h/l columns")
-	if bar := v.find.bar(); bar != "" {
+	hint := dimStyle.Render(" enter open · + new card · e edit · d done · m move · / filter · h/l columns")
+	if bar := v.find.filterBar(); bar != "" {
 		hint = " " + bar
 	}
 	if v.addingCard {
@@ -523,17 +532,13 @@ func (v *boardView) View(width, height int) string {
 	return view + "\n" + hint
 }
 
+// renderCardLine renders one card as a single row that never exceeds width
+// cells — overflow would wrap inside the lipgloss column and break the
+// row-per-card scroll math. Tags are dropped before the title is starved.
 func renderCardLine(card board.Card, selected bool, width int) string {
 	prefix := "  "
 	if selected {
 		prefix = cursorStyle.Render("▸ ")
-	}
-	title := card.Title
-	if width > 6 && lipgloss.Width(title) > width {
-		title = truncate(title, width-1) + "…"
-	}
-	if selected {
-		title = cursorStyle.Render(title)
 	}
 	var tags []string
 	if badge := priorityBadge(string(card.Priority)); badge != "" && card.Priority != board.P3 {
@@ -545,9 +550,24 @@ func renderCardLine(card board.Card, selected bool, width int) string {
 	if card.DueDate != "" {
 		tags = append(tags, dueStyle.Render(card.DueDate))
 	}
+	tagStr := strings.Join(tags, " ")
+	avail := width - 2 // prefix
+	if tagStr != "" && lipgloss.Width(tagStr)+10 > avail {
+		tagStr = ""
+	}
+	if tagStr != "" {
+		avail -= lipgloss.Width(tagStr) + 1
+	}
+	title := card.Title
+	if lipgloss.Width(title) > avail {
+		title = truncate(title, max(1, avail-1)) + "…"
+	}
+	if selected {
+		title = cursorStyle.Render(title)
+	}
 	line := prefix + title
-	if len(tags) > 0 {
-		line += " " + strings.Join(tags, " ")
+	if tagStr != "" {
+		line += " " + tagStr
 	}
 	return line
 }

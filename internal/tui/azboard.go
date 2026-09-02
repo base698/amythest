@@ -27,6 +27,8 @@ type azBoardView struct {
 	cols    []string
 	col     int
 	cursors []int
+	offsets []int
+	mine    bool // f: only work items assigned to the signed-in user
 	busy    bool
 	loaded  bool
 	loadErr error
@@ -42,6 +44,7 @@ type azBoardView struct {
 type (
 	azItemsMsg struct {
 		board string
+		mine  bool
 		items []azboards.WorkItem
 		err   error
 	}
@@ -78,24 +81,30 @@ func (v *azBoardView) Init() tea.Cmd { return v.loadCmd(false) }
 
 func (v *azBoardView) loadCmd(force bool) tea.Cmd {
 	v.busy = true
-	src, cfg := v.src, v.cfg
+	src, cfg, mine := v.src, v.cfg, v.mine
 	return func() tea.Msg {
-		items, err := src.BoardItems(context.Background(), cfg, force)
-		return azItemsMsg{board: cfg.Name, items: items, err: err}
+		items, err := src.BoardItems(context.Background(), cfg, force, mine)
+		return azItemsMsg{board: cfg.Name, mine: mine, items: items, err: err}
 	}
 }
 
-// columnItems returns the work items in column order, preserving list order.
+// columnItems returns the work items in column order, preserving list order
+// and applying the live "/" fuzzy filter.
 func (v *azBoardView) columnItems(col int) []azboards.WorkItem {
 	if col < 0 || col >= len(v.cols) {
 		return nil
 	}
 	state := v.cols[col]
+	query := v.find.liveQuery()
 	var items []azboards.WorkItem
 	for _, it := range v.items {
-		if it.State == state {
-			items = append(items, it)
+		if it.State != state {
+			continue
 		}
+		if query != "" && !fuzzyMatch(fmt.Sprintf("#%d %s %s", it.ID, it.Title, it.Assignee), query) {
+			continue
+		}
+		items = append(items, it)
 	}
 	return items
 }
@@ -116,6 +125,7 @@ func (v *azBoardView) reshape() {
 	v.cols = azboards.Columns(v.cfg, v.items)
 	if len(v.cursors) != len(v.cols) {
 		v.cursors = make([]int, len(v.cols))
+		v.offsets = make([]int, len(v.cols))
 	}
 	if v.col >= len(v.cols) {
 		v.col = max(0, len(v.cols)-1)
@@ -127,33 +137,24 @@ func (v *azBoardView) reshape() {
 	}
 }
 
-// flat search across columns, mirroring boardView.searchJump.
-func (v *azBoardView) searchJump(dir int) tea.Cmd {
-	type pos struct{ col, row int }
-	var positions []pos
-	var texts []string
-	from := 0
+// focusFirstMatch moves focus off an emptied column after a filter commit.
+func (v *azBoardView) focusFirstMatch() {
+	if len(v.columnItems(v.col)) > 0 {
+		return
+	}
 	for col := range v.cols {
-		for row, it := range v.columnItems(col) {
-			if col == v.col && row < len(v.cursors) && row == v.cursors[v.col] {
-				from = len(texts)
-			}
-			positions = append(positions, pos{col, row})
-			texts = append(texts, fmt.Sprintf("%d %s %s", it.ID, it.Title, it.Assignee))
+		if len(v.columnItems(col)) > 0 {
+			v.col = col
+			v.cursors[col] = 0
+			return
 		}
 	}
-	if hit := findMatch(texts, from, dir, v.find.query); hit >= 0 {
-		v.col = positions[hit].col
-		v.cursors[v.col] = positions[hit].row
-		return nil
-	}
-	return flash("no match: " + v.find.query)
 }
 
 func (v *azBoardView) Update(msg tea.Msg) (view, tea.Cmd) {
 	switch msg := msg.(type) {
 	case azItemsMsg:
-		if msg.board != v.cfg.Name {
+		if msg.board != v.cfg.Name || msg.mine != v.mine {
 			return v, nil
 		}
 		v.busy = false
@@ -186,8 +187,9 @@ func (v *azBoardView) Update(msg tea.Msg) (view, tea.Cmd) {
 	case tea.KeyMsg:
 		if v.find.active() {
 			committed, cmd := v.find.handleKey(msg)
+			v.reshape() // the live filter narrows columns as it's typed
 			if committed {
-				return v, v.searchJump(1)
+				v.focusFirstMatch()
 			}
 			return v, cmd
 		}
@@ -220,16 +222,15 @@ func (v *azBoardView) Update(msg tea.Msg) (view, tea.Cmd) {
 			}
 		case "/":
 			return v, v.find.start()
-		case "n", "N":
-			if v.find.query != "" {
-				dir := 1
-				if msg.String() == "N" {
-					dir = -1
-				}
-				return v, v.searchJump(dir)
-			}
 		case "r":
 			return v, v.loadCmd(true)
+		case "f":
+			v.mine = !v.mine
+			note := "showing all work items"
+			if v.mine {
+				note = "showing only your work items (@Me)"
+			}
+			return v, tea.Batch(v.loadCmd(false), flash(note))
 		case "enter":
 			if it := v.currentItem(); it != nil {
 				return v, pushView(newAZItemView(v.src, v.cfg, it.ID))
@@ -333,18 +334,39 @@ func (v *azBoardView) View(width, height int) string {
 		return "\n  no work items"
 	}
 	colWidth := max(18, width/len(v.cols)-2)
-	perColumn := max(3, height-4)
+	inner := colWidth - 2 // columnStyle pads one cell each side
+	maxRows := max(3, height-4)
 	var columns []string
 	for col, state := range v.cols {
 		items := v.columnItems(col)
 		lines := []string{columnTitleStyle.Render(fmt.Sprintf("%s (%d)", state, len(items)))}
-		for i, it := range items {
-			if i >= perColumn {
-				lines = append(lines, dimStyle.Render(fmt.Sprintf("… %d more", len(items)-perColumn)))
-				break
+		selectedRow := func(i int) bool {
+			return col == v.col && col < len(v.cursors) && i == v.cursors[col]
+		}
+		if len(items) <= maxRows {
+			if col < len(v.offsets) {
+				v.offsets[col] = 0
 			}
-			selected := col == v.col && col < len(v.cursors) && i == v.cursors[col]
-			lines = append(lines, renderAZItemLine(it, selected, colWidth-4))
+			for i, it := range items {
+				lines = append(lines, renderAZItemLine(it, selectedRow(i), inner))
+			}
+		} else {
+			// Scroll window: the cursor stays visible, markers show what's
+			// clipped above and below.
+			visible := max(1, maxRows-2)
+			v.offsets[col] = columnWindow(len(items), v.cursors[col], v.offsets[col], visible)
+			off := v.offsets[col]
+			above := " "
+			if off > 0 {
+				above = fmt.Sprintf("↑ %d more", off)
+			}
+			lines = append(lines, dimStyle.Render(above))
+			for i := off; i < min(off+visible, len(items)); i++ {
+				lines = append(lines, renderAZItemLine(items[i], selectedRow(i), inner))
+			}
+			if below := len(items) - (off + visible); below > 0 {
+				lines = append(lines, dimStyle.Render(fmt.Sprintf("↓ %d more", below)))
+			}
 		}
 		if len(items) == 0 {
 			lines = append(lines, dimStyle.Render("—"))
@@ -356,9 +378,16 @@ func (v *azBoardView) View(width, height int) string {
 		columns = append(columns, style.Width(colWidth).Render(strings.Join(lines, "\n")))
 	}
 	out := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
-	hint := dimStyle.Render(" enter open · m move column · c comment · o browser · / search · r refresh")
-	if bar := v.find.bar(); bar != "" {
+	mineHint := "f mine"
+	if v.mine {
+		mineHint = "f all " + dueStyle.Render("[mine]")
+	}
+	hint := dimStyle.Render(" enter open · m move · c comment · o browser · / filter · "+mineHint+" · r refresh")
+	if bar := v.find.filterBar(); bar != "" {
 		hint = " " + bar
+		if v.mine {
+			hint += " " + dueStyle.Render("[mine]")
+		}
 	}
 	if v.commenting {
 		hint = " " + v.comment.View()
@@ -366,21 +395,36 @@ func (v *azBoardView) View(width, height int) string {
 	return out + "\n" + hint
 }
 
+// renderAZItemLine renders one work item as a single row that never exceeds
+// width cells — overflow would wrap inside the lipgloss column and break the
+// row-per-item scroll math. The assignee is dropped before the title is
+// starved, the id never is.
 func renderAZItemLine(it azboards.WorkItem, selected bool, width int) string {
 	prefix := "  "
 	if selected {
 		prefix = cursorStyle.Render("▸ ")
 	}
+	id := fmt.Sprintf("#%d", it.ID)
+	avail := width - 2 - len(id) - 1
+	name := ""
+	if it.Assignee != "" {
+		name = azShortName(it.Assignee)
+		if len(name)+1+10 > avail {
+			name = ""
+		} else {
+			avail -= len(name) + 1
+		}
+	}
 	title := it.Title
-	if width > 6 && lipgloss.Width(title) > width {
-		title = truncate(title, width-1) + "…"
+	if lipgloss.Width(title) > avail {
+		title = truncate(title, max(1, avail-1)) + "…"
 	}
 	if selected {
 		title = cursorStyle.Render(title)
 	}
-	line := prefix + dimStyle.Render(fmt.Sprintf("#%d", it.ID)) + " " + title
-	if it.Assignee != "" {
-		line += " " + dimStyle.Render(azShortName(it.Assignee))
+	line := prefix + dimStyle.Render(id) + " " + title
+	if name != "" {
+		line += " " + dimStyle.Render(name)
 	}
 	return line
 }
