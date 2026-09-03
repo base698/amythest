@@ -456,3 +456,21 @@
   .card-focus-control { min-height: 44px; min-width: 44px; }
   .card-focus-control:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 }
+
+/* ---- Palettes: the kanban board is dark-native, so each palette remaps
+   its root variables to that palette's night colors. Custom palettes from
+   amythest.yaml arrive via ../gen/themes.css the same way. ---- */
+:root[data-palette="omarchy"] {
+  --bg: #1a1026;
+  --panel: #241435;
+  --panel-2: #2b1a3f;
+  --border: #3b2354;
+  --muted: #b39ac9;
+  --text: #f2e6ff;
+  --accent: #ff5fa2;
+  --accent-2: #ff8ec0;
+  --danger: #ff6d7f;
+}
+:root[data-palette="omarchy"] body {
+  background: radial-gradient(circle at 45% -30%, #47205e 0, transparent 38%), var(--bg);
+}

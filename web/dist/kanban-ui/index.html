@@ -6,6 +6,18 @@
   <meta name="theme-color" content="#0b0c10" />
   <title>Kanban — Amythest</title>
   <link rel="stylesheet" href="/kanban/main.css" />
+  <!-- ../gen resolves to the site root under any mount prefix. -->
+  <link rel="stylesheet" href="/kanban/../gen/themes.css" />
+  <script>
+    // Palette + mode chosen on the notes site carry over (same origin).
+    (function () {
+      var t = localStorage.getItem("theme");
+      if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      document.documentElement.dataset.theme = t;
+      var p = localStorage.getItem("palette");
+      if (p && p !== "default") document.documentElement.dataset.palette = p;
+    })();
+  </script>
 </head>
 <body>
   <div id="root"></div>

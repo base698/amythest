@@ -14,6 +14,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// WebTheme is one custom palette: CSS token → value, per color mode.
+type WebTheme struct {
+	Light map[string]string `yaml:"light"`
+	Dark  map[string]string `yaml:"dark"`
+}
+
 type Config struct {
 	// Vault is the root of the Obsidian-style notes vault. May be a symlink.
 	Vault string `yaml:"vault"`
@@ -35,6 +41,11 @@ type Config struct {
 	// Each is probed at startup; plugins that decline (e.g. missing API key)
 	// stay inactive.
 	SharePlugins []string `yaml:"share_plugins"`
+	// Themes are custom web palettes offered in the UI's theme picker next
+	// to the built-in "default" and "omarchy". Keys are CSS token names
+	// (bg, bg-alt, fg, fg-muted, fg-faint, accent, accent-soft, border,
+	// highlight, mark); a theme may define light, dark, or both.
+	Themes map[string]WebTheme `yaml:"themes"`
 
 	// --- service hardening (all opt-in; defaults preserve prior behavior) ---
 

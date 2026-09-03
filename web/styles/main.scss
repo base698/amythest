@@ -27,6 +27,38 @@
   --mark: #6b5d1e;
 }
 
+// Built-in palettes beyond the default. [data-palette] on <html> is
+// orthogonal to [data-theme] light/dark; custom palettes from
+// amythest.yaml arrive the same way via /gen/themes.css.
+
+// Omarchy: synthwave sunset. Light = dawn over the ridge, dark = the
+// night drive — deep purple ground, hot pink accent, sunset-orange marks.
+:root[data-palette="omarchy"] {
+  --bg: #fdf3ee;
+  --bg-alt: #f7e5dd;
+  --fg: #3a2340;
+  --fg-muted: #8a6b7f;
+  --fg-faint: #d3b7c4;
+  --accent: #d6337f;
+  --accent-soft: #f7d3e5;
+  --border: #eedad1;
+  --highlight: rgba(214, 51, 127, 0.12);
+  --mark: #ffd9a0;
+}
+
+:root[data-palette="omarchy"][data-theme="dark"] {
+  --bg: #1a1026;
+  --bg-alt: #241435;
+  --fg: #f2e6ff;
+  --fg-muted: #b39ac9;
+  --fg-faint: #5e4a75;
+  --accent: #ff5fa2;
+  --accent-soft: #47205e;
+  --border: #3b2354;
+  --highlight: rgba(255, 95, 162, 0.18);
+  --mark: #7a4d1e;
+}
+
 * { box-sizing: border-box; }
 
 html { scroll-behavior: smooth; }
@@ -1166,4 +1198,39 @@ input.task-toggle:disabled { cursor: wait; opacity: 0.6; }
   .share-title-label, .share-description-label { margin: 1rem 0; }
   .share-status { margin-top: 1rem; min-height: 1.4em; }
   #share-timer { font-variant-numeric: tabular-nums; }
+}
+
+// Theme picker row at the bottom of the sidebar drawer.
+.theme-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+
+  label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg-muted);
+  }
+
+  select {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    font-size: 0.8rem;
+    color: var(--fg);
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.25rem 0.4rem;
+
+    &:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+  }
 }
