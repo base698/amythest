@@ -45,10 +45,14 @@ async function go(url: URL, push: boolean, onNav: () => void, keepScroll = false
     }
     const html = await res.text()
     const next = new DOMParser().parseFromString(html, "text/html")
-    // The theme attribute is set by script at load time, so the fetched
-    // document lacks it — carry it over or the morph strips dark mode.
+    // The theme + palette attributes are set by script at load time, so the
+    // fetched document lacks them — carry them over or the morph strips
+    // dark mode and the active theme.
     if (document.documentElement.dataset.theme) {
       next.documentElement.dataset.theme = document.documentElement.dataset.theme
+    }
+    if (document.documentElement.dataset.palette) {
+      next.documentElement.dataset.palette = document.documentElement.dataset.palette
     }
     if (push) history.pushState({}, "", url.href)
     document.title = next.title

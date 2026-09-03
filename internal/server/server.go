@@ -153,6 +153,7 @@ func New(cfg config.Config) (*Server, error) {
 		return nil, err
 	}
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(dist)))
+	s.mux.HandleFunc("GET /gen/themes.css", s.handleThemesCSS)
 	s.mux.HandleFunc("GET /gen/chroma.css", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/css")
 		w.Header().Set("Cache-Control", "public, max-age=3600")

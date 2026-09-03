@@ -53,6 +53,7 @@ type pageData struct {
 	Slug        string
 	Backlinks   []noteLink
 	HasKanban   bool
+	Themes      []string
 }
 
 // handleNote serves a rendered note, or a folder/tag listing fallback.
@@ -287,6 +288,7 @@ func (s *Server) renderPage(w http.ResponseWriter, data pageData) {
 
 func (s *Server) renderPageStatus(w http.ResponseWriter, status int, data pageData) {
 	data.HasKanban = s.kanban != nil
+	data.Themes = s.themeNames()
 	var buf bytes.Buffer
 	if err := s.tmpl.ExecuteTemplate(&buf, "base.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
