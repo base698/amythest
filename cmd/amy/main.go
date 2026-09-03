@@ -63,6 +63,10 @@ func main() {
 		sources = append(sources, azboards.New(acfg))
 	}
 
+	if err := tui.LoadThemes(cfg.File); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: theme config:", err)
+	}
+
 	program := tea.NewProgram(tui.NewApp(client, source.NewRegistry(sources...)), tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

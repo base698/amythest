@@ -2,40 +2,31 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
+// The package styles every view renders with. They are populated (and
+// re-populated on theme switch) by applyTheme in theme.go — the palette
+// values live there, not here.
 var (
-	headerStyle = lipgloss.NewStyle().Bold(true).
-			Foreground(lipgloss.Color("15")).Background(lipgloss.Color("54"))
-	statusStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("245")).Background(lipgloss.Color("236"))
+	headerStyle lipgloss.Style
+	statusStyle lipgloss.Style
 
-	groupHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("110"))
-	cursorStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
-	dimStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("242"))
-	doneStyle        = lipgloss.NewStyle().Strikethrough(true).Foreground(lipgloss.Color("242"))
-	dueStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
-	blockedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	groupHeaderStyle lipgloss.Style
+	cursorStyle      lipgloss.Style
+	dimStyle         lipgloss.Style
+	doneStyle        lipgloss.Style
+	dueStyle         lipgloss.Style
+	blockedStyle     lipgloss.Style
 
-	searchHitStyle = lipgloss.NewStyle().Bold(true).
-			Foreground(lipgloss.Color("16")).Background(lipgloss.Color("179"))
-	linkStyle   = lipgloss.NewStyle().Underline(true).Foreground(lipgloss.Color("111"))
-	dangerStyle = lipgloss.NewStyle().Bold(true).
-			Foreground(lipgloss.Color("15")).Background(lipgloss.Color("124"))
+	searchHitStyle lipgloss.Style
+	linkStyle      lipgloss.Style
+	dangerStyle    lipgloss.Style
 
-	columnStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).
-			Padding(0, 1)
-	columnFocusStyle = columnStyle.
-				BorderForeground(lipgloss.Color("212"))
-	columnTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("110"))
+	columnStyle      lipgloss.Style
+	columnFocusStyle lipgloss.Style
+	columnTitleStyle lipgloss.Style
 
 	// ASCII badges for chrome; emoji stay confined to free text where
 	// width miscounts can't break the layout.
-	priorityStyles = map[string]lipgloss.Style{
-		"p0": lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203")),
-		"p1": lipgloss.NewStyle().Foreground(lipgloss.Color("215")),
-		"p2": lipgloss.NewStyle().Foreground(lipgloss.Color("110")),
-		"p3": dimStyle,
-	}
+	priorityStyles map[string]lipgloss.Style
 )
 
 func priorityBadge(p string) string {
