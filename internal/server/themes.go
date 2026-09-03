@@ -27,18 +27,20 @@ import (
 var builtinPalettes = []string{"default", "omarchy"}
 
 // themeTokens is the allowlist of notes-site custom properties a theme may
-// set, mirrored into the kanban UI's equivalent variables where one exists.
-var themeTokens = map[string]string{ // token → kanban var ("" = none)
-	"bg":          "--bg",
-	"bg-alt":      "--panel",
-	"fg":          "--text",
-	"fg-muted":    "--muted",
-	"fg-faint":    "",
-	"accent":      "--accent",
-	"accent-soft": "",
-	"border":      "--border",
-	"highlight":   "",
-	"mark":        "",
+// set, fanned out into the kanban UI's variable set so one small token map
+// themes the board too (the board derives its elevations and text tiers
+// from these).
+var themeTokens = map[string][]string{ // token → extra kanban vars
+	"bg":          {"--input-bg"},
+	"bg-alt":      {"--panel", "--panel-2", "--card", "--card-hover", "--chip"},
+	"fg":          {"--text", "--text-soft"},
+	"fg-muted":    {"--muted", "--muted-2"},
+	"fg-faint":    nil,
+	"accent":      {"--accent-2", "--accent-strong", "--accent-text"},
+	"accent-soft": {"--glow", "--accent-deep"},
+	"border":      {"--border-2", "--border-strong"},
+	"highlight":   nil,
+	"mark":        nil,
 }
 
 // safeCSSValue keeps generated CSS injection-proof: color functions,
@@ -109,7 +111,7 @@ func writeThemeBlock(b *strings.Builder, selector string, tokens map[string]stri
 	b.WriteString(selector + " {\n")
 	for _, k := range keys {
 		fmt.Fprintf(b, "  --%s: %s;\n", k, tokens[k])
-		if kanbanVar := themeTokens[k]; kanbanVar != "" && kanbanVar != "--"+k {
+		for _, kanbanVar := range themeTokens[k] {
 			fmt.Fprintf(b, "  %s: %s;\n", kanbanVar, tokens[k])
 		}
 	}
