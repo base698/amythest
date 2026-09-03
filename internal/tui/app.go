@@ -259,6 +259,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "0":
 			a.stack = []view{newSourcesView(a.reg)}
 			return a, a.top().Init()
+		case "T":
+			if _, open := a.top().(*themePickerView); !open {
+				v := newThemePickerView()
+				a.stack = append(a.stack, v)
+				return a, v.Init()
+			}
 		case "+":
 			// On a board, + creates a card there; everywhere else it's
 			// the quick-add task flow.
@@ -384,6 +390,8 @@ const helpText = `
                   other boards (t/b/y/i/v/d shortcuts)
   e               edit: task due date + 🔁 repeat rule
                   (two steps), or card in $EDITOR
+  T               theme picker (moving previews live;
+                  persist with 'theme: <name>' in cli.yaml)
   x               show/hide "Done today" (today view)
   /               search lists; on boards: fuzzy filter
                   (enter keeps it, / then esc clears)
