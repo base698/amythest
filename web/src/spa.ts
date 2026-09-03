@@ -45,18 +45,17 @@ async function go(url: URL, push: boolean, onNav: () => void, keepScroll = false
     }
     const html = await res.text()
     const next = new DOMParser().parseFromString(html, "text/html")
-    // The theme + palette attributes are set by script at load time, so the
-    // fetched document lacks them — carry them over or the morph strips
-    // dark mode and the active theme.
-    if (document.documentElement.dataset.theme) {
-      next.documentElement.dataset.theme = document.documentElement.dataset.theme
-    }
-    if (document.documentElement.dataset.palette) {
-      next.documentElement.dataset.palette = document.documentElement.dataset.palette
-    }
     if (push) history.pushState({}, "", url.href)
     document.title = next.title
-    await morph(document, next)
+    // Morph the body only. Every page shares one base-template head (only
+    // the title differs, synced above), and morphing the live head is
+    // actively harmful: libraries inject <style> nodes into it at runtime
+    // (mermaid does), which shifts the positional diff and re-creates the
+    // stylesheet <link>s — a visible unstyled flicker on task toggles.
+    // Skipping the document node also leaves the <html> theme/palette
+    // attributes untouched, so dark mode and the active theme survive
+    // without hand-carrying them onto the fetched document.
+    await morph(document.body, next.body)
     if (!keepScroll) {
       if (url.hash) {
         // Not querySelector: heading ids can start with a digit ("2026-plan"),
