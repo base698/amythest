@@ -59,3 +59,22 @@ func TestThemeNamesOrder(t *testing.T) {
 		t.Fatalf("names = %s", got)
 	}
 }
+
+func TestThemesCSSFontTokens(t *testing.T) {
+	css := themesCSS(map[string]config.WebTheme{
+		"typewriter": {Light: map[string]string{
+			"font-body": `"Courier Prime", "Courier New", monospace`,
+			"font-mono": `"Courier Prime", monospace`,
+		}},
+	})
+	if !strings.Contains(css, `--font-body: "Courier Prime", "Courier New", monospace;`) {
+		t.Fatalf("font token missing:\n%s", css)
+	}
+	// Still injection-proof: braces/semicolons in a font value are dropped.
+	css = themesCSS(map[string]config.WebTheme{
+		"evil": {Light: map[string]string{"font-body": `x;} body{display:none`}},
+	})
+	if strings.Contains(css, "display:none") {
+		t.Fatalf("injection survived:\n%s", css)
+	}
+}

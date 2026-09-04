@@ -41,11 +41,14 @@ var themeTokens = map[string][]string{ // token → extra kanban vars
 	"border":      {"--border-2", "--border-strong"},
 	"highlight":   nil,
 	"mark":        nil,
+	"font-body":   nil, // same var name on both surfaces
+	"font-mono":   nil,
 }
 
-// safeCSSValue keeps generated CSS injection-proof: color functions,
-// hex, and keywords only — no braces, semicolons, url(), or escapes.
-var safeCSSValue = regexp.MustCompile(`^[#a-zA-Z0-9(),.%/ -]+$`)
+// safeCSSValue keeps generated CSS injection-proof: color functions, hex,
+// keywords, and quoted font stacks — no braces, semicolons, url(), or
+// escapes.
+var safeCSSValue = regexp.MustCompile(`^[#a-zA-Z0-9(),.%/'" -]+$`)
 
 // themeNames lists the picker's options: built-ins, then customs sorted.
 func (s *Server) themeNames() []string {
