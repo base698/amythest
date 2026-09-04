@@ -550,7 +550,7 @@ func TestServerRewritePreservesMultiParagraphComments(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := "First paragraph line one.\nLine two with trailing spaces.   \n\nSecond paragraph after a blank line.\n\nThird — with **markdown**, links https://example.com and \"quotes\"."
-	if _, err := store.AddComment("hand", card.ID, "justin", body); err != nil {
+	if _, err := store.AddComment("hand", card.ID, "ada", body); err != nil {
 		t.Fatal(err)
 	}
 	// Force several rewrite cycles: each mutation parses the file and
@@ -572,7 +572,7 @@ func TestServerRewritePreservesMultiParagraphComments(t *testing.T) {
 	if got[0].Body != want {
 		t.Fatalf("comment body after rewrites:\ngot:  %q\nwant: %q", got[0].Body, want)
 	}
-	if got[0].Author != "justin" || got[0].ID == "" {
+	if got[0].Author != "ada" || got[0].ID == "" {
 		t.Fatalf("comment identity lost: %#v", got[0])
 	}
 }

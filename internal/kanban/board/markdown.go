@@ -32,7 +32,7 @@ import (
 //
 //	### Comments
 //
-//	- **2026-09-01T10:00:00Z — justin:** looks good
+//	- **2026-09-01T10:00:00Z — ada:** looks good
 //
 // H1 headings are columns, H2 headings are cards (the trailing ^block-id
 // is the stable card id), `key:: value` lines directly under a card
