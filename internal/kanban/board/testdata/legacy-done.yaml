@@ -1,0 +1,22 @@
+# Rich Board — amythest kanban done archive.
+# Plain YAML, hand-editable; the UI and API read and rewrite this file.
+version: 3
+name: fixture
+displayName: Rich Board
+description: |-
+    Line one.
+    Line two.
+icon: "\U0001F680"
+color: '#8b5cf6'
+sortOrder: 4
+pinned: true
+focusCardId: card0001
+dispatchEnabled: true
+cards:
+    - id: card0003
+      title: Finished card
+      priority: p3
+      status: done
+      createdAt: 2026-08-01T10:30:00Z
+      updatedAt: 2026-08-03T10:30:00Z
+      doneAt: 2026-08-03T10:30:00Z

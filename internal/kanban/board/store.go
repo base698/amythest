@@ -21,19 +21,21 @@ import (
 )
 
 const (
-	// Boards are stored as plain YAML — one typed document per file that
-	// both the API (JSON) and the disk format (YAML) serialize from, so
-	// the file is hand-editable like any other note. Version 3 marks the
-	// YAML era.
-	boardFile = "board.yaml"
-	doneFile  = "done.yaml"
+	// Boards are stored as regular markdown notes (format v4, see
+	// markdown.go): columns are H1 headings, cards are H2 headings with
+	// `key:: value` fields and free-form markdown bodies, and the machine
+	// bookkeeping hides in frontmatter. One typed struct serializes the
+	// JSON wire format and parses/renders this file.
+	boardFile = "board.md"
+	doneFile  = "done.md"
 
-	// Read-only compatibility with the earlier markdown-with-embedded-JSON
-	// files (this server's v2 and the predecessor's v1 markers). A legacy
-	// board migrates to YAML the first time it is opened or written, and
-	// the old files are removed.
-	legacyBoardFile = "board.md"
-	legacyDoneFile  = "done.md"
+	// Read-only compatibility with older formats, migrated to v4 the
+	// first time a board is opened or written:
+	//   v3 — whole-file YAML documents (board.yaml/done.yaml)
+	//   v2 — markdown with an embedded JSON blob between AMYTHEST markers
+	//   v1 — the predecessor server's NETEXPLORE markers
+	yamlBoardFile   = "board.yaml"
+	yamlDoneFile    = "done.yaml"
 	dataStart       = "<!-- AMYTHEST_KANBAN_DATA_START -->\n```json\n"
 	dataEnd         = "\n```\n<!-- AMYTHEST_KANBAN_DATA_END -->"
 	legacyDataStart = "<!-- NETEXPLORE_KANBAN_DATA_START -->\n```json\n"
@@ -228,14 +230,31 @@ func (s *Store) Load(name string) (Board, error) {
 func (s *Store) hasLegacyFiles(name string) bool {
 	for _, path := range []string{s.boardPath(name), s.donePath(name)} {
 		if _, err := os.Stat(legacySibling(path)); err == nil {
-			return true
+			return true // v3 YAML file awaiting migration
+		}
+		if hasEmbeddedJSONMarkers(path) {
+			return true // v1/v2 markdown-with-JSON awaiting migration
 		}
 	}
 	return false
 }
 
-// migrateBoardFiles converts a board's files to YAML under the board lock.
-// Concurrent opens serialize here; whoever loses just clears leftovers.
+// hasEmbeddedJSONMarkers reports a v1/v2 file: same .md name as the v4
+// format, distinguished only by content.
+func hasEmbeddedJSONMarkers(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	text := string(data)
+	return strings.Contains(text, dataStart) || strings.Contains(text, legacyDataStart)
+}
+
+// migrateBoardFiles converts a board's files to the v4 markdown format
+// under the board lock. Two sources exist: a v3 YAML sibling (rendered to
+// the .md path, then removed) and a v1/v2 markdown file with embedded
+// JSON (rewritten in place). Concurrent opens serialize here; whoever
+// loses just clears leftovers.
 func (s *Store) migrateBoardFiles(name string) error {
 	return s.withLock(name, func() error {
 		for _, target := range []struct {
@@ -246,13 +265,18 @@ func (s *Store) migrateBoardFiles(name string) error {
 			{s.donePath(name), true},
 		} {
 			legacy := legacySibling(target.path)
-			if _, err := os.Stat(legacy); errors.Is(err, os.ErrNotExist) {
-				continue
-			} else if err != nil {
-				return err
+			_, statErr := os.Stat(legacy)
+			hasYAML := statErr == nil
+			if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+				return statErr
 			}
-			if _, err := os.Stat(target.path); errors.Is(err, os.ErrNotExist) {
-				// readBoard falls back to the legacy file here.
+			markers := hasEmbeddedJSONMarkers(target.path)
+			if !hasYAML && !markers {
+				continue
+			}
+			_, mdErr := os.Stat(target.path)
+			if markers || errors.Is(mdErr, os.ErrNotExist) {
+				// readBoard reads the markers file or falls back to YAML.
 				value, err := readBoard(target.path)
 				if err != nil {
 					return err
@@ -260,8 +284,8 @@ func (s *Store) migrateBoardFiles(name string) error {
 				if err := atomicWrite(target.path, renderBoard(value, target.doneOnly, s.now().UTC())); err != nil {
 					return err
 				}
-			} else if err != nil {
-				return err
+			} else if mdErr != nil {
+				return mdErr
 			}
 			removeLegacySibling(target.path)
 		}
@@ -1679,13 +1703,13 @@ func (s *Store) writeActive(name string, board Board) error {
 func (s *Store) boardPath(name string) string { return filepath.Join(s.root, name, boardFile) }
 func (s *Store) donePath(name string) string  { return filepath.Join(s.root, name, doneFile) }
 
-// legacySibling maps a YAML board path to its pre-migration markdown file.
+// legacySibling maps a markdown board path to its v3 YAML-era file.
 func legacySibling(path string) string {
 	switch filepath.Base(path) {
 	case boardFile:
-		return filepath.Join(filepath.Dir(path), legacyBoardFile)
+		return filepath.Join(filepath.Dir(path), yamlBoardFile)
 	case doneFile:
-		return filepath.Join(filepath.Dir(path), legacyDoneFile)
+		return filepath.Join(filepath.Dir(path), yamlDoneFile)
 	default:
 		return ""
 	}
@@ -1811,7 +1835,11 @@ func parseBoard(data []byte, path string) (Board, error) {
 		start = strings.Index(text, startMarker)
 	}
 	if start < 0 {
-		// No embedded-JSON markers: this is the YAML format.
+		// No embedded-JSON markers. Frontmatter opens the v4 markdown
+		// note; anything else is a v3 whole-file YAML document.
+		if strings.HasPrefix(strings.ReplaceAll(text, "\r\n", "\n"), "---\n") {
+			return parseBoardMarkdown(data, path)
+		}
 		var board Board
 		if err := yaml.Unmarshal(data, &board); err != nil {
 			return Board{}, fmt.Errorf("parse %s: %w", path, err)
@@ -1833,7 +1861,7 @@ func parseBoard(data []byte, path string) (Board, error) {
 // normalizeBoard validates and back-fills a parsed board, whatever its
 // source format or age.
 func normalizeBoard(board Board, path string) (Board, error) {
-	if board.Version < 1 || board.Version > 3 || !validBoardName(board.Name) {
+	if board.Version < 1 || board.Version > 4 || !validBoardName(board.Name) {
 		return Board{}, fmt.Errorf("unsupported or invalid board data in %s", path)
 	}
 	if board.DisplayName == "" {
@@ -1842,17 +1870,22 @@ func normalizeBoard(board Board, path string) (Board, error) {
 	if board.Version == 1 {
 		board.Pinned = true // predecessor server had no pinning; keep all visible
 	}
-	board.Version = 3
+	board.Version = 4
 	if board.Cards == nil {
 		board.Cards = []Card{}
 	}
 	for i := range board.Cards {
 		card := &board.Cards[i]
+		if card.ID == "" {
+			// Hand-added card: name it deterministically so reads stay
+			// stable; the next server write persists the id.
+			card.ID = deterministicCardID(board.Name, card.Status, card.Title, i)
+		}
 		if card.Priority == "" {
 			card.Priority = P2
 		}
-		// The YAML format omits empty collections for hand-editability;
-		// the wire contract promises arrays, never null.
+		// Hand-written files omit empty collections; the wire contract
+		// promises arrays, never null.
 		if card.Labels == nil {
 			card.Labels = []string{}
 		}
@@ -1869,22 +1902,15 @@ func normalizeBoard(board Board, path string) (Board, error) {
 	return board, nil
 }
 
-// renderBoard serializes a board as its on-disk YAML document. The same
-// typed struct backs the JSON wire format, so what you edit by hand is
-// exactly what the API serves. The updated timestamp is no longer written
-// (card timestamps carry that information), keeping writes idempotent.
-func renderBoard(board Board, doneOnly bool, _ time.Time) []byte {
-	board.Version = 3
+// renderBoard serializes a board as its on-disk v4 markdown note (see
+// markdown.go). The same typed struct backs the JSON wire format, so what
+// you edit by hand is exactly what the API serves.
+func renderBoard(board Board, doneOnly bool, now time.Time) []byte {
+	board.Version = 4
 	if board.DisplayName == "" {
 		board.DisplayName = displayName(board.Name)
 	}
-	kind := "active board"
-	if doneOnly {
-		kind = "done archive"
-	}
-	payload, _ := yaml.Marshal(board)
-	header := fmt.Sprintf("# %s — amythest kanban %s.\n# Plain YAML, hand-editable; the UI and API read and rewrite this file.\n", board.DisplayName, kind)
-	return append([]byte(header), payload...)
+	return renderBoardMarkdown(board, doneOnly, now)
 }
 
 func cleanMarkdownText(value string) string {
@@ -1954,7 +1980,7 @@ func boardFromInput(input BoardInput) (Board, error) {
 		pinned = *input.Pinned
 	}
 	value := Board{
-		Version: 3, Name: name, DisplayName: strings.TrimSpace(input.DisplayName),
+		Version: 4, Name: name, DisplayName: strings.TrimSpace(input.DisplayName),
 		Description: strings.TrimSpace(input.Description), Icon: strings.TrimSpace(input.Icon),
 		Color: strings.TrimSpace(input.Color), SortOrder: input.SortOrder, Pinned: pinned,
 		Cards: []Card{},
@@ -2145,8 +2171,11 @@ func statusLabel(status Status) string {
 }
 
 // DryRunConvert parses a board file in whatever format it is in, renders
-// the YAML representation, and re-parses that — returning both images so
-// migration tooling can verify equivalence without writing anything.
+// the current on-disk representation, and re-parses that — returning both
+// images so migration tooling can verify equivalence without writing
+// anything. The original is returned in canonical card order (the v4 file
+// groups cards by status section, which canonicalizes cross-column array
+// order) so the two images compare fairly.
 func DryRunConvert(path string) (original, roundTrip Board, err error) {
 	original, err = readBoard(path)
 	if err != nil {
@@ -2160,6 +2189,25 @@ func DryRunConvert(path string) (original, roundTrip Board, err error) {
 	roundTrip, err = normalizeBoard(parsed, path)
 	if err != nil {
 		return Board{}, Board{}, err
+	}
+	rank := map[Status]int{}
+	for i, status := range append(append([]Status{}, ActiveStatuses...), Done) {
+		rank[status] = i
+	}
+	sort.SliceStable(original.Cards, func(i, j int) bool {
+		return rank[original.Cards[i].Status] < rank[original.Cards[j].Status]
+	})
+	// v4 reserves H1/H2 for columns/cards (migration demotes description
+	// headings to H3 once) and trims trailing whitespace per line in
+	// descriptions and comment bodies. Apply the same normalization to the
+	// original so the images compare on content, not on those documented
+	// shifts.
+	for i := range original.Cards {
+		card := &original.Cards[i]
+		card.Description = strings.TrimSpace(sanitizeDescription(cleanMarkdownText(card.Description)))
+		for j := range card.Comments {
+			card.Comments[j].Body = cleanMarkdownText(card.Comments[j].Body)
+		}
 	}
 	return original, roundTrip, nil
 }

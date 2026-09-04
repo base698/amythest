@@ -1,0 +1,60 @@
+# Rich Board — amythest kanban active board.
+# Plain YAML, hand-editable; the UI and API read and rewrite this file.
+version: 3
+name: fixture
+displayName: Rich Board
+description: |-
+    Line one.
+    Line two.
+icon: "\U0001F680"
+color: '#8b5cf6'
+sortOrder: 4
+pinned: true
+focusCardId: card0001
+dispatchEnabled: true
+cards:
+    - id: card0001
+      title: Everything card
+      description: |-
+        Multi-line **markdown**.
+
+        - bullet
+        - [ ] task box
+      dueDate: "2026-08-15"
+      milestone: v2
+      priority: p1
+      status: in_progress
+      assignee: ada
+      agent: claude/opus
+      blocked: true
+      labels:
+        - infra
+        - urgent
+      comments:
+        - id: cmt1
+          author: grace
+          body: |-
+            Ship it
+            soon
+          createdAt: 2026-08-01T10:30:00Z
+      attachments:
+        - id: att1
+          filename: spec.pdf
+          size: 1234
+          contentType: application/pdf
+          createdAt: 2026-08-01T10:30:00Z
+      audit:
+        - action: moved-board
+          actor: ada
+          fromBoard: old
+          toBoard: rich
+          createdAt: 2026-08-01T10:30:00Z
+      createdAt: 2026-08-01T10:30:00Z
+      updatedAt: 2026-08-01T11:30:00Z
+      doneAt: 2026-08-03T10:30:00Z
+    - id: card0002
+      title: Bare card
+      priority: p2
+      status: triage
+      createdAt: 2026-08-01T10:30:00Z
+      updatedAt: 2026-08-01T10:30:00Z
