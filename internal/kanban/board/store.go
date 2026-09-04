@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"gopkg.in/yaml.v3"
 	"io"
 	"log/slog"
 	"os"
@@ -20,12 +21,24 @@ import (
 )
 
 const (
-	dataStart = "<!-- AMYTHEST_KANBAN_DATA_START -->\n```json\n"
-	dataEnd   = "\n```\n<!-- AMYTHEST_KANBAN_DATA_END -->"
-	// Read-only compatibility with boards written by the predecessor
-	// server; rewritten to the current markers on the next mutation.
-	legacyDataStart             = "<!-- NETEXPLORE_KANBAN_DATA_START -->\n```json\n"
-	legacyDataEnd               = "\n```\n<!-- NETEXPLORE_KANBAN_DATA_END -->"
+	// Boards are stored as plain YAML — one typed document per file that
+	// both the API (JSON) and the disk format (YAML) serialize from, so
+	// the file is hand-editable like any other note. Version 3 marks the
+	// YAML era.
+	boardFile = "board.yaml"
+	doneFile  = "done.yaml"
+
+	// Read-only compatibility with the earlier markdown-with-embedded-JSON
+	// files (this server's v2 and the predecessor's v1 markers). A legacy
+	// board migrates to YAML the first time it is opened or written, and
+	// the old files are removed.
+	legacyBoardFile = "board.md"
+	legacyDoneFile  = "done.md"
+	dataStart       = "<!-- AMYTHEST_KANBAN_DATA_START -->\n```json\n"
+	dataEnd         = "\n```\n<!-- AMYTHEST_KANBAN_DATA_END -->"
+	legacyDataStart = "<!-- NETEXPLORE_KANBAN_DATA_START -->\n```json\n"
+	legacyDataEnd   = "\n```\n<!-- NETEXPLORE_KANBAN_DATA_END -->"
+
 	MaxAttachmentsPerCard       = 10
 	MaxAttachmentSize     int64 = 10 << 20
 )
@@ -103,10 +116,12 @@ func (s *Store) CreateBoardWithInput(input BoardInput) (Board, error) {
 	name := created.Name
 	err = s.withLock(name, func() error {
 		for _, file := range []string{s.boardPath(name), s.donePath(name)} {
-			if _, err := os.Stat(file); err == nil {
-				return ErrBoardExists
-			} else if !errors.Is(err, os.ErrNotExist) {
+			exists, err := boardFileExists(file)
+			if err != nil {
 				return err
+			}
+			if exists {
+				return ErrBoardExists
 			}
 		}
 		now := s.now().UTC()
@@ -140,8 +155,8 @@ func (s *Store) BoardNames() []string {
 		if !entry.IsDir() || !validBoardName(entry.Name()) {
 			continue
 		}
-		if _, err := os.Stat(s.boardPath(entry.Name())); err != nil {
-			continue // a directory without board.md is not a board yet
+		if exists, err := boardFileExists(s.boardPath(entry.Name())); err != nil || !exists {
+			continue // a directory without a board file is not a board yet
 		}
 		out = append(out, entry.Name())
 	}
@@ -199,7 +214,59 @@ func (s *Store) Load(name string) (Board, error) {
 		loaded, err = readBoard(s.boardPath(name))
 		return err
 	})
+	if err == nil && s.hasLegacyFiles(name) {
+		// Opening a legacy board migrates it to YAML in place; the data
+		// just served is identical, so a migration failure only logs —
+		// the next open retries.
+		if migrateErr := s.migrateBoardFiles(name); migrateErr != nil {
+			slog.Warn("kanban: board migration to YAML failed", "board", name, "err", migrateErr)
+		}
+	}
 	return loaded, err
+}
+
+func (s *Store) hasLegacyFiles(name string) bool {
+	for _, path := range []string{s.boardPath(name), s.donePath(name)} {
+		if _, err := os.Stat(legacySibling(path)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// migrateBoardFiles converts a board's files to YAML under the board lock.
+// Concurrent opens serialize here; whoever loses just clears leftovers.
+func (s *Store) migrateBoardFiles(name string) error {
+	return s.withLock(name, func() error {
+		for _, target := range []struct {
+			path     string
+			doneOnly bool
+		}{
+			{s.boardPath(name), false},
+			{s.donePath(name), true},
+		} {
+			legacy := legacySibling(target.path)
+			if _, err := os.Stat(legacy); errors.Is(err, os.ErrNotExist) {
+				continue
+			} else if err != nil {
+				return err
+			}
+			if _, err := os.Stat(target.path); errors.Is(err, os.ErrNotExist) {
+				// readBoard falls back to the legacy file here.
+				value, err := readBoard(target.path)
+				if err != nil {
+					return err
+				}
+				if err := atomicWrite(target.path, renderBoard(value, target.doneOnly, s.now().UTC())); err != nil {
+					return err
+				}
+			} else if err != nil {
+				return err
+			}
+			removeLegacySibling(target.path)
+		}
+		return nil
+	})
 }
 
 func (s *Store) UpdateBoardSettings(name string, dispatchEnabled bool) (Board, error) {
@@ -314,6 +381,9 @@ func (s *Store) createCardOnExistingBoardResultUnlocked(name string, input CardI
 	}
 	value.Cards = append(value.Cards, created)
 	committed, err := s.writeResult(s.boardPath(name), renderBoard(value, false, s.now().UTC()))
+	if err == nil {
+		removeLegacySibling(s.boardPath(name))
+	}
 	return created, committed, err
 }
 
@@ -738,6 +808,9 @@ func (s *Store) deleteTaskMoveCardResultUnlocked(name string, expected Card) (Ca
 	}
 	value.Cards = append(value.Cards[:index], value.Cards[index+1:]...)
 	committed, err := s.writeResult(s.boardPath(name), renderBoard(value, false, s.now().UTC()))
+	if err == nil {
+		removeLegacySibling(s.boardPath(name))
+	}
 	return deleted, committed, err
 }
 
@@ -1175,12 +1248,14 @@ func (s *Store) applyCrossBoardMoveJournalUnlocked(journal crossBoardMoveJournal
 	if err := writer(s.crossBoardMoveDataPath(journal.Destination, journal.Kind), destinationImage); err != nil {
 		return err
 	}
+	removeLegacySibling(s.crossBoardMoveDataPath(journal.Destination, journal.Kind))
 	if checkpoints && s.moveCheckpoint != nil {
 		s.moveCheckpoint("destination_written")
 	}
 	if err := writer(s.crossBoardMoveDataPath(journal.Source, journal.Kind), sourceImage); err != nil {
 		return err
 	}
+	removeLegacySibling(s.crossBoardMoveDataPath(journal.Source, journal.Kind))
 	if checkpoints && s.moveCheckpoint != nil {
 		s.moveCheckpoint("source_written")
 	}
@@ -1579,25 +1654,70 @@ func (s *Store) ensureUnlocked(name string) error {
 		return err
 	}
 	now := s.now().UTC()
-	if _, err := os.Stat(s.boardPath(name)); errors.Is(err, os.ErrNotExist) {
+	if exists, err := boardFileExists(s.boardPath(name)); err != nil {
+		return err
+	} else if !exists {
 		if err := atomicWrite(s.boardPath(name), renderBoard(created, false, now)); err != nil {
 			return err
 		}
-	} else if err != nil {
-		return err
 	}
-	if _, err := os.Stat(s.donePath(name)); errors.Is(err, os.ErrNotExist) {
+	if exists, err := boardFileExists(s.donePath(name)); err != nil {
+		return err
+	} else if !exists {
 		return atomicWrite(s.donePath(name), renderBoard(created, true, now))
-	} else {
-		return err
 	}
+	return nil
 }
 
 func (s *Store) writeActive(name string, board Board) error {
-	return s.writeFile(s.boardPath(name), renderBoard(board, false, s.now().UTC()))
+	if err := s.writeFile(s.boardPath(name), renderBoard(board, false, s.now().UTC())); err != nil {
+		return err
+	}
+	removeLegacySibling(s.boardPath(name))
+	return nil
 }
-func (s *Store) boardPath(name string) string { return filepath.Join(s.root, name, "board.md") }
-func (s *Store) donePath(name string) string  { return filepath.Join(s.root, name, "done.md") }
+func (s *Store) boardPath(name string) string { return filepath.Join(s.root, name, boardFile) }
+func (s *Store) donePath(name string) string  { return filepath.Join(s.root, name, doneFile) }
+
+// legacySibling maps a YAML board path to its pre-migration markdown file.
+func legacySibling(path string) string {
+	switch filepath.Base(path) {
+	case boardFile:
+		return filepath.Join(filepath.Dir(path), legacyBoardFile)
+	case doneFile:
+		return filepath.Join(filepath.Dir(path), legacyDoneFile)
+	default:
+		return ""
+	}
+}
+
+// removeLegacySibling clears the stale markdown file after a successful
+// YAML write so a board never exists in both formats.
+func removeLegacySibling(path string) {
+	legacy := legacySibling(path)
+	if legacy == "" {
+		return
+	}
+	if err := os.Remove(legacy); err != nil && !errors.Is(err, os.ErrNotExist) {
+		slog.Warn("kanban: stale legacy board file not removed", "path", legacy, "err", err)
+	}
+}
+
+// boardFileExists reports the board file in either format — existence
+// checks must see legacy boards or they would be shadowed by fresh ones.
+func boardFileExists(path string) (bool, error) {
+	for _, candidate := range []string{path, legacySibling(path)} {
+		if candidate == "" {
+			continue
+		}
+		if _, err := os.Stat(candidate); err == nil {
+			return true, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+	}
+	return false, nil
+}
 func (s *Store) journalPath(name string) string {
 	return filepath.Join(s.root, name, ".done-archive.wal")
 }
@@ -1651,17 +1771,38 @@ func (s *Store) applyArchiveJournalUnlocked(name string, journal archiveJournal)
 	if err := atomicWrite(s.boardPath(name), journal.BoardImage); err != nil {
 		return err
 	}
+	removeLegacySibling(s.donePath(name))
+	removeLegacySibling(s.boardPath(name))
 	if err := os.Remove(s.journalPath(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return syncDir(filepath.Dir(s.journalPath(name)))
 }
 
+// readBoard loads a board file. It reads the YAML path, falling back to
+// the not-yet-migrated legacy markdown sibling, and sniffs the content
+// rather than trusting the extension (a crash-recovery journal can restore
+// pre-migration bytes into the YAML path).
 func readBoard(path string) (Board, error) {
 	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if legacy := legacySibling(path); legacy != "" {
+			if legacyData, legacyErr := os.ReadFile(legacy); legacyErr == nil {
+				data, err = legacyData, nil
+			}
+		}
+	}
 	if err != nil {
 		return Board{}, err
 	}
+	board, err := parseBoard(data, path)
+	if err != nil {
+		return Board{}, err
+	}
+	return normalizeBoard(board, path)
+}
+
+func parseBoard(data []byte, path string) (Board, error) {
 	text := string(data)
 	startMarker, endMarker := dataStart, dataEnd
 	start := strings.Index(text, startMarker)
@@ -1670,7 +1811,12 @@ func readBoard(path string) (Board, error) {
 		start = strings.Index(text, startMarker)
 	}
 	if start < 0 {
-		return Board{}, fmt.Errorf("%s is missing Kanban data", path)
+		// No embedded-JSON markers: this is the YAML format.
+		var board Board
+		if err := yaml.Unmarshal(data, &board); err != nil {
+			return Board{}, fmt.Errorf("parse %s: %w", path, err)
+		}
+		return board, nil
 	}
 	start += len(startMarker)
 	end := strings.Index(text[start:], endMarker)
@@ -1681,23 +1827,40 @@ func readBoard(path string) (Board, error) {
 	if err := json.Unmarshal([]byte(text[start:start+end]), &board); err != nil {
 		return Board{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	legacy := board.Version == 1
-	if (!legacy && board.Version != 2) || !validBoardName(board.Name) {
+	return board, nil
+}
+
+// normalizeBoard validates and back-fills a parsed board, whatever its
+// source format or age.
+func normalizeBoard(board Board, path string) (Board, error) {
+	if board.Version < 1 || board.Version > 3 || !validBoardName(board.Name) {
 		return Board{}, fmt.Errorf("unsupported or invalid board data in %s", path)
 	}
 	if board.DisplayName == "" {
 		board.DisplayName = displayName(board.Name)
 	}
-	if legacy {
-		board.Pinned = true
+	if board.Version == 1 {
+		board.Pinned = true // predecessor server had no pinning; keep all visible
 	}
-	board.Version = 2
+	board.Version = 3
 	if board.Cards == nil {
 		board.Cards = []Card{}
 	}
 	for i := range board.Cards {
-		if board.Cards[i].Priority == "" {
-			board.Cards[i].Priority = P2
+		card := &board.Cards[i]
+		if card.Priority == "" {
+			card.Priority = P2
+		}
+		// The YAML format omits empty collections for hand-editability;
+		// the wire contract promises arrays, never null.
+		if card.Labels == nil {
+			card.Labels = []string{}
+		}
+		if card.Comments == nil {
+			card.Comments = []Comment{}
+		}
+		if card.Attachments == nil {
+			card.Attachments = []Attachment{}
 		}
 	}
 	if err := validateBoardMetadata(board); err != nil {
@@ -1706,86 +1869,22 @@ func readBoard(path string) (Board, error) {
 	return board, nil
 }
 
-func renderBoard(board Board, doneOnly bool, updated time.Time) []byte {
-	board.Version = 2
-	payload, _ := json.MarshalIndent(board, "", "  ")
-	title := board.DisplayName
-	if title == "" {
-		title = displayName(board.Name)
+// renderBoard serializes a board as its on-disk YAML document. The same
+// typed struct backs the JSON wire format, so what you edit by hand is
+// exactly what the API serves. The updated timestamp is no longer written
+// (card timestamps carry that information), keeping writes idempotent.
+func renderBoard(board Board, doneOnly bool, _ time.Time) []byte {
+	board.Version = 3
+	if board.DisplayName == "" {
+		board.DisplayName = displayName(board.Name)
 	}
-	kind := "board"
-	heading := title + " Kanban"
+	kind := "active board"
 	if doneOnly {
-		kind = "archive"
-		heading = title + " Kanban — Done"
+		kind = "done archive"
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "---\ntype: project\ncreated: 2026-07-24\nupdated: %s\ndispatch: %t\ntags: [kanban, %s, %s]\n---\n\n# %s\n\n", updated.Format("2006-01-02"), board.DispatchEnabled, board.Name, kind, heading)
-	if doneOnly {
-		b.WriteString("> Completed cards are removed from the active board and preserved here.\n\n")
-	} else {
-		b.WriteString("> Managed by Netexplore Kanban. The structured data and readable board live together in this note.\n\n")
-	}
-	if description := cleanMarkdownText(board.Description); description != "" {
-		fmt.Fprintf(&b, "> %s\n\n", strings.ReplaceAll(description, "\n", "\n> "))
-	}
-	b.WriteString("## Kanban data\n\n" + dataStart + string(payload) + dataEnd + "\n\n")
-	statuses := ActiveStatuses
-	if doneOnly {
-		statuses = []Status{Done}
-	}
-	for _, status := range statuses {
-		fmt.Fprintf(&b, "## %s\n\n", statusLabel(status))
-		found := false
-		for _, card := range board.Cards {
-			if card.Status != status {
-				continue
-			}
-			found = true
-			fmt.Fprintf(&b, "### %s ^card-%s\n\n- **ID:** `%s`\n", strings.TrimSpace(card.Title), card.ID, card.ID)
-			if card.Assignee != "" {
-				fmt.Fprintf(&b, "- **Assignee:** %s\n", card.Assignee)
-			}
-			if card.Agent != "" {
-				fmt.Fprintf(&b, "- **Agent:** %s\n", card.Agent)
-			}
-			if card.Blocked {
-				b.WriteString("- **Blocked:** yes\n")
-			}
-			if card.DueDate != "" {
-				fmt.Fprintf(&b, "- **Due:** %s\n", card.DueDate)
-			}
-			if card.Milestone != "" {
-				fmt.Fprintf(&b, "- **Milestone:** %s\n", card.Milestone)
-			}
-			fmt.Fprintf(&b, "- **Priority:** %s\n", strings.ToUpper(string(card.Priority)))
-			if len(card.Labels) > 0 {
-				b.WriteString("- **Labels:**")
-				for _, label := range card.Labels {
-					fmt.Fprintf(&b, " `%s`", label)
-				}
-				b.WriteString("\n")
-			}
-			fmt.Fprintf(&b, "- **Updated:** %s\n", card.UpdatedAt.Format(time.RFC3339))
-			if card.DoneAt != nil {
-				fmt.Fprintf(&b, "- **Done:** %s\n", card.DoneAt.Format(time.RFC3339))
-			}
-			if description := cleanMarkdownText(card.Description); description != "" {
-				fmt.Fprintf(&b, "\n%s\n", description)
-			}
-			if len(card.Comments) > 0 {
-				b.WriteString("\n#### Comments\n\n")
-				for _, comment := range card.Comments {
-					fmt.Fprintf(&b, "- **%s — %s:** %s\n", comment.CreatedAt.Format("2006-01-02 15:04Z"), comment.Author, cleanMarkdownText(strings.ReplaceAll(comment.Body, "\n", " ")))
-				}
-			}
-			b.WriteString("\n")
-		}
-		if !found {
-			b.WriteString("_No cards._\n\n")
-		}
-	}
-	return []byte(strings.TrimRight(b.String(), " 	\n") + "\n")
+	payload, _ := yaml.Marshal(board)
+	header := fmt.Sprintf("# %s — amythest kanban %s.\n# Plain YAML, hand-editable; the UI and API read and rewrite this file.\n", board.DisplayName, kind)
+	return append([]byte(header), payload...)
 }
 
 func cleanMarkdownText(value string) string {
@@ -1855,7 +1954,7 @@ func boardFromInput(input BoardInput) (Board, error) {
 		pinned = *input.Pinned
 	}
 	value := Board{
-		Version: 2, Name: name, DisplayName: strings.TrimSpace(input.DisplayName),
+		Version: 3, Name: name, DisplayName: strings.TrimSpace(input.DisplayName),
 		Description: strings.TrimSpace(input.Description), Icon: strings.TrimSpace(input.Icon),
 		Color: strings.TrimSpace(input.Color), SortOrder: input.SortOrder, Pinned: pinned,
 		Cards: []Card{},
@@ -2043,4 +2142,24 @@ func statusLabel(status Status) string {
 	default:
 		return string(status)
 	}
+}
+
+// DryRunConvert parses a board file in whatever format it is in, renders
+// the YAML representation, and re-parses that — returning both images so
+// migration tooling can verify equivalence without writing anything.
+func DryRunConvert(path string) (original, roundTrip Board, err error) {
+	original, err = readBoard(path)
+	if err != nil {
+		return Board{}, Board{}, err
+	}
+	rendered := renderBoard(original, false, time.Time{})
+	parsed, err := parseBoard(rendered, path)
+	if err != nil {
+		return Board{}, Board{}, err
+	}
+	roundTrip, err = normalizeBoard(parsed, path)
+	if err != nil {
+		return Board{}, Board{}, err
+	}
+	return original, roundTrip, nil
 }

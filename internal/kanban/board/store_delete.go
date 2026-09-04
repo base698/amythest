@@ -40,7 +40,7 @@ func (s *Store) DeleteBoard(name string) error {
 				return fmt.Errorf("board contains unexpected symlink %q", entry.Name())
 			}
 			switch entry.Name() {
-			case "board.md", "done.md", ".lock":
+			case boardFile, doneFile, legacyBoardFile, legacyDoneFile, ".lock":
 				if entry.IsDir() {
 					return fmt.Errorf("board contains unexpected directory %q", entry.Name())
 				}
