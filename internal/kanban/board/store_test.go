@@ -24,15 +24,15 @@ func TestCreateBoardCreatesNoteBackedBoardAndRejectsDuplicateOrInvalidNames(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Name != "new-project" || created.Version != 2 || !created.Pinned || created.DispatchEnabled || len(created.Cards) != 0 {
+	if created.Name != "new-project" || created.Version != 3 || !created.Pinned || created.DispatchEnabled || len(created.Cards) != 0 {
 		t.Fatalf("created board = %#v", created)
 	}
-	for _, name := range []string{"board.md", "done.md"} {
+	for _, name := range []string{"board.yaml", "done.yaml"} {
 		payload, err := os.ReadFile(filepath.Join(root, "new-project", name))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(payload), "dispatch: false") || !strings.Contains(string(payload), `"name": "new-project"`) {
+		if !strings.Contains(string(payload), "version: 3") || !strings.Contains(string(payload), "name: new-project") {
 			t.Fatalf("%s does not follow board note conventions:\n%s", name, payload)
 		}
 	}
@@ -173,11 +173,11 @@ func TestRenderBoardExposesStableCardIDBlockLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := os.ReadFile(filepath.Join(root, "project", "board.md"))
+	content, err := os.ReadFile(filepath.Join(root, "project", "board.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(content), "^card-"+card.ID) {
+	if !strings.Contains(string(content), "id: "+card.ID) {
 		t.Fatalf("board note lacks stable block ID for card %q:\n%s", card.ID, content)
 	}
 }
@@ -207,11 +207,11 @@ func TestCardDueDatePersistsInStructuredAndReadableBoardAndCanBeCleared(t *testi
 	if got := loaded.Cards[0].DueDate; got != "2026-08-04" {
 		t.Fatalf("loaded due date = %q", got)
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "personal", "board.md"))
+	raw, err := os.ReadFile(filepath.Join(root, "personal", "board.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "- **Due:** 2026-08-04") {
+	if !strings.Contains(string(raw), `dueDate: "2026-08-04"`) {
 		t.Fatalf("readable board missing due date:\n%s", raw)
 	}
 
@@ -243,11 +243,11 @@ func TestCardMilestonePersistsInStructuredAndReadableBoardAndCanBeCleared(t *tes
 	if card.Milestone != "1.2" {
 		t.Fatalf("created milestone = %q", card.Milestone)
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "project", "board.md"))
+	raw, err := os.ReadFile(filepath.Join(root, "project", "board.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "- **Milestone:** 1.2") {
+	if !strings.Contains(string(raw), `milestone: "1.2"`) {
 		t.Fatalf("readable board missing milestone:\n%s", raw)
 	}
 	cleared := ""
@@ -295,11 +295,11 @@ func TestDispatchSettingDefaultsFalseAndSurvivesCardAndArchiveWrites(t *testing.
 	if !value.DispatchEnabled {
 		t.Fatal("card/archive write lost dispatch setting")
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "proof", "board.md"))
+	raw, err := os.ReadFile(filepath.Join(root, "proof", "board.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "dispatch: true") {
+	if !strings.Contains(string(raw), "dispatchEnabled: true") {
 		t.Fatal("readable frontmatter missing dispatch setting")
 	}
 }
@@ -330,12 +330,12 @@ func TestStoreCreatesReadableBoardAndArchivesDoneCard(t *testing.T) {
 		t.Fatalf("active cards = %#v", active.Cards)
 	}
 
-	boardMD, err := os.ReadFile(filepath.Join(root, "proof", "board.md"))
+	boardMD, err := os.ReadFile(filepath.Join(root, "proof", "board.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(boardMD)
-	for _, want := range []string{"# Proof Kanban", "## Ready", "Deploy Proof production with login", "`proof`", "**Assignee:** Operator"} {
+	for _, want := range []string{"name: proof", "status: ready", "Deploy Proof production with login", "assignee: Operator"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("board.md missing %q", want)
 		}
@@ -357,7 +357,7 @@ func TestStoreCreatesReadableBoardAndArchivesDoneCard(t *testing.T) {
 		t.Fatalf("done card remained active: %#v", active.Cards)
 	}
 
-	doneMD, err := os.ReadFile(filepath.Join(root, "proof", "done.md"))
+	doneMD, err := os.ReadFile(filepath.Join(root, "proof", "done.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,12 +403,12 @@ func TestMoveCardInsertsBeforeCardAndPersistsOrder(t *testing.T) {
 	if got := []string{loaded.Cards[0].ID, loaded.Cards[1].ID, loaded.Cards[2].ID}; got[0] != first.ID || got[1] != third.ID || got[2] != second.ID {
 		t.Fatalf("persisted order = %#v", got)
 	}
-	payload, err := os.ReadFile(filepath.Join(root, "operations", "board.md"))
+	payload, err := os.ReadFile(filepath.Join(root, "operations", "board.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(payload)
-	if !(strings.Index(text, "### First") < strings.Index(text, "### Third") && strings.Index(text, "### Third") < strings.Index(text, "### Second")) {
+	if !(strings.Index(text, "title: First") < strings.Index(text, "title: Third") && strings.Index(text, "title: Third") < strings.Index(text, "title: Second")) {
 		t.Fatalf("readable board did not preserve order:\n%s", text)
 	}
 }
@@ -809,7 +809,7 @@ func TestDeleteCardRemovesOnlyRequestedActiveCard(t *testing.T) {
 	if _, err := store.DeleteCard("operations", remove.ID); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("second delete error = %v, want os.ErrNotExist", err)
 	}
-	payload, err := os.ReadFile(filepath.Join(store.root, "operations", "board.md"))
+	payload, err := os.ReadFile(filepath.Join(store.root, "operations", "board.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1033,11 +1033,11 @@ func TestBlockedFlagPersistsAndClearsThroughTheStore(t *testing.T) {
 		t.Fatal("blocked did not survive a reload")
 	}
 	// The human-readable half of the note should say so too.
-	raw, err := os.ReadFile(filepath.Join(root, "proof", "board.md"))
+	raw, err := os.ReadFile(filepath.Join(root, "proof", "board.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "**Blocked:** yes") {
+	if !strings.Contains(string(raw), "blocked: true") {
 		t.Fatalf("board.md does not record the blocked flag:\n%s", raw)
 	}
 
@@ -1062,12 +1062,12 @@ func TestBlockedFlagPersistsAndClearsThroughTheStore(t *testing.T) {
 	if !after.Blocked {
 		t.Fatal("an unrelated patch cleared the blocked flag")
 	}
-	raw, err = os.ReadFile(filepath.Join(root, "proof", "board.md"))
+	raw, err = os.ReadFile(filepath.Join(root, "proof", "board.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(string(raw), "**Blocked:** yes") != 1 {
-		t.Fatalf("blocked flag rendered %d times", strings.Count(string(raw), "**Blocked:** yes"))
+	if strings.Count(string(raw), "blocked: true") != 1 {
+		t.Fatalf("blocked flag rendered %d times", strings.Count(string(raw), "blocked: true"))
 	}
 }
 
@@ -1126,7 +1126,7 @@ func TestBoardMetadataCanBeCreatedAndPatchedWithoutErasingOmittedFields(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Version != 2 || created.DisplayName != "Research Lab" || !created.Pinned || created.DispatchEnabled {
+	if created.Version != 3 || created.DisplayName != "Research Lab" || !created.Pinned || created.DispatchEnabled {
 		t.Fatalf("created board = %#v", created)
 	}
 	nextName := "Research"
@@ -1139,11 +1139,11 @@ func TestBoardMetadataCanBeCreatedAndPatchedWithoutErasingOmittedFields(t *testi
 	if updated.DisplayName != "Research" || updated.Description != created.Description || updated.Icon != created.Icon || updated.Color != created.Color || updated.SortOrder != 30 || !updated.Pinned || !updated.Archived || updated.DispatchEnabled || updated.FocusCardID != "" {
 		t.Fatalf("patched board erased metadata: %#v", updated)
 	}
-	raw, err := os.ReadFile(filepath.Join(store.root, "research", "board.md"))
+	raw, err := os.ReadFile(filepath.Join(store.root, "research", "board.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "# Research Kanban") || !strings.Contains(string(raw), "> Experiments and evidence") {
+	if !strings.Contains(string(raw), "displayName: Research") || !strings.Contains(string(raw), "Experiments and evidence") {
 		t.Fatalf("board metadata is not human readable:\n%s", raw)
 	}
 }
@@ -1168,11 +1168,11 @@ func TestCardPriorityDefaultsValidatesPersistsAndRenders(t *testing.T) {
 	if _, err := store.CreateCard("research", CardInput{Title: "Bad", Status: Ready, Priority: Priority("urgent")}); err == nil {
 		t.Fatal("invalid priority was accepted")
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "research", "board.md"))
+	raw, err := os.ReadFile(filepath.Join(root, "research", "board.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "- **Priority:** P0") || !strings.Contains(string(raw), `"priority": "p0"`) {
+	if !strings.Contains(string(raw), "priority: p0") {
 		t.Fatalf("priority missing from board:\n%s", raw)
 	}
 }
