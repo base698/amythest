@@ -44,7 +44,9 @@ type Config struct {
 	// Themes are custom web palettes offered in the UI's theme picker next
 	// to the built-in "default" and "omarchy". Keys are CSS token names
 	// (bg, bg-alt, fg, fg-muted, fg-faint, accent, accent-soft, border,
-	// highlight, mark); a theme may define light, dark, or both.
+	// highlight, mark, font-body, font-mono); a theme may define light,
+	// dark, or both. Font tokens take a CSS font stack, e.g.
+	// `font-body: '"Fira Code", monospace'`.
 	Themes map[string]WebTheme `yaml:"themes"`
 
 	// --- service hardening (all opt-in; defaults preserve prior behavior) ---
