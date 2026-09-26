@@ -1,0 +1,44 @@
+id = "amythest"
+name = "amythest"
+version = "0.1.0"
+description = "Your vault's tasks and kanban boards, inside herdr."
+min_herdr_version = "0.8.0"
+platforms = ["linux", "macos"]
+
+# amy talks to a running amythest server over HTTP, so there is nothing to
+# compile on the plugin side beyond the client itself. `plugin link` skips
+# builds entirely, which is how this is developed.
+[[build]]
+platforms = ["linux", "macos"]
+command = ["go", "build", "-o", "bin/amy", "./cmd/amy"]
+
+# The board: the full amy TUI in a split beside your work.
+[[panes]]
+id = "board"
+title = "amy"
+placement = "split"
+command = ["./scripts/amy.sh"]
+
+# Quick capture: a modal popup that takes one line and files it in today's
+# daily note. Closes itself on save.
+[[panes]]
+id = "capture"
+title = "amy capture"
+placement = "popup"
+width = "70%"
+height = 9
+command = ["./scripts/amy.sh", "capture"]
+
+[[actions]]
+id = "open-board"
+title = "Open amy board"
+description = "Open the amy board in a split beside the current work, or focus it if already open."
+contexts = ["workspace"]
+command = ["bash", "scripts/open-board.sh"]
+
+[[actions]]
+id = "quick-capture"
+title = "Quick capture"
+description = "Capture a task into today's daily note without leaving what you are doing."
+contexts = ["workspace"]
+command = ["bash", "scripts/quick-capture.sh"]
