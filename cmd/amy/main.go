@@ -25,9 +25,18 @@ import (
 
 func main() {
 	args := os.Args[1:]
-	if len(args) > 0 && args[0] == "source" {
-		runSource(args[1:])
-		return
+	if len(args) > 0 {
+		switch args[0] {
+		case "source":
+			runSource(args[1:])
+			return
+		case "capture":
+			runCapture(args[1:])
+			return
+		case "herdr":
+			runHerdr(args[1:])
+			return
+		}
 	}
 	check := false
 	filtered := args[:0]
