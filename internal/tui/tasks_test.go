@@ -120,3 +120,42 @@ func TestFindTaskPrefersRequestedStatusAmongIdenticalCopies(t *testing.T) {
 		t.Fatal("cancelled match should not exist")
 	}
 }
+
+func TestTasksViewHideAsksBeforeHidingTheFile(t *testing.T) {
+	v := newTasksView(nil)
+	v.rows = []taskRow{{task: &tasks.Task{
+		Slug: "Watchlists/Movies", Path: "Watchlists/Movies.md",
+		Text: "Dune Part Three", Status: tasks.StatusOpen,
+		Line: 4, Version: strings.Repeat("b", 64),
+	}}}
+	v.Update(keyMsg("H"))
+	if !v.hide.active || !v.Capturing() {
+		t.Fatalf("H should open a confirm and capture keys (active=%v)", v.hide.active)
+	}
+	if v.hideAt.Slug != "Watchlists/Movies" {
+		t.Fatalf("hideAt = %+v", v.hideAt)
+	}
+	bar := v.hide.bar()
+	if !strings.Contains(bar, "Watchlists/Movies.md") || !strings.Contains(bar, "tasks: false") {
+		t.Fatalf("confirm should name the file and the change: %q", bar)
+	}
+	// The confirm is its own prompt: answering it must not fire a delete.
+	if v.del.active {
+		t.Fatal("H opened the delete confirm")
+	}
+}
+
+func TestTasksViewHideRefusesBoardCards(t *testing.T) {
+	v := newTasksView(nil)
+	v.rows = []taskRow{{task: &tasks.Task{
+		Slug: "kanban/proof/board", Path: "kanban/proof/board.md",
+		Text: "a card", Status: tasks.StatusOpen,
+	}}}
+	_, cmd := v.Update(keyMsg("H"))
+	if v.hide.active {
+		t.Fatal("board cards should not be hideable this way")
+	}
+	if msg, ok := cmd().(flashMsg); !ok || !strings.Contains(msg.text, "board view") {
+		t.Fatalf("flash = %#v", cmd())
+	}
+}

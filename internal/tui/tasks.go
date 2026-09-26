@@ -38,6 +38,8 @@ type tasksView struct {
 	prompt duePrompt
 	del    confirm
 	target tasks.Task // task the delete prompt refers to
+	hide   confirm    // "stop collecting tasks from this file"
+	hideAt tasks.Task // task whose file the hide prompt refers to
 	now    func() time.Time
 }
 
@@ -48,7 +50,7 @@ func newTasksView(client *apiclient.Client) *tasksView {
 func (v *tasksView) Title() string { return "tasks (" + taskPresets[v.preset] + ")" }
 func (v *tasksView) Busy() bool    { return v.busy }
 func (v *tasksView) Capturing() bool {
-	return v.find.active() || v.prompt.active() || v.del.active
+	return v.find.active() || v.prompt.active() || v.del.active || v.hide.active
 }
 
 func (v *tasksView) Init() tea.Cmd {
@@ -177,6 +179,10 @@ func (v *tasksView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.busy = true
 		return v, v.loadCmd()
 
+	case fileHiddenMsg:
+		v.busy = true
+		return v, v.loadCmd()
+
 	case taskCancelledMsg:
 		v.busy = false
 		for _, row := range v.rows {
@@ -195,6 +201,13 @@ func (v *tasksView) Update(msg tea.Msg) (view, tea.Cmd) {
 			if v.del.handleKey(msg) {
 				v.busy = true
 				return v, deleteTaskCmd(v.client, v.target)
+			}
+			return v, nil
+		}
+		if v.hide.active {
+			if v.hide.handleKey(msg) {
+				v.busy = true
+				return v, hideFileCmd(v.client, v.hideAt)
 			}
 			return v, nil
 		}
@@ -256,6 +269,17 @@ func (v *tasksView) Update(msg tea.Msg) (view, tea.Cmd) {
 			} else {
 				v.del.open(fmt.Sprintf("cancel task %q? (D again on it deletes permanently)", t.Text))
 			}
+			return v, nil
+		case "H":
+			t := v.current()
+			if t == nil {
+				return v, nil
+			}
+			if strings.HasPrefix(t.Path, "kanban/") {
+				return v, flash("board cards are managed from the board view (3)")
+			}
+			v.hideAt = *t
+			v.hide.open(fmt.Sprintf("stop collecting tasks from %q? (adds tasks: false; the note stays readable)", t.Path))
 			return v, nil
 		case "p":
 			v.preset = (v.preset + 1) % len(taskPresets)
@@ -356,7 +380,7 @@ func (v *tasksView) View(width, height int) string {
 	if v.prompt.active() {
 		reserved++
 	}
-	if v.del.active {
+	if v.del.active || v.hide.active {
 		reserved++
 	}
 	avail := max(3, height-1-reserved)
@@ -384,6 +408,9 @@ func (v *tasksView) View(width, height int) string {
 	}
 	if v.del.active {
 		b.WriteString(v.del.bar() + "\n")
+	}
+	if v.hide.active {
+		b.WriteString(v.hide.bar() + "\n")
 	}
 	return b.String()
 }

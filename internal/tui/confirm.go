@@ -36,7 +36,21 @@ type (
 	taskCancelledMsg struct{ slug, text string }
 	taskPurgedMsg    struct{ slug, text string }
 	cardDeletedMsg   struct{ board, cardID, title string }
+	// fileHiddenMsg announces that a note stopped contributing tasks.
+	fileHiddenMsg struct{ slug, path string }
 )
+
+// hideFileCmd sets `tasks: false` on the note a task came from, so a
+// checklist that is not a queue of work (a watchlist, a packing list)
+// stops filling the task views. The note itself is untouched otherwise.
+func hideFileCmd(client *apiclient.Client, t tasks.Task) tea.Cmd {
+	return func() tea.Msg {
+		if err := client.HideFileFromTasks(context.Background(), t.Slug, t.Version); err != nil {
+			return fail(err)
+		}
+		return fileHiddenMsg{slug: t.Slug, path: t.Path}
+	}
+}
 
 // deleteTaskCmd cancels an open/done task, or permanently purges an
 // already-cancelled one. Stale versions retry once by (slug, text), matching
