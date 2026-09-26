@@ -11,6 +11,7 @@ import (
 
 	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/herdr"
+	"github.com/base698/amythest/internal/tasks"
 )
 
 var wikilinkRe = regexp.MustCompile(`\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]`)
@@ -26,6 +27,9 @@ type noteEditorDoneMsg struct {
 }
 
 type noteSavedMsg struct{ note *apiclient.Note }
+
+// noteReloadedMsg re-reads a note after something else rewrote it.
+type noteReloadedMsg struct{ note *apiclient.Note }
 
 // taskBlock is a ```tasks fenced query in the note, rendered as live
 // results instead of raw query text — the dataview experience the web UI
@@ -70,6 +74,7 @@ func parseTaskBlocks(lines []string) []taskBlock {
 	}
 	return blocks
 }
+
 type noteView struct {
 	client *apiclient.Client
 	note   *apiclient.Note
@@ -81,12 +86,32 @@ type noteView struct {
 	find   finder
 	agents agentPicker
 
-	tags      []string // from the content index, shown in the header
-	blOpen    bool     // backlinks panel
-	blLinks   []string
-	blCursor  int
+	tags     []string // from the content index, shown in the header
+	blOpen   bool     // backlinks panel
+	blLinks  []string
+	blCursor int
 
 	blocks []taskBlock // live-rendered ```tasks queries
+
+	// Checkbox lines in the note body are actionable, not just text: t
+	// grabs them, j/k walk them, space toggles, D cancels then deletes. The
+	// tasks are parsed from the note's own markdown, so their Line/Text
+	// match exactly what the server's mutation guards compare against;
+	// Version is the note's whole-file hash, which is the same lock.
+	tasks     []tasks.Task
+	taskAt    int // focused task index, -1 = none
+	del       confirm
+	delTarget tasks.Task
+}
+
+// noteTasks parses a note's checkbox lines, stamped with the note's
+// whole-file version so a mutation carries the right optimistic lock.
+func noteTasks(note *apiclient.Note) []tasks.Task {
+	parsed, _, _ := tasks.ParseFile(note.Slug, note.Path, []byte(note.Markdown))
+	for i := range parsed {
+		parsed[i].Version = note.Version
+	}
+	return parsed
 }
 
 type noteMetaMsg struct {
@@ -107,8 +132,18 @@ type noteAgentsMsg struct {
 }
 
 func newNoteView(client *apiclient.Client, note *apiclient.Note) *noteView {
-	v := &noteView{client: client, note: note, linkAt: -1, find: newFinder()}
+	v := &noteView{client: client, find: newFinder()}
+	v.rebuild(note)
+	return v
+}
+
+// rebuild re-derives everything the view reads from the note's markdown.
+// Used on open and after any write, so a mutation can never leave stale
+// line numbers or a stale version lock behind.
+func (v *noteView) rebuild(note *apiclient.Note) {
+	v.note = note
 	v.lines = strings.Split(strings.TrimRight(note.Markdown, "\n"), "\n")
+	v.links = nil
 	for i, line := range v.lines {
 		for _, m := range wikilinkRe.FindAllStringSubmatch(line, -1) {
 			label := m[1]
@@ -118,13 +153,62 @@ func newNoteView(client *apiclient.Client, note *apiclient.Note) *noteView {
 			v.links = append(v.links, noteLink{target: strings.TrimSpace(m[1]), label: label, line: i})
 		}
 	}
+	v.linkAt = -1
 	v.blocks = parseTaskBlocks(v.lines)
-	return v
+	v.tasks = noteTasks(note)
+	v.taskAt = -1
 }
 
 func (v *noteView) Title() string   { return v.note.Title }
 func (v *noteView) Busy() bool      { return v.busy }
-func (v *noteView) Capturing() bool { return v.find.active() || v.agents.active }
+func (v *noteView) Capturing() bool { return v.find.active() || v.agents.active || v.del.active }
+
+// focusedTask is the task the cursor is on, or nil when none is focused.
+func (v *noteView) focusedTask() *tasks.Task {
+	if v.taskAt < 0 || v.taskAt >= len(v.tasks) {
+		return nil
+	}
+	return &v.tasks[v.taskAt]
+}
+
+// firstTaskFrom picks the task to grab when t is pressed: the first one
+// at or below what is currently on screen, so focus lands where you are
+// reading rather than jumping to the top of a long daily note.
+func (v *noteView) firstTaskFrom(offset int) int {
+	for i, t := range v.tasks {
+		if t.Line-1 >= offset {
+			return i
+		}
+	}
+	return 0
+}
+
+// scrollToTask brings the focused task into view; task lines are 1-based.
+// The view has no height here, so it only guarantees the task is at or
+// after the top of the body — the render clamps the rest.
+func (v *noteView) scrollToTask() {
+	t := v.focusedTask()
+	if t == nil {
+		return
+	}
+	if line := t.Line - 1; line < v.offset {
+		v.offset = max(0, line-2)
+	}
+}
+
+// reloadCmd re-reads the note after a write so line numbers and the
+// version lock match the file again.
+func (v *noteView) reloadCmd() tea.Cmd {
+	client, slug := v.client, v.note.Slug
+	v.busy = true
+	return func() tea.Msg {
+		note, err := client.GetNote(context.Background(), slug)
+		if err != nil {
+			return fail(err)
+		}
+		return noteReloadedMsg{note: note}
+	}
+}
 
 // Init fetches tags + backlinks from the cached content index — cheap, and
 // the panel/header appear as soon as it lands.
@@ -216,21 +300,36 @@ func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
 			return v, nil
 		}
 		v.busy = false
-		v.note = msg.note
-		v.lines = strings.Split(strings.TrimRight(msg.note.Markdown, "\n"), "\n")
-		v.links = v.links[:0]
-		for i, line := range v.lines {
-			for _, m := range wikilinkRe.FindAllStringSubmatch(line, -1) {
-				label := m[1]
-				if m[2] != "" {
-					label = m[2]
-				}
-				v.links = append(v.links, noteLink{target: strings.TrimSpace(m[1]), label: label, line: i})
-			}
-		}
-		v.linkAt = -1
-		v.blocks = parseTaskBlocks(v.lines)
+		v.rebuild(msg.note)
 		return v, tea.Batch(v.Init(), flash("note saved ✓"))
+
+	case noteReloadedMsg:
+		if msg.note.Slug != v.note.Slug {
+			return v, nil
+		}
+		v.busy = false
+		v.rebuild(msg.note)
+		return v, v.Init()
+
+	// A task mutation rewrote the file: our line numbers and version lock
+	// are now stale, so re-read rather than patch in place.
+	case taskToggledMsg:
+		if msg.slug != v.note.Slug {
+			return v, nil
+		}
+		return v, v.reloadCmd()
+
+	case taskCancelledMsg:
+		if msg.slug != v.note.Slug {
+			return v, nil
+		}
+		return v, v.reloadCmd()
+
+	case taskPurgedMsg:
+		if msg.slug != v.note.Slug {
+			return v, nil
+		}
+		return v, v.reloadCmd()
 
 	case noteAgentsMsg:
 		if msg.slug != v.note.Slug {
@@ -252,6 +351,13 @@ func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
 		return v, nil
 
 	case tea.KeyMsg:
+		if v.del.active {
+			if v.del.handleKey(msg) {
+				v.busy = true
+				return v, deleteTaskCmd(v.client, v.delTarget)
+			}
+			return v, nil
+		}
 		if v.find.active() {
 			committed, cmd := v.find.handleKey(msg)
 			if committed {
@@ -297,13 +403,68 @@ func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
 			v.blOpen = true
 			v.blCursor = 0
 			return v, nil
+		case "t":
+			if len(v.tasks) == 0 {
+				return v, flash("no tasks in this note")
+			}
+			if v.taskAt >= 0 {
+				v.taskAt = -1 // t again releases the tasks, j/k scroll as usual
+				return v, nil
+			}
+			v.taskAt = v.firstTaskFrom(v.offset)
+			v.scrollToTask()
+			return v, nil
+		case " ":
+			t := v.focusedTask()
+			if t == nil {
+				return v, flash("press t to grab this note's tasks, then space toggles")
+			}
+			if v.busy {
+				return v, nil
+			}
+			switch t.Status {
+			case tasks.StatusOpen:
+				v.busy = true
+				return v, toggleTaskCmd(v.client, *t, true)
+			case tasks.StatusDone:
+				v.busy = true
+				return v, toggleTaskCmd(v.client, *t, false)
+			default:
+				return v, flash("only open/done tasks can be toggled")
+			}
+		case "D":
+			t := v.focusedTask()
+			if t == nil {
+				return v, flash("press t to grab this note's tasks, then D deletes")
+			}
+			v.delTarget = *t
+			if t.Status == tasks.StatusCancelled {
+				v.del.open(fmt.Sprintf("permanently delete cancelled task %q?", t.Text))
+			} else {
+				v.del.open(fmt.Sprintf("cancel task %q? (D again on it deletes permanently)", t.Text))
+			}
+			return v, nil
 		}
 		switch msg.String() {
 		case "j", "down":
+			if v.taskAt >= 0 {
+				if v.taskAt < len(v.tasks)-1 {
+					v.taskAt++
+					v.scrollToTask()
+				}
+				return v, nil
+			}
 			if v.offset < len(v.lines)-1 {
 				v.offset++
 			}
 		case "k", "up":
+			if v.taskAt >= 0 {
+				if v.taskAt > 0 {
+					v.taskAt--
+					v.scrollToTask()
+				}
+				return v, nil
+			}
 			if v.offset > 0 {
 				v.offset--
 			}
@@ -425,6 +586,9 @@ func (v *noteView) View(width, height int) string {
 	b.WriteString(header + "\n\n")
 	bodyWidth := max(30, width-4)
 	bodyHeight := height - 4
+	if v.del.active {
+		bodyHeight-- // the confirm bar takes a row from the body
+	}
 	rendered := 0
 	for i := v.offset; i < len(v.lines) && rendered < bodyHeight; i++ {
 		if blk := v.blockStartingAt(i); blk != nil {
@@ -450,11 +614,20 @@ func (v *noteView) View(width, height int) string {
 		}
 	}
 	hint := " tab links · enter follow · a send to agent · / search · j/k scroll · esc back"
+	if len(v.tasks) > 0 {
+		hint = fmt.Sprintf(" tab links · t tasks (%d) · a agent · / search · j/k scroll · esc back", len(v.tasks))
+	}
 	if len(v.links) > 0 && v.linkAt >= 0 {
 		hint = fmt.Sprintf(" link %d/%d: %s · enter opens · a send to agent", v.linkAt+1, len(v.links), v.links[v.linkAt].label)
 	}
+	if t := v.focusedTask(); t != nil {
+		hint = fmt.Sprintf(" task %d/%d · j/k move · space toggle · D delete · t release", v.taskAt+1, len(v.tasks))
+	}
 	if bar := v.find.bar(); bar != "" {
 		hint = " " + bar
+	}
+	if v.del.active {
+		b.WriteString(v.del.bar() + "\n")
 	}
 	b.WriteString(dimStyle.Render(hint))
 	return b.String()
@@ -509,6 +682,11 @@ func (v *noteView) renderTaskBlock(blk *taskBlock, width int) []string {
 // renderNoteLine styles a display row: wikilinks are underlined, the focused
 // link and search hits are highlighted.
 func (v *noteView) renderNoteLine(row string, line int) string {
+	// The focused task owns its whole line: checkbox syntax is not a
+	// wikilink, and marking it up as a link would be misleading.
+	if t := v.focusedTask(); t != nil && t.Line-1 == line {
+		return cursorStyle.Render(row)
+	}
 	styled := wikilinkRe.ReplaceAllStringFunc(row, func(match string) string {
 		m := wikilinkRe.FindStringSubmatch(match)
 		label := m[1]
@@ -526,4 +704,3 @@ func (v *noteView) renderNoteLine(row string, line int) string {
 	}
 	return styled
 }
-

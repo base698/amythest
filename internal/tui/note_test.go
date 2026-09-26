@@ -158,3 +158,170 @@ func TestNoteViewRendersTasksBlocksAsLiveResults(t *testing.T) {
 		t.Fatalf("error render:\n%s", out)
 	}
 }
+
+// A daily note opened from the notes browser: checkbox lines are
+// actionable there, not just rendered text.
+func fixtureTaskNote() *apiclient.Note {
+	return &apiclient.Note{
+		Slug:     "Daily Notes/2026-09-25",
+		Title:    "2026-09-25",
+		Path:     "Daily Notes/2026-09-25.md",
+		Version:  strings.Repeat("a", 64),
+		Markdown: "# Today\n\n- [ ] water the plants\n- [x] feed the cat\n\nsome prose\n\n- [ ] call the vet\n",
+	}
+}
+
+func TestNoteViewParsesTasksWithTheNoteVersionLock(t *testing.T) {
+	v := newNoteView(nil, fixtureTaskNote())
+	if len(v.tasks) != 3 {
+		t.Fatalf("tasks = %+v", v.tasks)
+	}
+	if v.tasks[0].Text != "water the plants" || v.tasks[0].Status != tasks.StatusOpen {
+		t.Fatalf("task0 = %+v", v.tasks[0])
+	}
+	if v.tasks[1].Status != tasks.StatusDone {
+		t.Fatalf("task1 status = %q", v.tasks[1].Status)
+	}
+	// Line numbers are 1-based and must address the real file line.
+	if v.tasks[2].Line != 8 {
+		t.Fatalf("task2 line = %d, want 8", v.tasks[2].Line)
+	}
+	for i, task := range v.tasks {
+		if task.Version != strings.Repeat("a", 64) {
+			t.Fatalf("task %d carries version %q, not the note's", i, task.Version)
+		}
+		if task.Slug != "Daily Notes/2026-09-25" {
+			t.Fatalf("task %d slug = %q", i, task.Slug)
+		}
+	}
+	if v.taskAt != -1 {
+		t.Fatalf("taskAt = %d, want no focus on open", v.taskAt)
+	}
+}
+
+func TestNoteViewTGrabsTasksAndJKWalkThem(t *testing.T) {
+	v := newNoteView(nil, fixtureTaskNote())
+	v.Update(keyMsg("t"))
+	if v.taskAt != 0 {
+		t.Fatalf("t should grab the first visible task, got %d", v.taskAt)
+	}
+	// While tasks are held, j/k step between them instead of scrolling.
+	before := v.offset
+	v.Update(keyMsg("j"))
+	if v.taskAt != 1 {
+		t.Fatalf("j should move to the next task, got %d", v.taskAt)
+	}
+	if v.offset != before {
+		t.Fatalf("j scrolled the body (%d → %d) instead of moving the task cursor", before, v.offset)
+	}
+	v.Update(keyMsg("k"))
+	if v.taskAt != 0 {
+		t.Fatalf("k should step back, got %d", v.taskAt)
+	}
+	// j stops at the last task rather than wrapping into nothing.
+	v.Update(keyMsg("j"))
+	v.Update(keyMsg("j"))
+	v.Update(keyMsg("j"))
+	if v.taskAt != 2 {
+		t.Fatalf("taskAt = %d, want it clamped at the last task", v.taskAt)
+	}
+	// t again releases them, so j/k scroll normally.
+	v.Update(keyMsg("t"))
+	if v.taskAt != -1 {
+		t.Fatalf("second t should release the tasks, got %d", v.taskAt)
+	}
+	before = v.offset
+	v.Update(keyMsg("j"))
+	if v.offset == before {
+		t.Fatal("j should scroll again once tasks are released")
+	}
+}
+
+// t grabs the task you are looking at, not the top of a long note.
+func TestNoteViewTGrabsFromTheCurrentScrollPosition(t *testing.T) {
+	v := newNoteView(nil, fixtureTaskNote())
+	v.offset = 5 // past the first two tasks
+	v.Update(keyMsg("t"))
+	if v.taskAt != 2 {
+		t.Fatalf("taskAt = %d, want the task below the viewport top", v.taskAt)
+	}
+}
+
+func TestNoteViewDeleteOpensConfirmForFocusedTask(t *testing.T) {
+	v := newNoteView(nil, fixtureTaskNote())
+	// Without a focused task the key explains itself instead of doing nothing.
+	_, cmd := v.Update(keyMsg("D"))
+	if v.del.active {
+		t.Fatal("D opened a confirm with no task focused")
+	}
+	if cmd == nil {
+		t.Fatal("D with no focus should flash a hint")
+	}
+	if msg, ok := cmd().(flashMsg); !ok || !strings.Contains(msg.text, "press t") {
+		t.Fatalf("hint = %#v", cmd())
+	}
+
+	v.Update(keyMsg("t"))
+	v.Update(keyMsg("D"))
+	if !v.del.active || !v.Capturing() {
+		t.Fatalf("D should open the confirm and capture keys (active=%v)", v.del.active)
+	}
+	if v.delTarget.Text != "water the plants" {
+		t.Fatalf("delTarget = %+v", v.delTarget)
+	}
+	if !strings.Contains(v.del.bar(), "cancel task") {
+		t.Fatalf("confirm bar = %q", v.del.bar())
+	}
+}
+
+func TestNoteViewDeleteOfCancelledTaskPurges(t *testing.T) {
+	note := fixtureTaskNote()
+	note.Markdown = "# Today\n\n- [-] abandoned thing ❌ 2026-09-01\n"
+	v := newNoteView(nil, note)
+	if len(v.tasks) != 1 || v.tasks[0].Status != tasks.StatusCancelled {
+		t.Fatalf("tasks = %+v", v.tasks)
+	}
+	v.Update(keyMsg("t"))
+	v.Update(keyMsg("D"))
+	if !strings.Contains(v.del.bar(), "permanently delete") {
+		t.Fatalf("cancelled task should confirm a permanent delete: %q", v.del.bar())
+	}
+}
+
+func TestNoteViewSpaceTogglesFocusedTaskOnly(t *testing.T) {
+	v := newNoteView(nil, fixtureTaskNote())
+	_, cmd := v.Update(keyMsg(" "))
+	if cmd == nil {
+		t.Fatal("space with no focus should flash a hint")
+	}
+	if msg, ok := cmd().(flashMsg); !ok || !strings.Contains(msg.text, "press t") {
+		t.Fatalf("hint = %#v", cmd())
+	}
+	if v.busy {
+		t.Fatal("space with no focus started a request")
+	}
+}
+
+func TestNoteViewHighlightsTheFocusedTaskLine(t *testing.T) {
+	v := newNoteView(nil, fixtureTaskNote())
+	v.Update(keyMsg("t"))
+	out := v.View(80, 24)
+	if !strings.Contains(stripANSI(out), "water the plants") {
+		t.Fatalf("focused task line missing:\n%s", out)
+	}
+	if hint := stripANSI(out); !strings.Contains(hint, "space toggle") || !strings.Contains(hint, "D delete") {
+		t.Fatalf("hint does not advertise the task actions:\n%s", hint)
+	}
+}
+
+// A note with no checkboxes must not pretend to have task actions.
+func TestNoteViewWithoutTasksSaysSo(t *testing.T) {
+	v := newNoteView(nil, fixtureNote())
+	_, cmd := v.Update(keyMsg("t"))
+	if v.taskAt != -1 {
+		t.Fatalf("taskAt = %d", v.taskAt)
+	}
+	if msg, ok := cmd().(flashMsg); !ok || !strings.Contains(msg.text, "no tasks") {
+		t.Fatalf("flash = %#v", cmd())
+	}
+}

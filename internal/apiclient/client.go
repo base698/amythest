@@ -256,6 +256,18 @@ func (c *Client) PurgeTask(ctx context.Context, t tasks.Task) error {
 	return c.do(ctx, http.MethodPost, "/api/tasks/purge", body, nil)
 }
 
+// HideFileFromTasks sets `tasks: false` in a note's frontmatter, so its
+// checkbox lines stop being collected as tasks. The note stays rendered,
+// linked and searchable — this is for files whose checkboxes are a list
+// (a watchlist, a packing list), not a queue of work.
+func (c *Client) HideFileFromTasks(ctx context.Context, slug, version string) error {
+	body := struct {
+		Slug            string `json:"slug"`
+		ExpectedVersion string `json:"expectedVersion"`
+	}{slug, version}
+	return c.do(ctx, http.MethodPost, "/api/tasks/file/hide", body, nil)
+}
+
 // AddTask appends a "- [ ] text" line to a note: today's daily note when
 // daily is true (created if missing), otherwise the note named by slug.
 // Returns the vault-relative path written to.

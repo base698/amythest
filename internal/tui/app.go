@@ -70,9 +70,9 @@ type (
 	}
 )
 
-func pushView(v view) tea.Cmd  { return func() tea.Msg { return pushMsg{v} } }
-func popView() tea.Cmd         { return func() tea.Msg { return popMsg{} } }
-func fail(err error) tea.Msg   { return errMsg{err} }
+func pushView(v view) tea.Cmd { return func() tea.Msg { return pushMsg{v} } }
+func popView() tea.Cmd        { return func() tea.Msg { return popMsg{} } }
+func fail(err error) tea.Msg  { return errMsg{err} }
 func flash(text string) tea.Cmd {
 	return func() tea.Msg { return flashMsg{text} }
 }
@@ -320,6 +320,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.status = "task cancelled ❌ — recoverable in the note; D again deletes permanently"
 	case taskPurgedMsg:
 		a.status = "cancelled task deleted permanently"
+	case fileHiddenMsg:
+		a.status = fmt.Sprintf("%s no longer contributes tasks (tasks: false)", msg.path)
 	case cardDeletedMsg:
 		a.status = fmt.Sprintf("card %q deleted permanently", msg.title)
 	}
@@ -386,6 +388,8 @@ const helpText = `
   d               mark card done (archives it)
   D               delete with confirm: task → cancel,
                   again → purge; card → permanent delete
+  H               stop collecting tasks from this file
+                  (tasks view; adds tasks: false to the note)
   m               move card: picker with lanes and
                   other boards (t/b/y/i/v/d shortcuts)
   e               edit: task due date + 🔁 repeat rule
@@ -405,7 +409,8 @@ const helpText = `
                   f only your work items)
   notes: tab      browse (folders, tags, recent);
                   p preview pane · s sort · / filter
-                  reader: b backlinks · e edit in $EDITOR
+                  reader: b backlinks · e edit in $EDITOR ·
+                  t grab tasks, then j/k move · space · D
                   (jira view: o open · c comment ·
                   p pull into a board · a to agent)
   tab / enter     cycle & follow note links (note view)
