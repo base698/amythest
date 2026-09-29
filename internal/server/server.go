@@ -28,6 +28,7 @@ import (
 	"github.com/base698/amythest/internal/logging"
 	"github.com/base698/amythest/internal/markdown"
 	"github.com/base698/amythest/internal/mcp"
+	"github.com/base698/amythest/internal/presentation"
 	"github.com/base698/amythest/internal/share"
 	"github.com/base698/amythest/internal/tasks"
 	"github.com/base698/amythest/internal/vault"
@@ -59,12 +60,13 @@ type Server struct {
 	reconcilePending bool
 	reconcileDelay   time.Duration
 
-	chromaCSS  []byte
-	kanban     *board.Store   // nil when kanban is not configured
-	kanbanAuth *auth.Manager  // gates vault writes when set
-	catalog    *bases.Catalog // sqlite tabular data store
-	share      *share.Store
-	metrics    serverMetrics
+	chromaCSS     []byte
+	kanban        *board.Store   // nil when kanban is not configured
+	kanbanAuth    *auth.Manager  // gates vault writes when set
+	catalog       *bases.Catalog // sqlite tabular data store
+	share         *share.Store
+	presentations *presentation.Store
+	metrics       serverMetrics
 }
 
 // kanbanSessionCookie mirrors httpapi.SessionCookie without importing the
@@ -120,6 +122,10 @@ func New(cfg config.Config) (*Server, error) {
 	}
 
 	s.share = share.New(cfg.Vault, cfg.SharePlugins)
+	s.presentations, err = presentation.New(filepath.Join(cfg.DataDir, "presentations"), cfg.BaseURL)
+	if err != nil {
+		return nil, err
+	}
 
 	// Kanban comes up before the first index pass: it supplies the board list
 	// the renderer bakes into move-to-board controls on note task lines, and
@@ -195,6 +201,7 @@ func New(cfg config.Config) (*Server, error) {
 	s.mux.HandleFunc("POST /api/db/query", s.handleDBQueryAPI)
 
 	s.mux.HandleFunc("GET /assets/", s.handleAsset)
+	s.mux.Handle("GET /presentations/", s.presentations)
 	s.mux.HandleFunc("GET /tags/", s.handleTags)
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -205,12 +212,13 @@ func New(cfg config.Config) (*Server, error) {
 	})
 
 	mcpDeps := mcp.Deps{
-		DB:      s.db,
-		Catalog: s.catalog,
-		Kanban:  s.kanban,
-		Vault:   func() *vault.Vault { return s.vault.Load() },
-		BaseURL: s.base(),
-		Rescan:  s.rescanWhileVaultLocked,
+		DB:            s.db,
+		Catalog:       s.catalog,
+		Kanban:        s.kanban,
+		Vault:         func() *vault.Vault { return s.vault.Load() },
+		BaseURL:       s.base(),
+		Rescan:        s.rescanWhileVaultLocked,
+		Presentations: s.presentations,
 	}
 	jwtProtectsMCP := strings.ToLower(cfg.AuthMode) == "jwt" &&
 		(cfg.AuthProtect == "" || cfg.AuthProtect == "mcp" || cfg.AuthProtect == "all")
@@ -345,6 +353,9 @@ func (s *Server) RunRescanLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if s.presentations != nil {
+				s.presentations.Cleanup()
+			}
 			if err := s.Rescan(); err != nil {
 				slog.Error("rescan", "err", err)
 			}
@@ -386,9 +397,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.isProbePath(r.URL.Path) {
 		level = slog.LevelDebug
 	}
+	loggedPath := r.URL.Path
+	if strings.HasPrefix(loggedPath, "/presentations/") {
+		loggedPath = "/presentations/[private-view]"
+	}
 	reqLogger.Log(r.Context(), level, "request",
 		"method", r.Method,
-		"path", r.URL.Path,
+		"path", loggedPath,
 		"status", mw.status,
 		"duration_ms", duration.Milliseconds(),
 		"bytes", mw.bytes,
