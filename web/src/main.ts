@@ -22,6 +22,9 @@ function init() {
   if (document.querySelector("pre.mermaid")) {
     void import("./mermaid").then((m) => m.renderMermaid())
   }
+  if (document.querySelector(".model-embed")) {
+    void import("./stl").then((m) => m.renderModels())
+  }
 }
 
 init()

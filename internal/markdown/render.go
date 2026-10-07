@@ -162,6 +162,11 @@ var imageExts = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif
 var audioExts = map[string]bool{".mp3": true, ".m4a": true, ".wav": true, ".ogg": true, ".flac": true}
 var videoExts = map[string]bool{".mp4": true, ".mov": true, ".webm": true, ".mkv": true}
 
+// modelExts are 3D meshes rendered in an interactive canvas rather than
+// offered as a download. STL only for now: the format is a bare triangle
+// soup, so it needs no material or scene handling.
+var modelExts = map[string]bool{".stl": true}
+
 func (e *Engine) resolveEmbed(v *vault.Vault, wl *obsidian.Wikilink, res *Result, depth int, visited map[string]bool) {
 	ext := strings.ToLower(path.Ext(wl.Target))
 	if ext != "" && ext != ".md" {
@@ -322,6 +327,13 @@ func (r *nodeRenderer) renderAssetEmbed(buf *bytes.Buffer, wl *obsidian.Wikilink
 			src, template.HTMLEscapeString(path.Base(wl.AssetRel)), attrs)
 	case ext == ".pdf":
 		fmt.Fprintf(buf, `<iframe class="pdf-embed" src="%s"></iframe>`, src)
+	case modelExts[ext]:
+		// The mesh is fetched and drawn client-side (web/src/stl.ts); the
+		// link inside stays useful without scripting, and is what a reader
+		// falls back to when WebGL is unavailable.
+		fmt.Fprintf(buf, `<div class="model-embed" data-model-src="%s" data-model-name="%s"><a href="%s">%s</a></div>`,
+			src, template.HTMLEscapeString(path.Base(wl.AssetRel)),
+			src, template.HTMLEscapeString(path.Base(wl.AssetRel)))
 	case audioExts[ext]:
 		fmt.Fprintf(buf, `<audio controls src="%s"></audio>`, src)
 	case videoExts[ext]:
