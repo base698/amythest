@@ -1240,3 +1240,39 @@ input.task-toggle:disabled { cursor: wait; opacity: 0.6; }
     }
   }
 }
+
+// 3D model embeds (web/src/stl.ts). The container is styled whether or not
+// the viewer mounts, so the download-link fallback still reads as a block.
+.model-embed {
+  margin: 1rem 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-alt);
+  padding: 0.5rem;
+  overflow: hidden;
+
+  .model-canvas {
+    display: block;
+    width: 100%;
+    border-radius: 6px;
+    touch-action: none; // the canvas owns drag; the page must not pan under it
+    cursor: grab;
+    &:active { cursor: grabbing; }
+  }
+
+  .model-meta {
+    margin: 0.5rem 0 0.15rem;
+    font-size: 0.75rem;
+    color: var(--fg-muted);
+    text-align: center;
+  }
+
+  .model-error { color: var(--fg); }
+
+  // Fallback link when the viewer never mounts.
+  > a {
+    display: inline-block;
+    padding: 0.35rem 0.1rem;
+    font-size: 0.85rem;
+  }
+}
