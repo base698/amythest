@@ -63,3 +63,34 @@ func TestRenderHTMLWithBoardsOmitsMoveControlWithoutBoardsOrForDoneTasks(t *test
 		t.Fatalf("move control rendered for done task: %s", html)
 	}
 }
+
+// A note group's heading links to the note; any other grouping leaves it
+// as plain text, because the heading then names no single destination.
+func TestRenderLinksNoteGroupHeadings(t *testing.T) {
+	noteGroups := ParseQuery("group by note").Run([]Task{
+		{Text: "a", Status: StatusOpen, Path: "X/a.md", Slug: "X/a"},
+		{Text: "b", Status: StatusOpen, Path: "X/a.md", Slug: "X/a"},
+	})
+	html := RenderHTMLWithOptions(noteGroups, "/notes/", RenderOptions{})
+	if !strings.Contains(html, `<h4 class="tasks-group"><a href="/notes/X/a">X/a.md</a></h4>`) {
+		t.Fatalf("note heading is not a link:\n%s", html)
+	}
+
+	folderGroups := ParseQuery("group by folder").Run([]Task{
+		{Text: "a", Status: StatusOpen, Path: "X/a.md", Slug: "X/a"},
+		{Text: "b", Status: StatusOpen, Path: "X/b.md", Slug: "X/b"},
+	})
+	html = RenderHTMLWithOptions(folderGroups, "/notes/", RenderOptions{})
+	if !strings.Contains(html, `<h4 class="tasks-group">X</h4>`) {
+		t.Fatalf("folder heading should be plain text:\n%s", html)
+	}
+
+	// A task with no slug cannot be linked; the heading degrades to text.
+	noSlug := ParseQuery("group by note").Run([]Task{
+		{Text: "a", Status: StatusOpen, Path: "X/a.md"},
+	})
+	html = RenderHTMLWithOptions(noSlug, "/notes/", RenderOptions{})
+	if !strings.Contains(html, `<h4 class="tasks-group">X/a.md</h4>`) {
+		t.Fatalf("slugless heading should be plain text:\n%s", html)
+	}
+}

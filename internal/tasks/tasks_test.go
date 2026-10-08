@@ -130,3 +130,47 @@ func TestQueryReverseSortAndTagExclusion(t *testing.T) {
 		t.Error("expected error for unknown sort modifier")
 	}
 }
+
+// group by note puts each file's tasks under their own heading; group by
+// folder keeps collapsing a directory. Both are offered in the UI, so the
+// two must stay distinguishable.
+func TestQueryGroupByNoteAndFolder(t *testing.T) {
+	all := []Task{
+		{Text: "a", Status: StatusOpen, Path: "X/a.md", Slug: "X/a"},
+		{Text: "b", Status: StatusOpen, Path: "X/b.md", Slug: "X/b"},
+		{Text: "c", Status: StatusOpen, Path: "X/a.md", Slug: "X/a"},
+		{Text: "d", Status: StatusOpen, Path: "Y/d.md", Slug: "Y/d"},
+	}
+
+	groups := ParseQuery("group by note").Run(all)
+	if len(groups) != 3 {
+		t.Fatalf("note groups = %d, want one per file: %#v", len(groups), groups)
+	}
+	if groups[0].Name != "X/a.md" || len(groups[0].Tasks) != 2 {
+		t.Errorf("first note group = %q with %d tasks", groups[0].Name, len(groups[0].Tasks))
+	}
+	if groups[1].Name != "X/b.md" || groups[2].Name != "Y/d.md" {
+		t.Errorf("note group names = %q %q", groups[1].Name, groups[2].Name)
+	}
+
+	// "file" is accepted as a synonym.
+	if got := ParseQuery("group by file").Run(all); len(got) != 3 {
+		t.Errorf("file groups = %d", len(got))
+	}
+
+	// folder still collapses a directory, and "path" keeps that older
+	// meaning so existing ```tasks blocks do not change behaviour.
+	for _, key := range []string{"group by folder", "group by path"} {
+		got := ParseQuery(key).Run(all)
+		if len(got) != 2 {
+			t.Fatalf("%s = %d groups, want 2", key, len(got))
+		}
+		if got[0].Name != "X" || len(got[0].Tasks) != 3 {
+			t.Errorf("%s first group = %q with %d tasks", key, got[0].Name, len(got[0].Tasks))
+		}
+	}
+
+	if ParseQuery("group by nonsense").Err() == nil {
+		t.Error("expected an error for an unknown group field")
+	}
+}

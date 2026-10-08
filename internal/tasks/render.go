@@ -85,6 +85,21 @@ type RenderOptions struct {
 	Selectable bool     // selection checkboxes plus cancel/purge row actions
 }
 
+// groupHeading renders a group's title, linking it to the note when the
+// group *is* one note — which is what `group by note` produces. Detected
+// from the data rather than carried on Group: a group whose name equals
+// the shared path of its tasks is that note, however it was grouped.
+func groupHeading(g Group, base string) string {
+	slug := g.Tasks[0].Slug
+	for _, t := range g.Tasks {
+		if t.Path != g.Name || t.Slug != slug || slug == "" {
+			return template.HTMLEscapeString(g.Name)
+		}
+	}
+	return `<a href="` + template.HTMLEscapeString(base+slug) + `">` +
+		template.HTMLEscapeString(g.Name) + `</a>`
+}
+
 func RenderHTMLWithOptions(groups []Group, base string, opts RenderOptions) string {
 	var b strings.Builder
 	b.WriteString(`<div class="tasks-list">`)
@@ -95,7 +110,7 @@ func RenderHTMLWithOptions(groups []Group, base string, opts RenderOptions) stri
 		}
 		total += len(g.Tasks)
 		if g.Name != "" {
-			b.WriteString(`<h4 class="tasks-group">` + template.HTMLEscapeString(g.Name) + `</h4>`)
+			b.WriteString(`<h4 class="tasks-group">` + groupHeading(g, base) + `</h4>`)
 		}
 		b.WriteString("<ul>")
 		for _, t := range g.Tasks {

@@ -655,6 +655,14 @@ body:not(.tasks-selecting) .tasks-bulkbar .selecting-only { display: none; }
     margin: 1rem 0 0.25rem;
     color: var(--fg-muted);
     font-size: 0.95rem;
+
+    // `group by note` makes the heading a link to that note. Keep it the
+    // muted heading colour so the list still reads as headings, and show
+    // it is clickable on hover rather than underlining every group.
+    a {
+      color: inherit;
+      &:hover { color: var(--accent); text-decoration: underline; }
+    }
   }
 
   .tasks-empty { color: var(--fg-muted); font-style: italic; }
