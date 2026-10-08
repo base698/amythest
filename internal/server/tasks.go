@@ -54,7 +54,7 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 
 	statusFilter := r.URL.Query().Get("status") // "", open, done, all
 	sortKey := r.URL.Query().Get("sort")        // "", due, priority, path, description, done
-	groupKey := r.URL.Query().Get("group")      // "", due, path, priority, status
+	groupKey := r.URL.Query().Get("group")      // "", note, folder, priority, status
 
 	var b strings.Builder
 	b.WriteString(s.tasksToolbar(statusFilter, sortKey, groupKey))
@@ -101,7 +101,7 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 			lines = append(lines, "sort by "+sortKey)
 		}
 		switch groupKey {
-		case "due", "path", "priority", "status", "folder":
+		case "due", "path", "priority", "status", "folder", "note", "file":
 			lines = append(lines, "group by "+groupKey)
 		}
 		q := tasks.ParseQuery(strings.Join(lines, "\n"))
@@ -211,7 +211,7 @@ func (s *Server) tasksToolbar(status, sortKey, group string) string {
 		link(k, st, toggle(sortKey, k), group, sortKey == k)
 	}
 	b.WriteString(`<span class="eyebrow">Group</span>`)
-	for _, k := range []string{"folder", "priority", "status"} {
+	for _, k := range []string{"note", "folder", "priority", "status"} {
 		st := status
 		if st == "" {
 			st = "open"

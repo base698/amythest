@@ -129,7 +129,7 @@ func (q *Query) parseLine(line string) error {
 	case strings.HasPrefix(l, "group by "):
 		field := strings.TrimSpace(strings.TrimPrefix(l, "group by "))
 		switch field {
-		case "due", "path", "priority", "status", "folder":
+		case "due", "path", "priority", "status", "folder", "note", "file":
 			q.groupBy = field
 		default:
 			return fmt.Errorf("unsupported group field %q", field)
@@ -341,10 +341,15 @@ func (q *Query) Run(all []Task) []Group {
 		case "due":
 			return t.Due
 		case "path", "folder":
+			// The containing directory. "path" has meant this since the
+			// first release, so it keeps meaning it; "note" is the key for
+			// grouping by the individual file.
 			if i := strings.LastIndex(t.Path, "/"); i >= 0 {
 				return t.Path[:i]
 			}
 			return "/"
+		case "note", "file":
+			return t.Path
 		case "priority":
 			return [6]string{"Highest", "High", "Medium", "Normal", "Low", "Lowest"}[t.Priority]
 		case "status":

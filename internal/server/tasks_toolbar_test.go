@@ -44,6 +44,21 @@ func TestTasksToolbarActiveChipsToggleOff(t *testing.T) {
 			name:     "dashboard is active only when everything is clear",
 			wantChip: `<a class="chip active" href="/tasks">Dashboard</a>`,
 		},
+		{
+			name:     "note grouping is offered",
+			status:   "open",
+			wantChip: `<a class="chip" href="/tasks?status=open&amp;group=note">note</a>`,
+		},
+		{
+			name:   "active note chip clears grouping",
+			status: "open", group: "note",
+			wantChip: `<a class="chip active" href="/tasks?status=open">note</a>`,
+		},
+		{
+			name:   "note and folder are separate choices",
+			status: "open", group: "note",
+			wantChip: `<a class="chip" href="/tasks?status=open&amp;group=folder">folder</a>`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			html := s.tasksToolbar(tc.status, tc.sortKey, tc.group)
