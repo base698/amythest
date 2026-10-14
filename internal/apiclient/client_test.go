@@ -21,13 +21,14 @@ var frozenNow = time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 // fakeServer is a minimal amythest stand-in that records auth headers.
 type fakeServer struct {
 	*httptest.Server
-	logins      int
-	sawCSRF     map[string]string // path -> X-CSRF-Token header value
-	failFirst        bool // return 401 on the first authed request
+	logins           int
+	sawCSRF          map[string]string // path -> X-CSRF-Token header value
+	failFirst        bool              // return 401 on the first authed request
 	failedOnce       bool
 	toggleCode       int
 	toggleCalls      int
 	contentIndexHits int
+	propertyVersion  string
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -166,6 +167,23 @@ func newFakeServer(t *testing.T) *fakeServer {
 			{"slug": "Garden", "title": "Garden", "path": "Garden.md", "mtime": 1756000000, "size": 120},
 			{"slug": "Home", "title": "Home", "path": "Home.md", "mtime": 1756000500, "size": 80},
 		})
+	}))
+	mux.HandleFunc("GET /api/note", authed(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"slug": "Garden", "title": "Garden", "path": "Garden.md", "markdown": "# Garden\n", "version": strings.Repeat("a", 64),
+			"properties": []map[string]any{{"key": "tasks", "type": "bool", "value": false}},
+		})
+	}))
+	mux.HandleFunc("POST /api/notes/property", authed(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			ExpectedVersion string `json:"expectedVersion"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		fs.propertyVersion = payload.ExpectedVersion
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	}))
 	mux.HandleFunc("GET /api/bases", authed(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]string{"Projects"})
@@ -322,6 +340,46 @@ func TestUnauthorizedTriggersExactlyOneReloginAndRetry(t *testing.T) {
 	}
 }
 
+func TestForbiddenStaleCSRFRetriesWithFreshLoginToken(t *testing.T) {
+	logins := 0
+	var seenTokens []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /kanban/api/login", func(w http.ResponseWriter, _ *http.Request) {
+		logins++
+		csrf := "fresh-token"
+		if logins == 1 {
+			csrf = "stale-token"
+		}
+		http.SetCookie(w, &http.Cookie{Name: "amythest_kanban_session", Value: "tok", Path: "/"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"user": "smoke", "csrf": csrf})
+	})
+	mux.HandleFunc("POST /api/notes/property", func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get("X-CSRF-Token")
+		seenTokens = append(seenTokens, token)
+		if token == "stale-token" {
+			http.Error(w, "invalid csrf token", http.StatusForbidden)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	t.Setenv("KANBAN_USERNAME", "smoke")
+	t.Setenv("KANBAN_PASSWORD", "smoketest123")
+	client := New(Config{Endpoint: server.URL, SessionFile: filepath.Join(t.TempDir(), "session.json")})
+
+	err := client.SetNoteProperty(context.Background(), "Garden", "status", "done", "string", strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logins != 2 {
+		t.Fatalf("logins = %d, want initial login plus one retry login", logins)
+	}
+	if len(seenTokens) != 2 || seenTokens[0] != "stale-token" || seenTokens[1] != "fresh-token" {
+		t.Fatalf("CSRF tokens = %v, want [stale-token fresh-token]", seenTokens)
+	}
+}
+
 func TestCSRFSentOnKanbanWritesButNotTaskToggles(t *testing.T) {
 	srv := newFakeServer(t)
 	c := testClient(t, srv)
@@ -458,6 +516,112 @@ func TestToggleConflictSurfacesErrConflict(t *testing.T) {
 	}
 }
 
+func TestMissingCredentialsReturnsSafeTypedError(t *testing.T) {
+	t.Setenv("KANBAN_USERNAME", "")
+	t.Setenv("KANBAN_PASSWORD", "")
+	secretPath := filepath.Join(t.TempDir(), "private-credentials")
+	c := New(Config{
+		Endpoint:    "http://test.example",
+		Timeout:     time.Second,
+		SessionFile: filepath.Join(t.TempDir(), "session.json"),
+		EnvFile:     secretPath,
+	})
+
+	_, err := c.ListBoards(context.Background())
+	if !errors.Is(err, ErrMissingCredentials) {
+		t.Fatalf("err = %v, want ErrMissingCredentials", err)
+	}
+	if strings.Contains(err.Error(), secretPath) {
+		t.Fatalf("error leaks credential file path: %q", err)
+	}
+	if strings.Contains(err.Error(), "KANBAN_PASSWORD") {
+		t.Fatalf("error exposes sensitive environment details: %q", err)
+	}
+}
+
+func TestCanceledLoginPreservesContextIdentity(t *testing.T) {
+	t.Setenv("KANBAN_USERNAME", "user")
+	t.Setenv("KANBAN_PASSWORD", "password")
+	c := New(Config{
+		Endpoint:    "http://test.example",
+		Timeout:     time.Second,
+		SessionFile: filepath.Join(t.TempDir(), "session.json"),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := c.ListBoards(ctx)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled identity preserved", err)
+	}
+}
+
+func TestExpiredRequestDeadlinePreservesContextIdentity(t *testing.T) {
+	c := New(Config{Endpoint: "http://test.example", Timeout: time.Second})
+	c.session = &session{
+		Cookie: "amythest_kanban_session=token",
+		CSRF:   "csrf-token",
+		Exp:    float64(time.Now().Add(time.Hour).Unix()),
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	_, err := c.ListBoards(ctx)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded identity preserved", err)
+	}
+}
+
+func TestNetworkFailureReturnsTypedUnavailableError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	endpoint := srv.URL
+	srv.Close()
+	t.Setenv("KANBAN_USERNAME", "private-user")
+	t.Setenv("KANBAN_PASSWORD", "private-password")
+	c := New(Config{
+		Endpoint:    endpoint,
+		Timeout:     time.Second,
+		SessionFile: filepath.Join(t.TempDir(), "session.json"),
+	})
+
+	_, err := c.ListBoards(context.Background())
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	if strings.Contains(err.Error(), "private-user") || strings.Contains(err.Error(), "private-password") {
+		t.Fatalf("error leaks credentials: %q", err)
+	}
+}
+
+func TestLoginServiceFailureReturnsTypedUnavailableError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "temporarily down", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	t.Setenv("KANBAN_USERNAME", "user")
+	t.Setenv("KANBAN_PASSWORD", "password")
+	c := New(Config{
+		Endpoint:    srv.URL,
+		Timeout:     time.Second,
+		SessionFile: filepath.Join(t.TempDir(), "session.json"),
+	})
+
+	_, err := c.ListBoards(context.Background())
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusServiceUnavailable {
+		t.Fatalf("err = %v, want APIError status 503", err)
+	}
+}
+
 func TestCredentialsFallBackToEnvFile(t *testing.T) {
 	srv := newFakeServer(t)
 	t.Setenv("KANBAN_USERNAME", "")
@@ -497,6 +661,35 @@ func TestContentIndexCachesAndComputesBacklinks(t *testing.T) {
 	}
 	if srv.contentIndexHits != 1 {
 		t.Fatalf("contentIndex fetched %d times, want 1 (cached)", srv.contentIndexHits)
+	}
+}
+
+func TestGetNotePreservesTypedFalseProperty(t *testing.T) {
+	srv := newFakeServer(t)
+	note, err := testClient(t, srv).GetNote(context.Background(), "Garden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(note.Properties) != 1 {
+		t.Fatalf("properties = %#v", note.Properties)
+	}
+	property := note.Properties[0]
+	if property.Key != "tasks" || property.Type != "bool" || property.Value != false {
+		t.Fatalf("property = %#v", property)
+	}
+}
+
+func TestSetNotePropertyCarriesExactWholeNoteVersionAndCSRF(t *testing.T) {
+	srv := newFakeServer(t)
+	version := strings.Repeat("d", 64)
+	if err := testClient(t, srv).SetNoteProperty(context.Background(), "Garden", "tasks", "", "bool", version); err != nil {
+		t.Fatal(err)
+	}
+	if srv.propertyVersion != version {
+		t.Fatalf("expectedVersion = %q, want %q", srv.propertyVersion, version)
+	}
+	if got := srv.sawCSRF["/api/notes/property"]; got != "csrf-token" {
+		t.Fatalf("property write CSRF = %q, want csrf-token", got)
 	}
 }
 

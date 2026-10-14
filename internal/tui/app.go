@@ -4,6 +4,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -85,7 +86,13 @@ type App struct {
 	height int
 	spin   spinner.Model
 	status string
+	alert  *appAlert
 	help   bool
+}
+
+type appAlert struct {
+	title    string
+	guidance string
 }
 
 func NewApp(client *apiclient.Client, reg *source.Registry) *App {
@@ -148,7 +155,21 @@ func (a *App) busy() bool {
 	return false
 }
 
+func isAmythestLoadSuccess(msg tea.Msg) bool {
+	switch msg.(type) {
+	case todayLoadedMsg, tasksLoadedMsg, boardsLoadedMsg, boardLoadedMsg,
+		archiveLoadedMsg, browseLoadedMsg, basesListMsg, baseDataMsg,
+		openNoteMsg, noteReloadedMsg:
+		return true
+	default:
+		return false
+	}
+}
+
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if isAmythestLoadSuccess(msg) {
+		a.alert = nil
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.width, a.height = msg.Width, msg.Height
@@ -184,7 +205,23 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.restartShimmer()
 
 	case errMsg:
-		a.status = "error: " + msg.err.Error()
+		a.alert = nil
+		switch {
+		case errors.Is(msg.err, apiclient.ErrMissingCredentials):
+			a.alert = &appAlert{
+				title:    "AMYTHEST SETUP REQUIRED",
+				guidance: "Configure the Amythest login credentials, then press r to retry.",
+			}
+			a.status = ""
+		case errors.Is(msg.err, apiclient.ErrUnavailable):
+			a.alert = &appAlert{
+				title:    "AMYTHEST SERVICE UNAVAILABLE",
+				guidance: "Check the configured endpoint and Amythest service, then press r to retry.",
+			}
+			a.status = ""
+		default:
+			a.status = "error: " + msg.err.Error()
+		}
 		return a, nil
 
 	case flashMsg:
@@ -345,6 +382,10 @@ func (a *App) View() string {
 	body := a.top().View(a.width, a.height-2)
 	if a.help {
 		body = helpText
+	} else if a.alert != nil {
+		content := dangerStyle.Render(" "+a.alert.title+" ") + "\n" + a.alert.guidance
+		panel := alertPanelStyle.MaxWidth(max(1, a.width-2)).Render(content)
+		body = panel + "\n" + body
 	}
 	crumbs := make([]string, len(a.stack))
 	for i, v := range a.stack {

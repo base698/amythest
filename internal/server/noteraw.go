@@ -33,12 +33,13 @@ func (s *Server) handleNoteRaw(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_, body := vault.ParseFrontmatter(raw)
-	s.writeJSON(w, map[string]string{
-		"slug":     note.Slug,
-		"title":    note.Title,
-		"path":     note.Path,
-		"markdown": string(body),
+	fm, body := vault.ParseFrontmatter(raw)
+	s.writeJSON(w, map[string]any{
+		"slug":       note.Slug,
+		"title":      note.Title,
+		"path":       note.Path,
+		"markdown":   string(body),
+		"properties": fm.Properties(),
 		// version is the whole-file hash — the optimistic lock for PUT.
 		"version": tasks.FileVersion(raw),
 	})

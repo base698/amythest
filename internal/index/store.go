@@ -157,6 +157,11 @@ type SearchResult struct {
 	Archived       bool    `json:"archived"`
 	ArchivedReason string  `json:"archived_reason,omitempty"` // provenance, e.g. "tag:archive"
 	Score          float64 `json:"-"`
+	Kind           string  `json:"kind"`
+	Date           string  `json:"date"`
+	DateSource     string  `json:"date_source"`
+	URL            string  `json:"url"`
+	MatchMethod    string  `json:"match_method"`
 }
 
 // Search runs an FTS5 match with title boosting and snippet extraction.
@@ -164,37 +169,7 @@ type SearchResult struct {
 // Archived notes are excluded unless includeArchived is set, so the
 // default result set matches today's behavior.
 func (d *DB) Search(q string, limit int, includeArchived bool) ([]SearchResult, error) {
-	ftsQuery := buildFTSQuery(q)
-	if ftsQuery == "" {
-		return nil, nil
-	}
-	if limit <= 0 || limit > 50 {
-		limit = 10
-	}
-	where := `notes_fts MATCH ?`
-	if !includeArchived {
-		where += ` AND n.archived = 0`
-	}
-	rows, err := d.r.Query(`SELECT notes_fts.slug, notes_fts.title,
-			snippet(notes_fts, 2, char(2), char(3), '…', 12),
-			bm25(notes_fts, 0, 10.0, 1.0, 5.0),
-			n.archived, n.archived_reason
-		FROM notes_fts JOIN notes n ON n.slug = notes_fts.slug
-		WHERE `+where+`
-		ORDER BY bm25(notes_fts, 0, 10.0, 1.0, 5.0) LIMIT ?`, ftsQuery, limit)
-	if err != nil {
-		return nil, fmt.Errorf("fts: %w", err)
-	}
-	defer rows.Close()
-	var out []SearchResult
-	for rows.Next() {
-		var r SearchResult
-		if err := rows.Scan(&r.Slug, &r.Title, &r.Excerpt, &r.Score, &r.Archived, &r.ArchivedReason); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return d.SearchWithOptions(q, SearchOptions{Limit: limit, IncludeArchived: includeArchived})
 }
 
 // buildFTSQuery quotes each term and adds prefix matching to the last one,

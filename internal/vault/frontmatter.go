@@ -2,7 +2,11 @@ package vault
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"math"
+	"sort"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -15,6 +19,93 @@ type Frontmatter struct {
 	Meta map[string]any
 	Raw  string
 	Err  error
+}
+
+// Property is one JSON-safe frontmatter entry. Type lets clients distinguish
+// strings from booleans, numbers, lists, objects, nulls, and YAML timestamps
+// without interpreting display text. Properties are always emitted in key
+// order so every client presents a stable list.
+type Property struct {
+	Key   string `json:"key"`
+	Type  string `json:"type"`
+	Value any    `json:"value"`
+	Text  string `json:"text"`
+}
+
+func (fm Frontmatter) Properties() []Property {
+	if len(fm.Meta) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(fm.Meta))
+	for key := range fm.Meta {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	properties := make([]Property, 0, len(keys))
+	for _, key := range keys {
+		kind, value := propertyValue(fm.Meta[key])
+		properties = append(properties, Property{Key: key, Type: kind, Value: value, Text: propertyText(kind, value)})
+	}
+	return properties
+}
+
+func propertyText(kind string, value any) string {
+	if kind == "string" || kind == "date" || kind == "number" {
+		return fmt.Sprint(value)
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "(unavailable)"
+	}
+	return string(encoded)
+}
+
+func propertyValue(value any) (string, any) {
+	switch value := value.(type) {
+	case nil:
+		return "null", nil
+	case bool:
+		return "bool", value
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return "number", value
+	case float32:
+		return "number", jsonSafeFloat(float64(value), value)
+	case float64:
+		return "number", jsonSafeFloat(value, value)
+	case string:
+		return "string", value
+	case time.Time:
+		return "date", value.Format(time.RFC3339)
+	case []any:
+		items := make([]any, len(value))
+		for i := range value {
+			_, items[i] = propertyValue(value[i])
+		}
+		return "list", items
+	case map[string]any:
+		object := make(map[string]any, len(value))
+		for key, item := range value {
+			_, object[key] = propertyValue(item)
+		}
+		return "object", object
+	default:
+		// yaml.v3 should not produce other values when decoding into any, but
+		// stringifying keeps the API encodable if that contract ever changes.
+		return "string", fmt.Sprint(value)
+	}
+}
+
+func jsonSafeFloat(value float64, finite any) any {
+	switch {
+	case math.IsNaN(value):
+		return ".nan"
+	case math.IsInf(value, 1):
+		return ".inf"
+	case math.IsInf(value, -1):
+		return "-.inf"
+	default:
+		return finite
+	}
 }
 
 var fmDelim = []byte("---")

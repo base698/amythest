@@ -79,7 +79,7 @@ func (c *Client) credentials() (user, password string, err error) {
 	}
 	values, ferr := parseEnvFile(c.cfg.EnvFile)
 	if ferr != nil {
-		return "", "", fmt.Errorf("no credentials: set KANBAN_USERNAME/KANBAN_PASSWORD or make %s readable", c.cfg.EnvFile)
+		return "", "", ErrMissingCredentials
 	}
 	if user == "" {
 		user = values["KANBAN_USERNAME"]
@@ -88,7 +88,7 @@ func (c *Client) credentials() (user, password string, err error) {
 		password = values["KANBAN_PASSWORD"]
 	}
 	if user == "" || password == "" {
-		return "", "", fmt.Errorf("KANBAN_USERNAME/KANBAN_PASSWORD not found in %s", c.cfg.EnvFile)
+		return "", "", ErrMissingCredentials
 	}
 	return user, password, nil
 }
@@ -114,7 +114,7 @@ func (c *Client) login(ctx context.Context) (*session, error) {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("cannot reach %s: %w", c.cfg.Endpoint, err)
+		return nil, wrapUnavailableTransport(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

@@ -150,6 +150,7 @@ func deleteNote(tx *sql.Tx, slug string) error {
 		`DELETE FROM list_items WHERE slug=?`,
 		`DELETE FROM render_cache WHERE slug=?`,
 		`DELETE FROM notes_fts WHERE slug=?`,
+		`DELETE FROM retrieval_fts WHERE parent_slug=?`,
 	} {
 		if _, err := tx.Exec(q, slug); err != nil {
 			return err
@@ -197,6 +198,9 @@ func upsertNote(tx *sql.Tx, v *vault.Vault, n *vault.Note, res *markdown.Result,
 	}
 	if _, err := tx.Exec(`INSERT INTO render_cache(slug,hash,html,toc,rendered_at) VALUES(?,?,?,?,?)`,
 		n.Slug, n.Hash, []byte(res.HTML), string(tocJSON), time.Now().Unix()); err != nil {
+		return err
+	}
+	if err := indexRetrieval(tx, v, n, res.Plain, tags, noteTasks, archived, archivedReason); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`INSERT INTO notes_fts(slug,title,content,tags) VALUES(?,?,?,?)`,

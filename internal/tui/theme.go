@@ -188,6 +188,9 @@ func applyTheme(t Theme) {
 	searchHitStyle = lipgloss.NewStyle().Bold(true).Foreground(c(t.SearchFg)).Background(c(t.SearchBg))
 	linkStyle = lipgloss.NewStyle().Underline(true).Foreground(c(t.Link))
 	dangerStyle = lipgloss.NewStyle().Bold(true).Foreground(c(t.DangerFg)).Background(c(t.DangerBg))
+	alertPanelStyle = lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).BorderForeground(c(t.DangerBg)).
+		Padding(0, 1)
 
 	columnStyle = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Border)).
