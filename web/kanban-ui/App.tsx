@@ -351,7 +351,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
         </nav>
         <div className="top-actions">
           <button className="quiet" onClick={() => setNewBoardOpen(true)} type="button">New board</button>
-          <a href={NOTES_BASE}>Notes</a>
+          <a className="notes-home-link" href={NOTES_BASE} aria-label="Up to Notes" title="Up to Notes">↑ Notes</a>
           <button className="quiet" onClick={logout} type="button">Sign out</button>
         </div>
       </header>
