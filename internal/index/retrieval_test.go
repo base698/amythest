@@ -11,6 +11,8 @@ import (
 func TestUnifiedRetrievalDatesStemsAliasesAndIncrementalCards(t *testing.T) {
 	root := t.TempDir()
 	writeNote(t, root, "Robots/2026-07-14.md", "---\ntitle: Motion experiment\naliases: [Ratbot]\n---\nTracing routes and walking with a camera.\n- [ ] Calibrate camera\n")
+	writeNote(t, root, "Education/short.md", "---\ntitle: Course A\n---\nGATech coursework.\n")
+	writeNote(t, root, "Education/long.md", "---\ntitle: Course B\n---\nGeorgia Tech coursework.\n")
 	writeNote(t, root, "kanban/operations/board.md", `---
 kanban: 4
 name: operations
@@ -39,6 +41,12 @@ Trace paths using the camera.
 		}
 	}
 	reconcile()
+	for _, q := range []string{"GATech type:note", "Georgia Tech type:note", `"Georgia Tech" type:note`} {
+		rows, e := db.Search(q, 50, false)
+		if e != nil || len(rows) != 2 {
+			t.Fatalf("bidirectional phrase alias %s: %v %v", q, rows, e)
+		}
+	}
 	for _, q := range []string{"trace", "walk", "vision", "Ratbot", "robotics after:2026-07-01 before:2026-07-31"} {
 		rows, e := db.Search(q, 50, false)
 		if e != nil || len(rows) == 0 {
