@@ -79,6 +79,9 @@ func HandlerNoAuth(deps Deps) http.Handler {
 // ---- notes ----
 
 type searchIn struct {
+	StartDate       string `json:"start_date,omitempty" jsonschema:"inclusive absolute source date YYYY-MM-DD"`
+	EndDate         string `json:"end_date,omitempty" jsonschema:"inclusive absolute source date YYYY-MM-DD"`
+	Kind            string `json:"kind,omitempty" jsonschema:"optional source type: note, card, task, or job"`
 	Query           string `json:"query" jsonschema:"the search text; #tag terms restrict to tags"`
 	Limit           int    `json:"limit,omitempty" jsonschema:"max results (default 10)"`
 	IncludeArchived bool   `json:"include_archived,omitempty" jsonschema:"include archived notes and kanban done cards (default false)"`
@@ -146,13 +149,13 @@ type graphOut struct {
 
 func registerNoteTools(server *sdk.Server, deps Deps) {
 	sdk.AddTool(server, &sdk.Tool{Name: "search_notes",
-		Description: "Full-text search over the notes vault (FTS5). Returns slugs, titles, and highlighted excerpts. Archived notes (frontmatter status or kanban done cards) are excluded unless include_archived is set."},
+		Description: "Incremental stemmed full-text search over notes, individual Kanban cards, tasks, and filed job notes, with related project terms and absolute source-date filters. Returns source kind, date and date provenance, direct relative URL, slug, and excerpt. Source date is not proof that work happened on that day. Archived sources require include_archived. Optional query syntax: after:YYYY-MM-DD before:YYYY-MM-DD type:card. This is lexical retrieval, not semantic synthesis."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in searchIn) (*sdk.CallToolResult, searchOut, error) {
 			limit := in.Limit
 			if limit <= 0 {
 				limit = 10
 			}
-			res, err := deps.DB.Search(in.Query, limit, in.IncludeArchived)
+			res, err := deps.DB.SearchWithOptions(in.Query, index.SearchOptions{Limit: limit, IncludeArchived: in.IncludeArchived, StartDate: in.StartDate, EndDate: in.EndDate, Kind: in.Kind})
 			if err != nil {
 				return nil, searchOut{}, err
 			}

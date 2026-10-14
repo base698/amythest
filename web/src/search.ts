@@ -8,6 +8,9 @@
 import { matchSlashCommands, parseSlashQuery, type SlashCommand } from "./slashCommands"
 
 type SearchResult = {
+  url?: string
+  kind?: string
+  date?: string
   slug: string
   title: string
   excerpt: string
@@ -54,7 +57,7 @@ export function setupSearch() {
       window.location.href = commands[selected].href({ base: baseURL(), now: new Date() })
     } else if (e.key === "Enter" && results[selected]) {
       close()
-      window.location.href = `${baseURL()}${encodeSlug(results[selected].slug)}`
+      window.location.href = resultURL(results[selected])
     }
   })
 
@@ -142,7 +145,7 @@ function render() {
     const li = document.createElement("li")
     li.className = i === selected ? "selected" : ""
     const a = document.createElement("a")
-    a.href = `${baseURL()}${encodeSlug(r.slug)}`
+    a.href = resultURL(r)
     const title = document.createElement("div")
     title.className = "result-title"
     title.textContent = r.title
@@ -155,7 +158,10 @@ function render() {
     const excerpt = document.createElement("div")
     excerpt.className = "result-excerpt"
     excerpt.innerHTML = r.excerpt // server-generated snippet with <b> marks
-    a.append(title, excerpt)
+    const source = document.createElement("div")
+    source.className = "result-excerpt"
+    source.textContent = [r.kind, r.date].filter(Boolean).join(" · ")
+    a.append(title, source, excerpt)
     li.append(a)
     li.addEventListener("mouseenter", () => {
       if (selected !== i) {
@@ -179,7 +185,10 @@ function renderCommands(l: HTMLElement) {
     const excerpt = document.createElement("div")
     excerpt.className = "result-excerpt"
     excerpt.textContent = c.description
-    a.append(title, excerpt)
+    const source = document.createElement("div")
+    source.className = "result-excerpt"
+    source.textContent = [r.kind, r.date].filter(Boolean).join(" · ")
+    a.append(title, source, excerpt)
     li.append(a)
     li.addEventListener("mouseenter", () => {
       if (selected !== i) {
@@ -198,4 +207,10 @@ function encodeSlug(slug: string): string {
 function baseURL(): string {
   const base = document.body.dataset.base || "/"
   return base.endsWith("/") ? base : base + "/"
+}
+
+function resultURL(r: SearchResult): string {
+  // All source links stay under the configured Amythest mount.
+  const target = r.url && !/^(?:[a-z]+:|\/|\\)/i.test(r.url) && !r.url.split(/[/?#]/).includes('..') ? r.url : encodeSlug(r.slug)
+  return `${baseURL()}${target}`
 }
