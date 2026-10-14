@@ -28,6 +28,7 @@ type fakeServer struct {
 	toggleCode       int
 	toggleCalls      int
 	contentIndexHits int
+	propertyVersion  string
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -166,6 +167,23 @@ func newFakeServer(t *testing.T) *fakeServer {
 			{"slug": "Garden", "title": "Garden", "path": "Garden.md", "mtime": 1756000000, "size": 120},
 			{"slug": "Home", "title": "Home", "path": "Home.md", "mtime": 1756000500, "size": 80},
 		})
+	}))
+	mux.HandleFunc("GET /api/note", authed(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"slug": "Garden", "title": "Garden", "path": "Garden.md", "markdown": "# Garden\n", "version": strings.Repeat("a", 64),
+			"properties": []map[string]any{{"key": "tasks", "type": "bool", "value": false}},
+		})
+	}))
+	mux.HandleFunc("POST /api/notes/property", authed(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			ExpectedVersion string `json:"expectedVersion"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		fs.propertyVersion = payload.ExpectedVersion
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	}))
 	mux.HandleFunc("GET /api/bases", authed(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]string{"Projects"})
@@ -319,6 +337,46 @@ func TestUnauthorizedTriggersExactlyOneReloginAndRetry(t *testing.T) {
 	}
 	if srv.logins != 2 { // initial login + re-login after the injected 401
 		t.Fatalf("logins = %d", srv.logins)
+	}
+}
+
+func TestForbiddenStaleCSRFRetriesWithFreshLoginToken(t *testing.T) {
+	logins := 0
+	var seenTokens []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /kanban/api/login", func(w http.ResponseWriter, _ *http.Request) {
+		logins++
+		csrf := "fresh-token"
+		if logins == 1 {
+			csrf = "stale-token"
+		}
+		http.SetCookie(w, &http.Cookie{Name: "amythest_kanban_session", Value: "tok", Path: "/"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"user": "smoke", "csrf": csrf})
+	})
+	mux.HandleFunc("POST /api/notes/property", func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get("X-CSRF-Token")
+		seenTokens = append(seenTokens, token)
+		if token == "stale-token" {
+			http.Error(w, "invalid csrf token", http.StatusForbidden)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	t.Setenv("KANBAN_USERNAME", "smoke")
+	t.Setenv("KANBAN_PASSWORD", "smoketest123")
+	client := New(Config{Endpoint: server.URL, SessionFile: filepath.Join(t.TempDir(), "session.json")})
+
+	err := client.SetNoteProperty(context.Background(), "Garden", "status", "done", "string", strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logins != 2 {
+		t.Fatalf("logins = %d, want initial login plus one retry login", logins)
+	}
+	if len(seenTokens) != 2 || seenTokens[0] != "stale-token" || seenTokens[1] != "fresh-token" {
+		t.Fatalf("CSRF tokens = %v, want [stale-token fresh-token]", seenTokens)
 	}
 }
 
@@ -603,6 +661,35 @@ func TestContentIndexCachesAndComputesBacklinks(t *testing.T) {
 	}
 	if srv.contentIndexHits != 1 {
 		t.Fatalf("contentIndex fetched %d times, want 1 (cached)", srv.contentIndexHits)
+	}
+}
+
+func TestGetNotePreservesTypedFalseProperty(t *testing.T) {
+	srv := newFakeServer(t)
+	note, err := testClient(t, srv).GetNote(context.Background(), "Garden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(note.Properties) != 1 {
+		t.Fatalf("properties = %#v", note.Properties)
+	}
+	property := note.Properties[0]
+	if property.Key != "tasks" || property.Type != "bool" || property.Value != false {
+		t.Fatalf("property = %#v", property)
+	}
+}
+
+func TestSetNotePropertyCarriesExactWholeNoteVersionAndCSRF(t *testing.T) {
+	srv := newFakeServer(t)
+	version := strings.Repeat("d", 64)
+	if err := testClient(t, srv).SetNoteProperty(context.Background(), "Garden", "tasks", "", "bool", version); err != nil {
+		t.Fatal(err)
+	}
+	if srv.propertyVersion != version {
+		t.Fatalf("expectedVersion = %q, want %q", srv.propertyVersion, version)
+	}
+	if got := srv.sawCSRF["/api/notes/property"]; got != "csrf-token" {
+		t.Fatalf("property write CSRF = %q, want csrf-token", got)
 	}
 }
 
