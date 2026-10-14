@@ -370,6 +370,8 @@
 }
 
 /* Board organization, metadata, and persisted card focus. */
+.top-actions .notes-home-link { display: inline-flex; align-items: center; min-height: 38px; white-space: nowrap; color: var(--text); }
+.top-actions { flex-shrink: 0; }
 .board-tabs { min-width: 0; overflow-x: auto; scrollbar-width: thin; }
 .board-tabs button { align-items: center; display: inline-flex; gap: 4px; white-space: nowrap; }
 .board-tabs button .board-tab-icon { background: transparent; border: 0; font-size: 15px; margin: 0 2px 0 0; padding: 0; }
