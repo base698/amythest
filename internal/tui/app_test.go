@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -76,6 +78,133 @@ func TestAppRendersTasksNavigatesToBoardsAndBack(t *testing.T) {
 	_, cmd = app.Update(keyMsg("q"))
 	if cmd == nil {
 		t.Fatal("expected quit command")
+	}
+}
+
+func TestMissingCredentialsRenderPersistentSafeInBodyPanel(t *testing.T) {
+	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
+	app := NewApp(client, source.NewRegistry())
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	secret := "do-not-render-this-secret"
+	app.Update(errMsg{err: fmt.Errorf("%w: %s", apiclient.ErrMissingCredentials, secret)})
+
+	frame := app.View()
+	if !strings.Contains(frame, "AMYTHEST SETUP REQUIRED") ||
+		!strings.Contains(frame, "Configure the Amythest login credentials") ||
+		!strings.Contains(frame, "r to retry") {
+		t.Fatalf("missing prominent credential guidance:\n%s", frame)
+	}
+	if strings.Contains(frame, secret) {
+		t.Fatalf("credential error leaked raw details:\n%s", frame)
+	}
+	if !strings.Contains(frame, "http://test.example") {
+		t.Fatalf("normal status bar was replaced:\n%s", frame)
+	}
+
+	app.Update(keyMsg("j"))
+	if !strings.Contains(app.View(), "AMYTHEST SETUP REQUIRED") {
+		t.Fatal("credential panel must persist across keypresses")
+	}
+}
+
+func TestUnavailableServiceRendersDistinctSafeInBodyPanel(t *testing.T) {
+	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
+	app := NewApp(client, source.NewRegistry())
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	secret := "private-transport-detail"
+	app.Update(errMsg{err: fmt.Errorf("%w: %s", apiclient.ErrUnavailable, secret)})
+
+	frame := app.View()
+	if !strings.Contains(frame, "AMYTHEST SERVICE UNAVAILABLE") ||
+		!strings.Contains(frame, "Check the configured endpoint and Amythest service") ||
+		!strings.Contains(frame, "r to retry") {
+		t.Fatalf("missing prominent availability guidance:\n%s", frame)
+	}
+	if strings.Contains(frame, "AMYTHEST SETUP REQUIRED") || strings.Contains(frame, secret) {
+		t.Fatalf("availability panel is misclassified or leaks details:\n%s", frame)
+	}
+	app.Update(keyMsg("j"))
+	if !strings.Contains(app.View(), "AMYTHEST SERVICE UNAVAILABLE") {
+		t.Fatal("availability panel must persist across keypresses")
+	}
+}
+
+func TestUnclassifiedErrorClearsStaleClassifiedAlert(t *testing.T) {
+	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
+	app := NewApp(client, source.NewRegistry())
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	app.Update(errMsg{err: apiclient.ErrUnavailable})
+	if !strings.Contains(app.View(), "AMYTHEST SERVICE UNAVAILABLE") {
+		t.Fatal("precondition: availability panel not rendered")
+	}
+
+	app.Update(errMsg{err: errors.New("new unclassified failure")})
+	frame := app.View()
+	if strings.Contains(frame, "AMYTHEST SERVICE UNAVAILABLE") {
+		t.Fatalf("stale classified alert remained after a newer unclassified error:\n%s", frame)
+	}
+	if !strings.Contains(frame, "error: new unclassified failure") {
+		t.Fatalf("new unclassified error missing from status:\n%s", frame)
+	}
+}
+
+func TestClassifiedErrorsReplacePreviousClassifiedAlert(t *testing.T) {
+	tests := []struct {
+		name      string
+		firstErr  error
+		firstText string
+		secondErr error
+		wantText  string
+	}{
+		{
+			name:      "unavailable to missing credentials",
+			firstErr:  apiclient.ErrUnavailable,
+			firstText: "AMYTHEST SERVICE UNAVAILABLE",
+			secondErr: apiclient.ErrMissingCredentials,
+			wantText:  "AMYTHEST SETUP REQUIRED",
+		},
+		{
+			name:      "missing credentials to unavailable",
+			firstErr:  apiclient.ErrMissingCredentials,
+			firstText: "AMYTHEST SETUP REQUIRED",
+			secondErr: apiclient.ErrUnavailable,
+			wantText:  "AMYTHEST SERVICE UNAVAILABLE",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
+			app := NewApp(client, source.NewRegistry())
+			app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+			app.Update(errMsg{err: tt.firstErr})
+			if !strings.Contains(app.View(), tt.firstText) {
+				t.Fatalf("precondition: first classified alert %q not rendered", tt.firstText)
+			}
+
+			app.Update(errMsg{err: tt.secondErr})
+			frame := app.View()
+			if strings.Contains(frame, tt.firstText) {
+				t.Fatalf("previous classified alert %q remained:\n%s", tt.firstText, frame)
+			}
+			if !strings.Contains(frame, tt.wantText) {
+				t.Fatalf("replacement classified alert %q missing:\n%s", tt.wantText, frame)
+			}
+		})
+	}
+}
+
+func TestSuccessfulReloadClearsPersistentAmythestPanel(t *testing.T) {
+	client := apiclient.New(apiclient.Config{Endpoint: "http://test.example"})
+	app := NewApp(client, source.NewRegistry())
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	app.Update(errMsg{err: apiclient.ErrUnavailable})
+	if !strings.Contains(app.View(), "AMYTHEST SERVICE UNAVAILABLE") {
+		t.Fatal("precondition: availability panel not rendered")
+	}
+
+	app.Update(todayLoadedMsg{})
+	if strings.Contains(app.View(), "AMYTHEST SERVICE UNAVAILABLE") {
+		t.Fatal("successful retry must clear the stale availability panel")
 	}
 }
 

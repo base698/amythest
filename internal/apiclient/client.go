@@ -27,12 +27,43 @@ type APIError struct {
 
 func (e *APIError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Status, e.Message) }
 
-// ErrConflict matches 409 responses via errors.Is — the optimistic-locking
-// signal from task writes ("task file changed; refresh and retry").
-var ErrConflict = errors.New("conflict")
+var (
+	// ErrConflict matches 409 responses via errors.Is — the optimistic-locking
+	// signal from task writes ("task file changed; refresh and retry").
+	ErrConflict = errors.New("conflict")
+	// ErrMissingCredentials identifies local authentication configuration
+	// failures without including credential values or file-system details.
+	ErrMissingCredentials = errors.New("amythest credentials are not configured")
+	// ErrUnavailable identifies endpoint, network, and service availability
+	// failures without exposing endpoint or transport details.
+	ErrUnavailable = errors.New("amythest service is unavailable")
+)
+
+type unavailableTransportError struct {
+	cause error
+}
+
+func (e *unavailableTransportError) Error() string {
+	return ErrUnavailable.Error() + ": connection failed"
+}
+
+func (e *unavailableTransportError) Unwrap() []error {
+	return []error{ErrUnavailable, e.cause}
+}
+
+func wrapUnavailableTransport(err error) error {
+	return &unavailableTransportError{cause: err}
+}
 
 func (e *APIError) Is(target error) bool {
-	return target == ErrConflict && e.Status == http.StatusConflict
+	switch target {
+	case ErrConflict:
+		return e.Status == http.StatusConflict
+	case ErrUnavailable:
+		return e.Status >= http.StatusInternalServerError
+	default:
+		return false
+	}
 }
 
 type Client struct {
@@ -117,7 +148,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		}
 		resp, err := c.http.Do(req)
 		if err != nil {
-			return fmt.Errorf("cannot reach %s: %w", c.cfg.Endpoint, err)
+			return wrapUnavailableTransport(err)
 		}
 		if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && attempt == 0 {
 			resp.Body.Close()

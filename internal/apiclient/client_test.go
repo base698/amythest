@@ -21,9 +21,9 @@ var frozenNow = time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 // fakeServer is a minimal amythest stand-in that records auth headers.
 type fakeServer struct {
 	*httptest.Server
-	logins      int
-	sawCSRF     map[string]string // path -> X-CSRF-Token header value
-	failFirst        bool // return 401 on the first authed request
+	logins           int
+	sawCSRF          map[string]string // path -> X-CSRF-Token header value
+	failFirst        bool              // return 401 on the first authed request
 	failedOnce       bool
 	toggleCode       int
 	toggleCalls      int
@@ -455,6 +455,112 @@ func TestToggleConflictSurfacesErrConflict(t *testing.T) {
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusConflict {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestMissingCredentialsReturnsSafeTypedError(t *testing.T) {
+	t.Setenv("KANBAN_USERNAME", "")
+	t.Setenv("KANBAN_PASSWORD", "")
+	secretPath := filepath.Join(t.TempDir(), "private-credentials")
+	c := New(Config{
+		Endpoint:    "http://test.example",
+		Timeout:     time.Second,
+		SessionFile: filepath.Join(t.TempDir(), "session.json"),
+		EnvFile:     secretPath,
+	})
+
+	_, err := c.ListBoards(context.Background())
+	if !errors.Is(err, ErrMissingCredentials) {
+		t.Fatalf("err = %v, want ErrMissingCredentials", err)
+	}
+	if strings.Contains(err.Error(), secretPath) {
+		t.Fatalf("error leaks credential file path: %q", err)
+	}
+	if strings.Contains(err.Error(), "KANBAN_PASSWORD") {
+		t.Fatalf("error exposes sensitive environment details: %q", err)
+	}
+}
+
+func TestCanceledLoginPreservesContextIdentity(t *testing.T) {
+	t.Setenv("KANBAN_USERNAME", "user")
+	t.Setenv("KANBAN_PASSWORD", "password")
+	c := New(Config{
+		Endpoint:    "http://test.example",
+		Timeout:     time.Second,
+		SessionFile: filepath.Join(t.TempDir(), "session.json"),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := c.ListBoards(ctx)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled identity preserved", err)
+	}
+}
+
+func TestExpiredRequestDeadlinePreservesContextIdentity(t *testing.T) {
+	c := New(Config{Endpoint: "http://test.example", Timeout: time.Second})
+	c.session = &session{
+		Cookie: "amythest_kanban_session=token",
+		CSRF:   "csrf-token",
+		Exp:    float64(time.Now().Add(time.Hour).Unix()),
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	_, err := c.ListBoards(ctx)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded identity preserved", err)
+	}
+}
+
+func TestNetworkFailureReturnsTypedUnavailableError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	endpoint := srv.URL
+	srv.Close()
+	t.Setenv("KANBAN_USERNAME", "private-user")
+	t.Setenv("KANBAN_PASSWORD", "private-password")
+	c := New(Config{
+		Endpoint:    endpoint,
+		Timeout:     time.Second,
+		SessionFile: filepath.Join(t.TempDir(), "session.json"),
+	})
+
+	_, err := c.ListBoards(context.Background())
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	if strings.Contains(err.Error(), "private-user") || strings.Contains(err.Error(), "private-password") {
+		t.Fatalf("error leaks credentials: %q", err)
+	}
+}
+
+func TestLoginServiceFailureReturnsTypedUnavailableError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "temporarily down", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	t.Setenv("KANBAN_USERNAME", "user")
+	t.Setenv("KANBAN_PASSWORD", "password")
+	c := New(Config{
+		Endpoint:    srv.URL,
+		Timeout:     time.Second,
+		SessionFile: filepath.Join(t.TempDir(), "session.json"),
+	})
+
+	_, err := c.ListBoards(context.Background())
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusServiceUnavailable {
+		t.Fatalf("err = %v, want APIError status 503", err)
 	}
 }
 

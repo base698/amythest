@@ -20,9 +20,9 @@ import "context"
 
 // Item is a normalized, render-ready row from any source.
 type Item struct {
-	Source  string   // registry name: "amythest", "jira", "azdo"
-	ID      string   // stable within the source: "slug#line", card ID, PROJ-42, AB#1234
-	Kind    string   // "task" | "card" | "issue" — drives the [kind] badge
+	Source  string // registry name: "amythest", "jira", "azdo"
+	ID      string // stable within the source: "slug#line", card ID, PROJ-42, AB#1234
+	Kind    string // "task" | "card" | "issue" — drives the [kind] badge
 	Title   string
 	Due     string // YYYY-MM-DD, "" when none
 	Done    bool
@@ -39,6 +39,8 @@ const (
 	StateOK            State = "connected"
 	StateStubbed       State = "stubbed"
 	StateMisconfigured State = "missing-credentials"
+	StateUnavailable   State = "unavailable"
+	StateError         State = "error"
 )
 
 type Health struct {

@@ -4,6 +4,7 @@ package amythest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -36,8 +37,13 @@ func (s *Source) Client() *apiclient.Client { return s.client }
 
 func (s *Source) Health(ctx context.Context) source.Health {
 	boards, err := s.client.ListBoards(ctx)
-	if err != nil {
-		return source.Health{State: source.StateMisconfigured, Detail: err.Error()}
+	switch {
+	case errors.Is(err, apiclient.ErrMissingCredentials):
+		return source.Health{State: source.StateMisconfigured, Detail: "Amythest login credentials are missing. Configure them, then retry."}
+	case errors.Is(err, apiclient.ErrUnavailable):
+		return source.Health{State: source.StateUnavailable, Detail: "Amythest could not be reached. Check the endpoint and service, then retry."}
+	case err != nil:
+		return source.Health{State: source.StateError, Detail: "Amythest returned an unexpected error. Check the service logs, then retry."}
 	}
 	return source.Health{State: source.StateOK, Detail: fmt.Sprintf("%s · %d boards", s.client.Endpoint(), len(boards))}
 }
