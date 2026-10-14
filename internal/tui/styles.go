@@ -16,9 +16,10 @@ var (
 	dueStyle         lipgloss.Style
 	blockedStyle     lipgloss.Style
 
-	searchHitStyle lipgloss.Style
-	linkStyle      lipgloss.Style
-	dangerStyle    lipgloss.Style
+	searchHitStyle  lipgloss.Style
+	linkStyle       lipgloss.Style
+	dangerStyle     lipgloss.Style
+	alertPanelStyle lipgloss.Style
 
 	columnStyle      lipgloss.Style
 	columnFocusStyle lipgloss.Style
