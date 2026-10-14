@@ -27,12 +27,43 @@ type APIError struct {
 
 func (e *APIError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Status, e.Message) }
 
-// ErrConflict matches 409 responses via errors.Is — the optimistic-locking
-// signal from task writes ("task file changed; refresh and retry").
-var ErrConflict = errors.New("conflict")
+var (
+	// ErrConflict matches 409 responses via errors.Is — the optimistic-locking
+	// signal from task writes ("task file changed; refresh and retry").
+	ErrConflict = errors.New("conflict")
+	// ErrMissingCredentials identifies local authentication configuration
+	// failures without including credential values or file-system details.
+	ErrMissingCredentials = errors.New("amythest credentials are not configured")
+	// ErrUnavailable identifies endpoint, network, and service availability
+	// failures without exposing endpoint or transport details.
+	ErrUnavailable = errors.New("amythest service is unavailable")
+)
+
+type unavailableTransportError struct {
+	cause error
+}
+
+func (e *unavailableTransportError) Error() string {
+	return ErrUnavailable.Error() + ": connection failed"
+}
+
+func (e *unavailableTransportError) Unwrap() []error {
+	return []error{ErrUnavailable, e.cause}
+}
+
+func wrapUnavailableTransport(err error) error {
+	return &unavailableTransportError{cause: err}
+}
 
 func (e *APIError) Is(target error) bool {
-	return target == ErrConflict && e.Status == http.StatusConflict
+	switch target {
+	case ErrConflict:
+		return e.Status == http.StatusConflict
+	case ErrUnavailable:
+		return e.Status >= http.StatusInternalServerError
+	default:
+		return false
+	}
 }
 
 type Client struct {
@@ -86,9 +117,9 @@ func (c *Client) ensureSession(ctx context.Context, force bool) (*session, error
 }
 
 // do performs one authenticated request. path is relative to the endpoint
-// (e.g. "/api/tasks" or "/kanban/api/boards"). Non-GET kanban requests carry
-// the CSRF token; notes-side task writes need only the cookie. On 401/403 it
-// re-logs-in once and retries, mirroring kanban.py.
+// (e.g. "/api/tasks" or "/kanban/api/boards"). Non-GET kanban requests and
+// note-property writes carry the CSRF token. On 401/403 it re-logs-in once and
+// retries, mirroring kanban.py.
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	sess, err := c.ensureSession(ctx, false)
 	if err != nil {
@@ -112,12 +143,12 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
-		if method != http.MethodGet && strings.HasPrefix(path, "/kanban/") {
+		if method != http.MethodGet && (strings.HasPrefix(path, "/kanban/") || path == "/api/notes/property") {
 			req.Header.Set("X-CSRF-Token", sess.CSRF)
 		}
 		resp, err := c.http.Do(req)
 		if err != nil {
-			return fmt.Errorf("cannot reach %s: %w", c.cfg.Endpoint, err)
+			return wrapUnavailableTransport(err)
 		}
 		if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && attempt == 0 {
 			resp.Body.Close()
@@ -367,13 +398,16 @@ func (c *Client) SaveNote(ctx context.Context, slug, markdown, expectedVersion s
 	return c.do(ctx, http.MethodPut, "/api/note", body, nil)
 }
 
-// SetNoteProperty writes one frontmatter property on a note.
-func (c *Client) SetNoteProperty(ctx context.Context, slug, key, value string) error {
+// SetNoteProperty writes one frontmatter property on a note. An empty value
+// clears the property.
+func (c *Client) SetNoteProperty(ctx context.Context, slug, key, value, valueType, expectedVersion string) error {
 	body := struct {
-		Slug  string `json:"slug"`
-		Key   string `json:"key"`
-		Value string `json:"value"`
-	}{slug, key, value}
+		Slug            string `json:"slug"`
+		Key             string `json:"key"`
+		Value           string `json:"value"`
+		Type            string `json:"type,omitempty"`
+		ExpectedVersion string `json:"expectedVersion"`
+	}{slug, key, value, valueType, expectedVersion}
 	return c.do(ctx, http.MethodPost, "/api/notes/property", body, nil)
 }
 
@@ -422,12 +456,20 @@ func (c *Client) SearchNotes(ctx context.Context, query string) ([]SearchResult,
 	return results, nil
 }
 
+type NoteProperty struct {
+	Key   string `json:"key"`
+	Type  string `json:"type"`
+	Value any    `json:"value"`
+	Text  string `json:"text"`
+}
+
 type Note struct {
-	Slug     string `json:"slug"`
-	Title    string `json:"title"`
-	Path     string `json:"path"`
-	Markdown string `json:"markdown"`
-	Version  string `json:"version"` // whole-file hash; SaveNote's lock
+	Slug       string         `json:"slug"`
+	Title      string         `json:"title"`
+	Path       string         `json:"path"`
+	Markdown   string         `json:"markdown"`
+	Version    string         `json:"version"` // whole-file hash; SaveNote's lock
+	Properties []NoteProperty `json:"properties"`
 }
 
 // GetNote fetches a note's raw markdown. ref may be a slug or a raw

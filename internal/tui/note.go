@@ -2,11 +2,15 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/base698/amythest/internal/apiclient"
@@ -15,6 +19,7 @@ import (
 )
 
 var wikilinkRe = regexp.MustCompile(`\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]`)
+var editablePropertyKeyRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
 
 // noteView is the simplified read view of one note: wrapped markdown,
 // / search, tab-cycling through [[wikilinks]] with enter to follow, "b" for
@@ -27,6 +32,8 @@ type noteEditorDoneMsg struct {
 }
 
 type noteSavedMsg struct{ note *apiclient.Note }
+
+type notePropertySavedMsg struct{ slug string }
 
 // noteReloadedMsg re-reads a note after something else rewrote it.
 type noteReloadedMsg struct{ note *apiclient.Note }
@@ -93,6 +100,15 @@ type noteView struct {
 
 	blocks []taskBlock // live-rendered ```tasks queries
 
+	propsOpen bool
+	propAt    int
+	propInput textinput.Model
+	propping  bool
+	propKey   string // editor identity survives property reordering on reload
+	// propVersion is the exact whole-note version whose value the editor
+	// displayed. A concurrent reload must not silently upgrade its write lock.
+	propVersion string
+
 	// Checkbox lines in the note body are actionable, not just text: t
 	// grabs them, j/k walk them, space toggles, D cancels then deletes. The
 	// tasks are parsed from the note's own markdown, so their Line/Text
@@ -132,7 +148,9 @@ type noteAgentsMsg struct {
 }
 
 func newNoteView(client *apiclient.Client, note *apiclient.Note) *noteView {
-	v := &noteView{client: client, find: newFinder()}
+	input := textinput.New()
+	input.CharLimit = 10_000
+	v := &noteView{client: client, find: newFinder(), propInput: input}
 	v.rebuild(note)
 	return v
 }
@@ -142,6 +160,32 @@ func newNoteView(client *apiclient.Client, note *apiclient.Note) *noteView {
 // line numbers or a stale version lock behind.
 func (v *noteView) rebuild(note *apiclient.Note) {
 	v.note = note
+	sort.SliceStable(v.note.Properties, func(i, j int) bool {
+		return v.note.Properties[i].Key < v.note.Properties[j].Key
+	})
+	if v.propping {
+		rebound := -1
+		for i := range v.note.Properties {
+			if v.note.Properties[i].Key == v.propKey {
+				rebound = i
+				break
+			}
+		}
+		if rebound >= 0 {
+			v.propAt = rebound
+		} else {
+			v.propping = false
+			v.propKey = ""
+			v.propVersion = ""
+			v.propInput.Blur()
+		}
+	}
+	if len(v.note.Properties) == 0 {
+		v.propsOpen = false
+		v.propAt = 0
+	} else if v.propAt >= len(v.note.Properties) {
+		v.propAt = len(v.note.Properties) - 1
+	}
 	v.lines = strings.Split(strings.TrimRight(note.Markdown, "\n"), "\n")
 	v.links = nil
 	for i, line := range v.lines {
@@ -159,9 +203,11 @@ func (v *noteView) rebuild(note *apiclient.Note) {
 	v.taskAt = -1
 }
 
-func (v *noteView) Title() string   { return v.note.Title }
-func (v *noteView) Busy() bool      { return v.busy }
-func (v *noteView) Capturing() bool { return v.find.active() || v.agents.active || v.del.active }
+func (v *noteView) Title() string { return v.note.Title }
+func (v *noteView) Busy() bool    { return v.busy }
+func (v *noteView) Capturing() bool {
+	return v.find.active() || v.agents.active || v.del.active || v.propping
+}
 
 // focusedTask is the task the cursor is on, or nil when none is focused.
 func (v *noteView) focusedTask() *tasks.Task {
@@ -239,6 +285,99 @@ func (v *noteView) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+func terminalSafePropertyText(text string) string {
+	quoted := strconv.QuoteToGraphic(text)
+	return strings.TrimSuffix(strings.TrimPrefix(quoted, `"`), `"`)
+}
+
+func propertyDisplay(property apiclient.NoteProperty) string {
+	if property.Type == "string" || property.Type == "date" || property.Type == "number" {
+		text := property.Text
+		if text == "" {
+			text = fmt.Sprint(property.Value)
+		}
+		return terminalSafePropertyText(text)
+	}
+	encoded, err := json.Marshal(property.Value)
+	if err != nil {
+		return "(unavailable)"
+	}
+	return string(encoded)
+}
+
+func propertyEditValue(property apiclient.NoteProperty) (string, bool) {
+	switch property.Type {
+	case "string", "date", "number":
+		if property.Text != "" {
+			return property.Text, true
+		}
+		return fmt.Sprint(property.Value), true
+	case "bool":
+		return propertyDisplay(property), true
+	case "null":
+		return "", true
+	default:
+		return "", false
+	}
+}
+
+func (v *noteView) handlePropertyInput(msg tea.KeyMsg) (view, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		v.propping = false
+		v.propKey = ""
+		v.propVersion = ""
+		v.propInput.Blur()
+		return v, nil
+	case tea.KeyEnter:
+		if v.propAt < 0 || v.propAt >= len(v.note.Properties) || v.note.Properties[v.propAt].Key != v.propKey {
+			v.propping = false
+			v.propKey = ""
+			v.propVersion = ""
+			v.propInput.Blur()
+			return v, flash("property changed; reopen the editor")
+		}
+		property := v.note.Properties[v.propAt]
+		value, version := v.propInput.Value(), v.propVersion
+		v.propping = false
+		v.propKey = ""
+		v.propVersion = ""
+		v.propInput.Blur()
+		v.busy = true
+		client, slug := v.client, v.note.Slug
+		return v, func() tea.Msg {
+			if err := client.SetNoteProperty(context.Background(), slug, property.Key, value, property.Type, version); err != nil {
+				return fail(err)
+			}
+			return notePropertySavedMsg{slug: slug}
+		}
+	}
+	var cmd tea.Cmd
+	v.propInput, cmd = v.propInput.Update(msg)
+	return v, cmd
+}
+
+func (v *noteView) openPropertyEditor() tea.Cmd {
+	if v.propAt < 0 || v.propAt >= len(v.note.Properties) {
+		return flash("property changed; refresh and retry")
+	}
+	property := v.note.Properties[v.propAt]
+	if !editablePropertyKeyRe.MatchString(property.Key) {
+		return flash("this property key is read-only")
+	}
+	value, editable := propertyEditValue(property)
+	if !editable {
+		return flash("lists and objects are read-only here; edit the note frontmatter directly")
+	}
+	v.propping = true
+	v.propKey = property.Key
+	v.propVersion = v.note.Version
+	v.propInput.Prompt = fmt.Sprintf("set %s (empty clears): ", property.Key)
+	v.propInput.SetValue(value)
+	v.propInput.CursorEnd()
+	return v.propInput.Focus()
+}
+
 func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
 	switch msg := msg.(type) {
 	case openNoteMsg:
@@ -303,6 +442,12 @@ func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.rebuild(msg.note)
 		return v, tea.Batch(v.Init(), flash("note saved ✓"))
 
+	case notePropertySavedMsg:
+		if msg.slug != v.note.Slug {
+			return v, nil
+		}
+		return v, v.reloadCmd()
+
 	case noteReloadedMsg:
 		if msg.note.Slug != v.note.Slug {
 			return v, nil
@@ -351,6 +496,12 @@ func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
 		return v, nil
 
 	case tea.KeyMsg:
+		if v.busy {
+			return v, nil
+		}
+		if v.propping {
+			return v.handlePropertyInput(msg)
+		}
 		if v.del.active {
 			if v.del.handleKey(msg) {
 				v.busy = true
@@ -394,6 +545,29 @@ func (v *noteView) Update(msg tea.Msg) (view, tea.Cmd) {
 				}
 			}
 			return v, nil
+		}
+		if len(v.note.Properties) > 0 {
+			switch msg.String() {
+			case "p":
+				v.propsOpen = !v.propsOpen
+				return v, nil
+			}
+		}
+		if v.propsOpen {
+			switch msg.String() {
+			case "j", "down":
+				if v.propAt < len(v.note.Properties)-1 {
+					v.propAt++
+				}
+				return v, nil
+			case "k", "up":
+				if v.propAt > 0 {
+					v.propAt--
+				}
+				return v, nil
+			case "e", "enter":
+				return v, v.openPropertyEditor()
+			}
 		}
 		switch msg.String() {
 		case "b":
@@ -584,8 +758,29 @@ func (v *noteView) View(width, height int) string {
 		header += "  " + dimStyle.Render(fmt.Sprintf("← %d backlinks (b)", len(v.blLinks)))
 	}
 	b.WriteString(header + "\n\n")
+	propertyLines := 0
+	if len(v.note.Properties) > 0 {
+		if v.propsOpen {
+			b.WriteString(" " + columnTitleStyle.Render(fmt.Sprintf("▾ Properties (%d)", len(v.note.Properties))) + "\n")
+			propertyLines++
+			for i, property := range v.note.Properties {
+				key := terminalSafePropertyText(property.Key)
+				row := fmt.Sprintf("   %-18s %s", key, propertyDisplay(property))
+				if i == v.propAt {
+					row = cursorStyle.Render(" ▸ " + fmt.Sprintf("%-18s %s", key, propertyDisplay(property)))
+				}
+				b.WriteString(row + "\n")
+				propertyLines++
+			}
+			b.WriteString(dimStyle.Render("   j/k choose · e edit · enter edit · empty clears · p collapse") + "\n\n")
+			propertyLines += 2
+		} else {
+			b.WriteString(" " + dimStyle.Render(fmt.Sprintf("▸ Properties (%d) · p expand", len(v.note.Properties))) + "\n\n")
+			propertyLines += 2
+		}
+	}
 	bodyWidth := max(30, width-4)
-	bodyHeight := height - 4
+	bodyHeight := height - 4 - propertyLines
 	if v.del.active {
 		bodyHeight-- // the confirm bar takes a row from the body
 	}
@@ -623,7 +818,9 @@ func (v *noteView) View(width, height int) string {
 	if t := v.focusedTask(); t != nil {
 		hint = fmt.Sprintf(" task %d/%d · j/k move · space toggle · D delete · t release", v.taskAt+1, len(v.tasks))
 	}
-	if bar := v.find.bar(); bar != "" {
+	if v.propping {
+		hint = " " + v.propInput.View()
+	} else if bar := v.find.bar(); bar != "" {
 		hint = " " + bar
 	}
 	if v.del.active {

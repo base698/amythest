@@ -40,6 +40,22 @@ func withSession(t *testing.T, s *Server) func(*http.Request) *http.Request {
 	}
 }
 
+// withSessionCSRF installs auth and stamps both credentials required by
+// browser-style state-changing requests.
+func withSessionCSRF(t *testing.T, s *Server) func(*http.Request) *http.Request {
+	t.Helper()
+	cookie := authorizeTestServer(t, s)
+	session, err := s.kanbanAuth.Verify(cookie.Value, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func(r *http.Request) *http.Request {
+		r.AddCookie(cookie)
+		r.Header.Set("X-CSRF-Token", session.CSRF)
+		return r
+	}
+}
+
 func TestVaultMutationsFailClosedWithoutKanbanAuth(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -60,7 +76,7 @@ func TestVaultMutationsFailClosedWithoutKanbanAuth(t *testing.T) {
 		"/api/tasks/toggle", "/api/tasks/due", "/api/tasks/triage",
 		"/api/tasks/file", "/api/tasks/file/hide", "/api/tasks/move-to-board",
 		"/api/tasks/cancel", "/api/tasks/purge", "/api/tasks/priority",
-		"/api/share/upload", "/api/share/text", "/api/db/query",
+		"/api/notes/property", "/api/share/upload", "/api/share/text", "/api/db/query",
 	} {
 		rec := httptest.NewRecorder()
 		s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, target, strings.NewReader("{}")))

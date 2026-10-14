@@ -1,6 +1,10 @@
 package tui
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -18,6 +22,174 @@ func fixtureNote() *apiclient.Note {
 		Path:  "Projects/Garden.md",
 		Markdown: "# Garden\n\nSee [[Watering Schedule]] and [[Projects/Compost|the compost note]].\n\n" +
 			strings.Repeat("filler line\n", 5) + "Also [[Seed Inventory#spring]] here.\n",
+	}
+}
+
+func TestNoteViewPropertiesExpandAndShowTypedFalse(t *testing.T) {
+	note := fixtureNote()
+	note.Properties = []apiclient.NoteProperty{
+		{Key: "status", Type: "string", Value: "active"},
+		{Key: "tasks", Type: "bool", Value: false},
+	}
+	v := newNoteView(nil, note)
+	collapsed := stripANSI(v.View(100, 30))
+	if !strings.Contains(collapsed, "Properties (2)") || strings.Contains(collapsed, "tasks  false") {
+		t.Fatalf("collapsed properties block:\n%s", collapsed)
+	}
+	v.Update(keyMsg("p"))
+	expanded := stripANSI(v.View(100, 30))
+	if !strings.Contains(expanded, "status") || !strings.Contains(expanded, "tasks") || !strings.Contains(expanded, "false") {
+		t.Fatalf("expanded properties block:\n%s", expanded)
+	}
+	if !strings.Contains(expanded, "e edit") || !strings.Contains(expanded, "empty clears") {
+		t.Fatalf("property keyboard help missing:\n%s", expanded)
+	}
+	v.Update(keyMsg("e"))
+	if !v.Capturing() {
+		t.Fatal("e on an expanded scalar property must open the property editor")
+	}
+	if editor := stripANSI(v.View(100, 30)); !strings.Contains(editor, "set status") {
+		t.Fatalf("property editor missing selected key:\n%s", editor)
+	}
+}
+
+func TestNoteViewEscapesTerminalControlsInPropertyValues(t *testing.T) {
+	note := fixtureNote()
+	note.Properties = []apiclient.NoteProperty{{Key: "cap\x1b[32mtion", Type: "string", Value: "safe\x1b[31mred"}}
+	v := newNoteView(nil, note)
+	v.Update(keyMsg("p"))
+	out := v.View(100, 30)
+	// Styling adds its own ANSI sequences, so inspect the stripped frame: a
+	// frontmatter escape must remain visible text rather than become styling.
+	plain := stripANSI(out)
+	if !strings.Contains(plain, `cap\x1b[32mtion`) || !strings.Contains(plain, `safe\x1b[31mred`) {
+		t.Fatalf("terminal control was not escaped:\n%s", plain)
+	}
+}
+
+func TestNoteViewClearsFalsePropertyThroughSetNoteProperty(t *testing.T) {
+	var got struct {
+		Slug            string `json:"slug"`
+		Key             string `json:"key"`
+		Value           string `json:"value"`
+		Type            string `json:"type"`
+		ExpectedVersion string `json:"expectedVersion"`
+	}
+	var gotCSRF string
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /kanban/api/login", func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "amythest_kanban_session", Value: "token", Path: "/"})
+		json.NewEncoder(w).Encode(map[string]string{"user": "test", "csrf": "csrf-token"})
+	})
+	mux.HandleFunc("POST /api/notes/property", func(w http.ResponseWriter, r *http.Request) {
+		gotCSRF = r.Header.Get("X-CSRF-Token")
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	t.Setenv("KANBAN_USERNAME", "test")
+	t.Setenv("KANBAN_PASSWORD", "test-password")
+	client := apiclient.New(apiclient.Config{Endpoint: server.URL, SessionFile: filepath.Join(t.TempDir(), "session.json")})
+	note := fixtureNote()
+	note.Version = strings.Repeat("e", 64)
+	note.Properties = []apiclient.NoteProperty{{Key: "tasks", Type: "bool", Value: false}}
+	v := newNoteView(client, note)
+	v.Update(keyMsg("p"))
+	v.Update(keyMsg("e"))
+	v.propInput.SetValue("")
+	_, cmd := v.Update(enterMsg())
+	if cmd == nil {
+		t.Fatal("clearing a property must issue a request")
+	}
+	if msg, ok := cmd().(notePropertySavedMsg); !ok || msg.slug != note.Slug {
+		t.Fatalf("save result = %#v", msg)
+	}
+	if got.Slug != note.Slug || got.Key != "tasks" || got.Value != "" || got.Type != "bool" || got.ExpectedVersion != note.Version {
+		t.Fatalf("property payload = %#v", got)
+	}
+	if gotCSRF != "csrf-token" {
+		t.Fatalf("property CSRF = %q", gotCSRF)
+	}
+}
+
+func TestNoteViewBusyGatesPropertyKeys(t *testing.T) {
+	note := fixtureNote()
+	note.Properties = []apiclient.NoteProperty{
+		{Key: "alpha", Type: "string", Value: "one"},
+		{Key: "beta", Type: "string", Value: "two"},
+	}
+	v := newNoteView(nil, note)
+	v.propsOpen = true
+	v.busy = true
+
+	v.Update(keyMsg("j"))
+	v.Update(keyMsg("e"))
+	v.Update(keyMsg("p"))
+	if v.propAt != 0 || v.propping || !v.propsOpen {
+		t.Fatalf("busy property state changed: at=%d propping=%v open=%v", v.propAt, v.propping, v.propsOpen)
+	}
+}
+
+func TestNoteViewReloadRebindsOpenPropertyEditorByKey(t *testing.T) {
+	note := fixtureNote()
+	note.Version = strings.Repeat("a", 64)
+	note.Properties = []apiclient.NoteProperty{
+		{Key: "status", Type: "string", Value: "active"},
+		{Key: "zeta", Type: "string", Value: "last"},
+	}
+	v := newNoteView(nil, note)
+	v.propsOpen = true
+	v.propAt = 0
+	v.openPropertyEditor()
+
+	reloaded := fixtureNote()
+	reloaded.Version = strings.Repeat("b", 64)
+	reloaded.Properties = []apiclient.NoteProperty{
+		{Key: "alpha", Type: "string", Value: "first"},
+		{Key: "status", Type: "string", Value: "active"},
+	}
+	v.Update(noteReloadedMsg{note: reloaded})
+	if !v.propping || v.propAt != 1 || v.note.Properties[v.propAt].Key != "status" {
+		t.Fatalf("editor was not rebound: propping=%v at=%d properties=%#v", v.propping, v.propAt, v.note.Properties)
+	}
+	if v.propVersion != note.Version {
+		t.Fatalf("editor version changed from %q to %q during reload", note.Version, v.propVersion)
+	}
+}
+
+func TestNoteViewReloadCancelsEditorWhenPropertyWasRemoved(t *testing.T) {
+	note := fixtureNote()
+	note.Properties = []apiclient.NoteProperty{{Key: "status", Type: "string", Value: "active"}}
+	v := newNoteView(nil, note)
+	v.propsOpen = true
+	v.openPropertyEditor()
+
+	reloaded := fixtureNote()
+	reloaded.Version = strings.Repeat("c", 64)
+	v.Update(noteReloadedMsg{note: reloaded})
+	if v.propping || v.Capturing() || v.propsOpen {
+		t.Fatalf("removed property left editor active: propping=%v open=%v", v.propping, v.propsOpen)
+	}
+	// A queued enter key from the old editor must be harmless, not index an
+	// empty properties slice.
+	if _, cmd := v.Update(enterMsg()); cmd != nil {
+		t.Fatalf("queued enter produced command %#v", cmd)
+	}
+}
+
+func TestNoteViewWithoutFrontmatterHasNoPropertyAffordance(t *testing.T) {
+	v := newNoteView(nil, fixtureNote())
+	before := stripANSI(v.View(100, 30))
+	v.Update(keyMsg("p"))
+	after := stripANSI(v.View(100, 30))
+	if strings.Contains(after, "Properties") || strings.Contains(after, "p properties") {
+		t.Fatalf("empty frontmatter exposed a property affordance:\n%s", after)
+	}
+	if before != after {
+		t.Fatal("p should be a no-op when the note has no frontmatter")
 	}
 }
 

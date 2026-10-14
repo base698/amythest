@@ -83,12 +83,18 @@ CREATE TABLE IF NOT EXISTS render_cache(
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
   slug UNINDEXED, title, content, tags,
-  tokenize='unicode61 remove_diacritics 2'
+  tokenize='porter unicode61 remove_diacritics 2'
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS retrieval_fts USING fts5(
+  parent_slug UNINDEXED, slug UNINDEXED, title, content, tags,
+  kind UNINDEXED, source_date UNINDEXED, date_source UNINDEXED,
+  url UNINDEXED, archived UNINDEXED, archived_reason UNINDEXED,
+  tokenize='porter unicode61 remove_diacritics 2'
 );
 `
 
 // schemaVersion invalidates the whole database when the DDL changes.
-const schemaVersion = 5
+const schemaVersion = 6
 
 const dsnOpts = "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=mmap_size(268435456)"
 
@@ -113,7 +119,7 @@ func Open(dataDir string) (*DB, error) {
 	var version int
 	_ = w.QueryRow(`PRAGMA user_version`).Scan(&version)
 	if version != schemaVersion {
-		for _, t := range []string{"notes", "links", "tags", "tasks", "inline_fields", "list_items", "render_cache", "notes_fts"} {
+		for _, t := range []string{"notes", "links", "tags", "tasks", "inline_fields", "list_items", "render_cache", "notes_fts", "retrieval_fts"} {
 			if _, err := w.Exec(`DROP TABLE IF EXISTS ` + t); err != nil {
 				w.Close()
 				return nil, err

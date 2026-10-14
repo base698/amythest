@@ -420,10 +420,11 @@ func (s *Server) writeJSON(w http.ResponseWriter, v any) {
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	includeArchived := parseBoolParam(r.URL.Query().Get("include_archived"))
-	results, err := s.db.Search(q, 10, includeArchived)
+	results, err := s.db.SearchWithOptions(q, index.SearchOptions{Limit: 10, IncludeArchived: includeArchived, StartDate: r.URL.Query().Get("start_date"), EndDate: r.URL.Query().Get("end_date"), Kind: r.URL.Query().Get("kind")})
 	if err != nil {
-		slog.Warn("search", "q", q, "err", err)
-		results = nil
+		slog.Warn("search", "err", err)
+		http.Error(w, "Search failed: check date and source filters", http.StatusBadRequest)
+		return
 	}
 	if results == nil {
 		results = []index.SearchResult{}

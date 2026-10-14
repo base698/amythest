@@ -327,12 +327,76 @@ func setTasksDisabledFrontmatter(src []byte) ([]byte, error) {
 
 // SetNotePropertyAndReindex sets one top-level frontmatter key to a scalar
 // value using the same locked, mode-preserving, no-follow writer as task
-// mutations. rawValue is typed by YAML inference: true/false → bool,
-// integers and floats → numbers, anything else → string.
+// mutations. An empty rawValue removes the key. Non-empty values are typed by
+// YAML inference: true/false → bool, integers and floats → numbers, anything
+// else → string.
 func SetNotePropertyAndReindex(vaultRoot, relPath, key, rawValue string, reindex func() error) error {
+	return SetNotePropertyTypedAndReindex(vaultRoot, relPath, key, rawValue, "", reindex)
+}
+
+// SetNotePropertyTypedAndReindex preserves an API client's known scalar type;
+// this prevents strings such as "false" or "0123" from changing type merely
+// because a user opened and saved an editor.
+func SetNotePropertyTypedAndReindex(vaultRoot, relPath, key, rawValue, valueType string, reindex func() error) error {
+	return setNotePropertyTypedAndReindex(vaultRoot, relPath, key, rawValue, valueType, "", reindex)
+}
+
+// SetNotePropertyTypedAtVersionAndReindex applies a property edit only when
+// expectedVersion still identifies the complete note read by the editor.
+func SetNotePropertyTypedAtVersionAndReindex(vaultRoot, relPath, key, rawValue, valueType, expectedVersion string, reindex func() error) error {
+	decoded, err := hex.DecodeString(expectedVersion)
+	if err != nil || len(decoded) != sha256.Size {
+		return fmt.Errorf("note version is required; refresh and retry")
+	}
+	return setNotePropertyTypedAndReindex(vaultRoot, relPath, key, rawValue, valueType, expectedVersion, reindex)
+}
+
+func setNotePropertyTypedAndReindex(vaultRoot, relPath, key, rawValue, valueType, expectedVersion string, reindex func() error) error {
+	var value *yaml.Node
+	if rawValue != "" {
+		var err error
+		value, err = typedScalarValueNode(rawValue, valueType)
+		if err != nil {
+			return err
+		}
+	}
 	return mutateTaskFileAndReindex(vaultRoot, relPath, func(src []byte) ([]byte, error) {
-		return setFrontmatterScalar(src, key, scalarValueNode(rawValue))
+		if expectedVersion != "" && FileVersion(src) != expectedVersion {
+			return nil, fmt.Errorf("note changed; refresh and retry")
+		}
+		return setFrontmatterScalar(src, key, value)
 	}, reindex)
+}
+
+func typedScalarValueNode(raw, valueType string) (*yaml.Node, error) {
+	if valueType == "" {
+		return scalarValueNode(raw), nil
+	}
+	switch valueType {
+	case "string":
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: raw}, nil
+	case "bool":
+		if raw != "true" && raw != "false" {
+			return nil, fmt.Errorf("invalid boolean property value")
+		}
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: raw}, nil
+	case "number":
+		if raw == ".nan" || raw == ".inf" || raw == "-.inf" {
+			return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!float", Value: raw}, nil
+		}
+		node := scalarValueNode(raw)
+		if node.Tag != "!!int" && node.Tag != "!!float" {
+			return nil, fmt.Errorf("invalid numeric property value")
+		}
+		return node, nil
+	case "date":
+		if _, err := time.Parse(time.RFC3339, raw); err != nil {
+			return nil, fmt.Errorf("invalid date property value")
+		}
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!timestamp", Value: raw}, nil
+	default:
+		return nil, fmt.Errorf("property type %q is not editable", valueType)
+	}
 }
 
 func scalarValueNode(raw string) *yaml.Node {
@@ -383,6 +447,9 @@ func setFrontmatterScalar(src []byte, key string, val *yaml.Node) ([]byte, error
 		return nil, fmt.Errorf("malformed frontmatter: %w", fm.Err)
 	}
 	if hasOpeningDelimiter && frontmatterOnlyComments(fm.Raw) {
+		if val == nil {
+			return append([]byte(nil), src...), nil
+		}
 		pair, err := encodeScalarPair(key, val)
 		if err != nil {
 			return nil, err
@@ -420,6 +487,10 @@ func setFrontmatterScalar(src []byte, key string, val *yaml.Node) ([]byte, error
 			continue
 		}
 		found = true
+		if val == nil {
+			mapping.Content = append(mapping.Content[:i], mapping.Content[i+2:]...)
+			break
+		}
 		value := mapping.Content[i+1]
 		if value.Kind == yaml.ScalarNode && value.Tag == val.Tag && value.Value == val.Value {
 			return append([]byte(nil), src...), nil
@@ -427,6 +498,9 @@ func setFrontmatterScalar(src []byte, key string, val *yaml.Node) ([]byte, error
 		*value = *val
 	}
 	if !found {
+		if val == nil {
+			return append([]byte(nil), src...), nil
+		}
 		mapping.Content = append(mapping.Content,
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, val)
 	}

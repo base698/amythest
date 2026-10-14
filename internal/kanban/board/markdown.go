@@ -418,3 +418,7 @@ func knownColumnLabels() string {
 	sort.Strings(labels)
 	return strings.Join(labels, ", ")
 }
+
+// ParseSnapshot reads a board document without migrating or modifying it.
+// Indexers use the same parser as board mutations to retain card identity.
+func ParseSnapshot(data []byte, path string) (Board, error) { return parseBoard(data, path) }

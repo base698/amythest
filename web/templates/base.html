@@ -60,6 +60,14 @@
       {{end}}
       <article class="note">
         <h1 class="article-title">{{.Title}}</h1>
+        {{if .Properties}}
+        <details class="note-properties">
+          <summary>Properties <span class="count">{{len .Properties}}</span></summary>
+          <dl>
+            {{range .Properties}}<div><dt>{{.Key}}</dt><dd>{{.Value}}</dd></div>{{end}}
+          </dl>
+        </details>
+        {{end}}
         {{if .Tags}}
         <ul class="tag-row">
           {{range .Tags}}<li><a class="tag-link" href="{{$.Base}}tags/{{.}}">#{{.}}</a></li>{{end}}
