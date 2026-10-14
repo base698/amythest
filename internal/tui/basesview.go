@@ -31,8 +31,9 @@ type basesView struct {
 	loaded bool
 	find   finder
 
-	prop     textinput.Model
-	propping bool
+	prop        textinput.Model
+	propping    bool
+	propVersion string
 }
 
 // baseRow is one navigable table line: a group header or a data row.
@@ -47,6 +48,7 @@ type baseDataMsg struct {
 	data    *apiclient.BaseData
 	viewIdx int
 }
+type basePropEditorMsg struct{ version string }
 type basePropSavedMsg struct{ slug, key string }
 
 func newBasesView(client *apiclient.Client) *basesView {
@@ -153,6 +155,13 @@ func (v *basesView) Update(msg tea.Msg) (view, tea.Cmd) {
 		v.busy = true
 		return v, tea.Batch(v.openCmd(v.base.Name, v.viewIdx), flash(fmt.Sprintf("%s.%s saved ✓", msg.slug, msg.key)))
 
+	case basePropEditorMsg:
+		v.busy = false
+		v.propVersion = msg.version
+		v.propping = true
+		v.prop.SetValue("")
+		return v, v.prop.Focus()
+
 	case openNoteMsg:
 		v.busy = false
 		return v, pushView(newNoteView(v.client, msg.note))
@@ -162,6 +171,9 @@ func (v *basesView) Update(msg tea.Msg) (view, tea.Cmd) {
 		return v, nil
 
 	case tea.KeyMsg:
+		if v.busy {
+			return v, nil
+		}
 		if v.find.active() {
 			committed, cmd := v.find.handleKey(msg)
 			if committed {
@@ -241,9 +253,15 @@ func (v *basesView) updateTable(msg tea.KeyMsg) (view, tea.Cmd) {
 		}
 	case "e":
 		if row := v.current(); row != nil && row.slug != "" {
-			v.propping = true
-			v.prop.SetValue("")
-			return v, v.prop.Focus()
+			v.busy = true
+			client, slug := v.client, row.slug
+			return v, func() tea.Msg {
+				note, err := client.GetNote(context.Background(), slug)
+				if err != nil {
+					return fail(err)
+				}
+				return basePropEditorMsg{version: note.Version}
+			}
 		}
 	}
 	return v, nil
@@ -263,6 +281,7 @@ func (v *basesView) handlePropKey(msg tea.KeyMsg) (view, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
 		v.propping = false
+		v.propVersion = ""
 		v.prop.Blur()
 		return v, nil
 	case tea.KeyEnter:
@@ -277,9 +296,10 @@ func (v *basesView) handlePropKey(msg tea.KeyMsg) (view, tea.Cmd) {
 			return v, flash("format: key=value")
 		}
 		v.busy = true
-		client, slug := v.client, row.slug
+		client, slug, version := v.client, row.slug, v.propVersion
+		v.propVersion = ""
 		return v, func() tea.Msg {
-			if err := client.SetNoteProperty(context.Background(), slug, key, value); err != nil {
+			if err := client.SetNoteProperty(context.Background(), slug, key, value, "", version); err != nil {
 				return fail(err)
 			}
 			return basePropSavedMsg{slug: slug, key: key}

@@ -33,6 +33,52 @@ func TestRenderPageStatusBuffersTemplateBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestHandleNoteRendersReadOnlyFrontmatterSafely(t *testing.T) {
+	root := t.TempDir()
+	content := []byte("---\nstatus: active\ntasks: false\ncaption: '<script>alert(1)</script>'\n---\n# Project\n")
+	if err := os.WriteFile(filepath.Join(root, "Project.md"), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(config.Config{Vault: root, DataDir: t.TempDir(), BaseURL: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	rec := httptest.NewRecorder()
+	s.handleNote(rec, httptest.NewRequest(http.MethodGet, "/Project", nil))
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, `class="note-properties"`) {
+		t.Fatalf("frontmatter block missing: status=%d body=%s", rec.Code, body)
+	}
+	if !strings.Contains(body, ">tasks<") || !strings.Contains(body, ">false<") {
+		t.Fatalf("typed false property missing: %s", body)
+	}
+	if strings.Contains(body, "<script>alert(1)</script>") || !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Fatalf("property value was not HTML-escaped: %s", body)
+	}
+	if strings.Index(body, ">caption<") > strings.Index(body, ">status<") {
+		t.Fatalf("properties are not in deterministic key order: %s", body)
+	}
+}
+
+func TestHandleNoteWithoutFrontmatterRendersNoPropertiesBlock(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "Plain.md"), []byte("# Plain\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(config.Config{Vault: root, DataDir: t.TempDir(), BaseURL: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rec := httptest.NewRecorder()
+	s.handleNote(rec, httptest.NewRequest(http.MethodGet, "/Plain", nil))
+	if strings.Contains(rec.Body.String(), `class="note-properties"`) {
+		t.Fatalf("plain note rendered a properties affordance: %s", rec.Body.String())
+	}
+}
+
 func TestHandleNoteRefreshesAfterOutOfBandEdit(t *testing.T) {
 	root := t.TempDir()
 	notePath := filepath.Join(root, "Project.md")

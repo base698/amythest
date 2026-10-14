@@ -41,6 +41,11 @@ type crumb struct {
 	URL  string
 }
 
+type pageProperty struct {
+	Key   string
+	Value string
+}
+
 type pageData struct {
 	SiteName    string
 	Base        string
@@ -48,12 +53,22 @@ type pageData struct {
 	HTML        template.HTML
 	TOC         []markdown.Heading
 	Tags        []string
+	Properties  []pageProperty
 	Breadcrumbs []crumb
 	Tree        *treeNode
 	Slug        string
 	Backlinks   []noteLink
 	HasKanban   bool
 	Themes      []string
+}
+
+func pageProperties(fm vault.Frontmatter) []pageProperty {
+	properties := fm.Properties()
+	out := make([]pageProperty, 0, len(properties))
+	for _, property := range properties {
+		out = append(out, pageProperty{Key: property.Key, Value: property.Text})
+	}
+	return out
 }
 
 // handleNote serves a rendered note, or a folder/tag listing fallback.
@@ -130,6 +145,7 @@ func (s *Server) handleNote(w http.ResponseWriter, r *http.Request) {
 		HTML:        s.expandDynamicBlocks(page.HTML),
 		TOC:         page.TOC,
 		Tags:        page.Tags,
+		Properties:  pageProperties(n.FM),
 		Breadcrumbs: breadcrumbs(s.base(), n.Slug),
 		Tree:        s.tree.Load(),
 		Slug:        n.Slug,

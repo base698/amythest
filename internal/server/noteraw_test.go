@@ -35,10 +35,15 @@ func TestHandleNoteRawReturnsMarkdownAndResolvesSlugs(t *testing.T) {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
 	var payload struct {
-		Slug     string `json:"slug"`
-		Title    string `json:"title"`
-		Path     string `json:"path"`
-		Markdown string `json:"markdown"`
+		Slug       string `json:"slug"`
+		Title      string `json:"title"`
+		Path       string `json:"path"`
+		Markdown   string `json:"markdown"`
+		Properties []struct {
+			Key   string `json:"key"`
+			Type  string `json:"type"`
+			Value any    `json:"value"`
+		} `json:"properties"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
@@ -46,9 +51,17 @@ func TestHandleNoteRawReturnsMarkdownAndResolvesSlugs(t *testing.T) {
 	if payload.Slug != "Daily-Notes/2026-08-10" || payload.Path != "Daily Notes/2026-08-10.md" {
 		t.Fatalf("payload = %+v", payload)
 	}
-	// Frontmatter is stripped; the wikilink body survives verbatim.
+	// Frontmatter is returned separately in deterministic key order; the body
+	// remains stripped so existing clients and body editing semantics survive.
 	if payload.Markdown != "# Morning\n\nSee [[Project Plan]] for details.\n" {
 		t.Fatalf("markdown = %q", payload.Markdown)
+	}
+	if len(payload.Properties) != 1 || payload.Properties[0].Key != "tags" || payload.Properties[0].Type != "list" {
+		t.Fatalf("properties = %#v", payload.Properties)
+	}
+	tags, ok := payload.Properties[0].Value.([]any)
+	if !ok || len(tags) != 1 || tags[0] != "log" {
+		t.Fatalf("tags value = %#v", payload.Properties[0].Value)
 	}
 
 	rec = httptest.NewRecorder()
