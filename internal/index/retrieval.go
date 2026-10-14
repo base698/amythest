@@ -109,18 +109,32 @@ func indexRetrieval(tx *sql.Tx, v *vault.Vault, n *vault.Note, plain string, tag
 // Expansion is deliberately inspectable and limited to lexical associations;
 // it does not infer relationships or manufacture a synthesized memory.
 var relatedTerms = [][]string{
-	{"robotics", "robot", "demo-bot", "demo-robot", "trace walking", "computer vision"},
+	{"robotics", "robot", "demo-bot", "demo-robot", "example-robot", "trace walking", "computer vision"},
 	{"vision", "camera"}, {"ai", "artificial intelligence"},
 }
 
 func retrievalQuery(query string) string {
 	parts := []string{}
-	for _, word := range strings.Fields(query) {
+	words := strings.Fields(strings.ReplaceAll(query, `"`, ""))
+	for i := 0; i < len(words); i++ {
+		word := words[i]
 		tag := strings.HasPrefix(word, "#")
-		word = strings.ReplaceAll(strings.TrimPrefix(word, "#"), `"`, "")
+		word = strings.TrimPrefix(word, "#")
 		if word == "" {
 			continue
 		}
+		// Match known multiword aliases before splitting the query into AND terms.
+		// This makes Artificial Intelligence -> AI work in both directions.
+		width := 1
+		for _, group := range relatedTerms {
+			for _, term := range group {
+				n := len(strings.Fields(term))
+				if n > width && i+n <= len(words) && strings.EqualFold(strings.Join(words[i:i+n], " "), term) {
+					word, width = term, n
+				}
+			}
+		}
+		i += width - 1
 		quote := func(w string) string { return `"` + strings.ReplaceAll(w, `"`, "") + `"*` }
 		if tag {
 			parts = append(parts, "tags:"+quote(word))
