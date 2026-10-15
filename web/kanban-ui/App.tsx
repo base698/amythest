@@ -13,6 +13,20 @@ import { Markdown } from './MarkdownView'
 import { toggleTaskLine } from './markdown'
 import { KANBAN_MOUNT, NOTES_BASE, cardIdFromHash } from './mount.ts'
 import { boardFocusCandidate, boardLabel, organizeBoards, selectedFocusCard } from './boardOrganization.ts'
+import {
+  FocusReviewSection,
+  FocusTaskDialog,
+  FocusTasksSection,
+  focusEditorIdentity,
+  focusEditorMatches,
+  isEditorOperationBusy,
+  runFocusDataRefresh,
+  runFocusEditorMutation,
+  settleFocusData,
+  useDialogFocus,
+  type TaskGroup,
+  type VaultTask,
+} from './focusExperience.ts'
 import './styles.css'
 
 interface Session { user: string; csrf: string }
@@ -78,8 +92,15 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
   const [session, setSession] = useState<Session | null>()
   const [boards, setBoards] = useState<BoardSummary[]>([])
   const [focusMode, setFocusMode] = useState(() => boardNameFromPath(window.location.pathname) === 'focus')
+  const focusModeRef = useRef(focusMode)
   const [focusBoards, setFocusBoards] = useState<BoardData[]>([])
+  const [focusTasks, setFocusTasks] = useState<VaultTask[]>([])
+  const [focusTaskError, setFocusTaskError] = useState('')
   const [focusBusy, setFocusBusy] = useState(false)
+  const [focusEditor, setFocusEditor] = useState<{ board: string; card: Card } | null>(null)
+  const focusEditorRef = useRef(focusEditor)
+  focusEditorRef.current = focusEditor
+  const [focusTask, setFocusTask] = useState<VaultTask | null>(null)
   const [activeBoard, setActiveBoard] = useState(() => {
     const requested = boardNameFromPath(window.location.pathname)
     return requested && requested !== 'focus' ? requested : 'proof'
@@ -91,6 +112,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
   const [editor, setEditor] = useState<Card | 'new' | null>(null)
   const [error, setError] = useState('')
   const navigationRequest = useRef(0)
+  const focusDataRequest = useRef(0)
   const [busy, setBusy] = useState(false)
   const [jobsOpen, setJobsOpen] = useState(false)
   const [archiveOpen, setArchiveOpen] = useState(false)
@@ -142,13 +164,14 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
         return
       }
       if (!name || !boards.some((item) => item.name === name)) return
+      focusModeRef.current = false
       setFocusMode(false)
       // Back/forward must restore the label filter as well as the board.
       setActiveLabels(labelsFromPath(window.location.pathname))
       const settings = filterSettingsFromSearch(window.location.search)
       setFilterMode(settings.mode)
       setExcludedLabels(settings.excluded)
-      if (name !== activeBoard) void selectBoard(name, 'none', labelsFromPath(window.location.pathname), settings)
+      void selectBoard(name, 'none', labelsFromPath(window.location.pathname), settings)
     }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
@@ -184,38 +207,75 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
     }
   }
 
-  async function loadFocusView(values?: BoardSummary[], historyMode: HistoryMode = 'push'): Promise<boolean> {
-    const request = ++navigationRequest.current
+  async function fetchFocusData(values?: BoardSummary[]) {
+    const summaries = values ?? await api<BoardSummary[]>(`${API_BASE}/boards`)
+    const active = organizeBoards(summaries).active
+    const [boardResults, taskResult] = await Promise.all([
+      Promise.allSettled(active.map((item) => api<BoardData>(`${API_BASE}/boards/${item.name}`))),
+      api<TaskGroup[]>(`${NOTES_BASE}api/tasks?query=${encodeURIComponent('not done\nsort by priority, due')}`)
+        .then((value): PromiseSettledResult<TaskGroup[]> => ({ status: 'fulfilled', value }))
+        .catch((reason): PromiseSettledResult<TaskGroup[]> => ({ status: 'rejected', reason })),
+    ])
+    return { summaries, result: settleFocusData(active, boardResults, taskResult) }
+  }
+
+  function applyFocusData(summaries: BoardSummary[], result: ReturnType<typeof settleFocusData>, updateBoards: boolean) {
+    if (updateBoards) setBoards(summaries)
+    setFocusBoards(result.boards as BoardData[])
+    setFocusTasks(result.tasks)
+    setFocusTaskError(result.taskError)
+    if (result.boardError) setError(result.boardError)
+  }
+
+  async function refreshFocusData(): Promise<boolean> {
+    if (!focusModeRef.current) return false
+    const request = ++focusDataRequest.current
+    const navigation = navigationRequest.current
+    focusEditorRef.current = null
+    setFocusEditor(null)
+    setFocusTask(null)
     setError('')
     setFocusBusy(true)
     try {
-      const summaries = values ?? await api<BoardSummary[]>(`${API_BASE}/boards`)
-      if (request !== navigationRequest.current) return false
-      if (!values) setBoards(summaries)
-      const active = organizeBoards(summaries).active
-      const settled = await Promise.allSettled(active.map((item) => api<BoardData>(`${API_BASE}/boards/${item.name}`)))
-      if (request !== navigationRequest.current) return false
-      const loaded = settled
-        .filter((item): item is PromiseFulfilledResult<BoardData> => item.status === 'fulfilled')
-        .map((item) => item.value)
-        .filter((item) => !item.archived)
-      const failed = settled.flatMap((item, index) => item.status === 'rejected' ? [boardLabel(active[index])] : [])
-      setFocusBoards(loaded)
+      return await runFocusDataRefresh({
+        request: () => fetchFocusData(),
+        isCurrent: () => request === focusDataRequest.current && navigation === navigationRequest.current,
+        apply: ({ summaries, result }) => applyFocusData(summaries, result, true),
+      })
+    } catch (caught) {
+      if (request === focusDataRequest.current && navigation === navigationRequest.current) setError(message(caught))
+      return false
+    } finally {
+      if (request === focusDataRequest.current) setFocusBusy(false)
+    }
+  }
+
+  async function loadFocusView(values?: BoardSummary[], historyMode: HistoryMode = 'push'): Promise<boolean> {
+    const request = ++navigationRequest.current
+    const focusRequest = ++focusDataRequest.current
+    setError('')
+    setFocusBusy(true)
+    try {
+      const { summaries, result } = await fetchFocusData(values)
+      if (request !== navigationRequest.current || focusRequest !== focusDataRequest.current) return false
+      applyFocusData(summaries, result, !values)
+      focusModeRef.current = true
       setFocusMode(true)
       setEditor(null)
+      setFocusEditor(null)
+      setFocusTask(null)
       setArchiveOpen(false)
       setJobsOpen(false)
-      if (failed.length > 0) setError(`Could not load focus candidates for: ${failed.join(', ')}`)
       const path = `${KANBAN_MOUNT}/focus`
       if (historyMode !== 'none' && `${window.location.pathname}${window.location.search}` !== path) {
         window.history[historyMode === 'replace' ? 'replaceState' : 'pushState']({}, '', path)
       }
       return true
     } catch (caught) {
-      if (request === navigationRequest.current) setError(message(caught))
+      if (request === navigationRequest.current && focusRequest === focusDataRequest.current) setError(message(caught))
       return false
     } finally {
-      if (request === navigationRequest.current) setFocusBusy(false)
+      if (focusRequest === focusDataRequest.current) setFocusBusy(false)
     }
   }
 
@@ -226,6 +286,8 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
     settings: { mode: FilterMode; excluded: string[] } = { mode: filterMode, excluded: excludedLabels },
   ): Promise<boolean> {
     const request = ++navigationRequest.current
+    ++focusDataRequest.current
+    focusModeRef.current = false
     setError('')
     try {
       const value = await api<BoardData>(`${API_BASE}/boards/${name}`)
@@ -355,14 +417,15 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
           <button className="quiet" onClick={logout} type="button">Sign out</button>
         </div>
       </header>
-      <main>
+      <main data-dialog-restore tabIndex={-1}>
         {focusMode ? <FocusView
           boards={focusBoards}
           busy={focusBusy}
-          onOpen={async (name, card) => {
-            if (await selectBoard(name, 'push', [], { mode: 'or', excluded: [] })) setEditor(card)
-          }}
-          onRefresh={() => void loadFocusView(undefined, 'none')}
+          tasks={focusTasks}
+          taskError={focusTaskError}
+          onOpen={(name, card) => { if (!focusBusy && !busy) setFocusEditor({ board: name, card }) }}
+          onOpenTask={(task) => { if (!focusBusy && !busy) setFocusTask(task) }}
+          onRefresh={() => void refreshFocusData()}
         /> : <>
         <div className="board-toolbar" style={board?.color ? { '--board-color': board.color } as CSSProperties : undefined}>
           <div className="board-heading">
@@ -459,6 +522,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
         const created = await mutate<BoardData>(`${API_BASE}/boards`, 'POST', input)
         navigationRequest.current++
         setBoards((current) => [...current, { ...created, counts: {} }])
+        focusModeRef.current = false
         setFocusMode(false)
         setActiveBoard(created.name)
         setBoard(created)
@@ -468,6 +532,105 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
         window.history.pushState({}, '', boardPath(created.name))
         setNewBoardOpen(false)
       }} />}
+      {focusTask && <FocusTaskDialog task={focusTask} notesBase={NOTES_BASE} onClose={() => setFocusTask(null)} />}
+      {focusEditor && (
+        <CardEditor
+          key={`${focusEditor.board}:${focusEditor.card.id}`}
+          board={focusEditor.board}
+          card={focusEditor.card}
+          busy={busy || focusBusy}
+          agents={agents}
+          onClose={() => { if (!busy) setFocusEditor(null) }}
+          openOnBoardHref={`${boardPath(focusEditor.board)}#card-${encodeURIComponent(focusEditor.card.id)}`}
+          onSave={async (input) => {
+            const target = focusEditorIdentity(focusEditor)
+            setBusy(true); setError('')
+            try {
+              await runFocusEditorMutation({
+                target,
+                request: () => mutate(`${API_BASE}/boards/${target.board}/cards/${target.cardId}`, 'PUT', input),
+                current: () => focusEditorRef.current,
+                applyIfCurrent: () => setFocusEditor((current) => focusEditorMatches(current, target) ? null : current),
+                refresh: refreshFocusData,
+              })
+            } catch (caught) { setError(message(caught)) } finally { setBusy(false) }
+          }}
+          onDelete={async () => {
+            const target = focusEditorIdentity(focusEditor)
+            if (!window.confirm(`Permanently delete “${focusEditor.card.title}”? This cannot be undone.`)) return
+            setBusy(true); setError('')
+            try {
+              await runFocusEditorMutation({
+                target,
+                request: () => mutate(`${API_BASE}/boards/${target.board}/cards/${target.cardId}`, 'DELETE'),
+                current: () => focusEditorRef.current,
+                applyIfCurrent: () => setFocusEditor((current) => focusEditorMatches(current, target) ? null : current),
+                refresh: refreshFocusData,
+              })
+            } catch (caught) { setError(message(caught)) } finally { setBusy(false) }
+          }}
+          onSaveDescription={async (description) => {
+            const target = focusEditorIdentity(focusEditor)
+            setBusy(true); setError('')
+            try {
+              await runFocusEditorMutation({
+                target,
+                request: async () => {
+                  await mutate(`${API_BASE}/boards/${target.board}/cards/${target.cardId}`, 'PUT', { description })
+                  return description
+                },
+                current: () => focusEditorRef.current,
+                applyIfCurrent: (updatedDescription) => setFocusEditor((current) => focusEditorMatches(current, target)
+                  ? { ...current, card: { ...current.card, description: updatedDescription } }
+                  : current),
+              })
+              setFocusBoards((current) => current.map((focusBoard) => focusBoard.name === target.board
+                ? { ...focusBoard, cards: focusBoard.cards.map((card) => card.id === target.cardId ? { ...card, description } : card) }
+                : focusBoard))
+            } catch (caught) { setError(message(caught)) } finally { setBusy(false) }
+          }}
+          onComment={async (body) => {
+            const target = focusEditorIdentity(focusEditor)
+            setBusy(true); setError('')
+            try {
+              await runFocusEditorMutation({
+                target,
+                request: () => mutate<Card>(`${API_BASE}/boards/${target.board}/cards/${target.cardId}/comments`, 'POST', { body }),
+                current: () => focusEditorRef.current,
+                applyIfCurrent: (updated) => setFocusEditor((current) => focusEditorMatches(current, target) ? { ...current, card: updated } : current),
+              })
+            } catch (caught) { setError(message(caught)) } finally { setBusy(false) }
+          }}
+          onUpload={async (file) => {
+            const target = focusEditorIdentity(focusEditor)
+            if (!session) throw new Error('Authentication required')
+            const body = new FormData()
+            body.append('file', file)
+            return api<Attachment>(`${API_BASE}/boards/${target.board}/cards/${target.cardId}/attachments`, {
+              method: 'POST', headers: { 'X-CSRF-Token': session.csrf }, body,
+            })
+          }}
+          onDeleteAttachment={(attachment) => {
+            const target = focusEditorIdentity(focusEditor)
+            return mutate(`${API_BASE}/boards/${target.board}/cards/${target.cardId}/attachments/${attachment.id}`, 'DELETE')
+          }}
+          moveBoards={organizedBoards.active.filter((item) => item.name !== focusEditor.board)}
+          onMoveBoard={async (destinationBoard) => {
+            const target = focusEditorIdentity(focusEditor)
+            if (!window.confirm(`Move “${focusEditor.card.title}” from ${displayName(target.board)} to ${displayName(destinationBoard)}?`)) return
+            setBusy(true); setError('')
+            try {
+              await runFocusEditorMutation({
+                target,
+                request: () => mutate(`${API_BASE}/boards/${target.board}/cards/${target.cardId}/board`, 'POST', { destinationBoard, confirm: true }),
+                current: () => focusEditorRef.current,
+                applyIfCurrent: () => setFocusEditor((current) => focusEditorMatches(current, target) ? null : current),
+                refresh: refreshFocusData,
+              })
+            } catch (caught) { setError(message(caught)) } finally { setBusy(false) }
+          }}
+        />
+      )}
       {editor && (
         <CardEditor
           board={activeBoard}
@@ -493,10 +656,11 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
             } catch (caught) { setError(message(caught)) } finally { setBusy(false) }
           }}
           onSaveDescription={editor === 'new' || board?.archived ? undefined : async (description) => {
+            setBusy(true); setError('')
             try {
               await mutate(`${API_BASE}/boards/${activeBoard}/cards/${editor.id}`, 'PUT', { description })
               await refresh()
-            } catch (caught) { setError(message(caught)) }
+            } catch (caught) { setError(message(caught)) } finally { setBusy(false) }
           }}
           onComment={editor === 'new' || board?.archived ? undefined : async (body) => {
             setBusy(true)
@@ -533,10 +697,13 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
   )
 }
 
-function FocusView({ boards, busy, onOpen, onRefresh }: {
+function FocusView({ boards, tasks, taskError, busy, onOpen, onOpenTask, onRefresh }: {
   boards: BoardData[]
+  tasks: VaultTask[]
+  taskError: string
   busy: boolean
-  onOpen: (board: string, card: Card) => Promise<void>
+  onOpen: (board: string, card: Card) => void
+  onOpenTask: (task: VaultTask) => void
   onRefresh: () => void
 }) {
   const candidates = boards.map((board) => ({
@@ -551,18 +718,20 @@ function FocusView({ boards, busy, onOpen, onRefresh }: {
       <div><p className="eyebrow">Across active boards</p><h1 id="focus-page-title">Focus</h1><p>Explicitly selected focus cards always outrank read-only fallback suggestions. Amythest never changes focus or priority automatically.</p></div>
       <button className="quiet" disabled={busy} onClick={onRefresh} type="button">{busy ? 'Refreshing…' : 'Refresh'}</button>
     </header>
+    <FocusReviewSection boards={boards} busy={busy} onOpen={onOpen} />
     {busy && boards.length === 0 ? <div className="center-screen"><div className="spinner" aria-label="Loading focus" /></div> : <>
       {overall ? <article className="overall-focus" style={overall.board.color ? { '--board-color': overall.board.color } as CSSProperties : undefined}>
         <div className="focus-card-kicker"><span aria-hidden="true">◎</span> Overall priority · {overall.explicit ? 'Selected focus' : 'Suggested next'}</div>
-        <div className="focus-card-content"><div><p className="focus-board-name">{overall.board.icon} {boardLabel(overall.board)}</p><h2>{overall.card.title}</h2><FocusMeta card={overall.card} /></div><button className="primary" onClick={() => void onOpen(overall.board.name, overall.card)} type="button">Open card</button></div>
+        <div className="focus-card-content"><div><p className="focus-board-name">{overall.board.icon} {boardLabel(overall.board)}</p><h2>{overall.card.title}</h2><FocusMeta card={overall.card} /></div><button className="primary" disabled={busy} onClick={() => void onOpen(overall.board.name, overall.card)} type="button">Open card</button></div>
       </article> : <div className="focus-empty"><h2>No executable focus candidates</h2><p>Select a focus card on a board, or add unblocked active work.</p></div>}
       <div className="focus-board-grid">
         {candidates.map((item) => <article className="board-focus-tile" key={item.board.name} style={item.board.color ? { '--board-color': item.board.color } as CSSProperties : undefined}>
           <header><span className="board-directory-icon">{item.board.icon || '▦'}</span><div><h2>{boardLabel(item.board)}</h2><span>{item.explicit ? 'Selected focus' : item.staleFocus ? 'Selected focus missing · Suggested next' : item.card ? 'Suggested next' : 'No candidate'}</span></div></header>
-          {item.card ? <><h3>{item.card.title}</h3>{item.card.description && <p>{item.card.description}</p>}<FocusMeta card={item.card} /><button className="quiet" onClick={() => void onOpen(item.board.name, item.card as Card)} type="button">Open on {boardLabel(item.board)}</button></> : <p className="muted">No explicit focus and no unblocked active card to suggest.</p>}
+          {item.card ? <><h3>{item.card.title}</h3>{item.card.description && <p>{item.card.description}</p>}<FocusMeta card={item.card} /><button className="quiet" disabled={busy} onClick={() => void onOpen(item.board.name, item.card as Card)} type="button">Open on {boardLabel(item.board)}</button></> : <p className="muted">No explicit focus and no unblocked active card to suggest.</p>}
         </article>)}
       </div>
     </>}
+    <FocusTasksSection tasks={tasks} busy={busy} error={taskError} onOpen={onOpenTask} />
   </section>
 }
 
@@ -867,8 +1036,8 @@ function Login({ onLogin }: { onLogin: (session: Session) => Promise<void> }) {
 }
 
 interface EditorInput { title: string; description: string; dueDate: string; milestone: string; priority: Priority; status: Status; assignee: string; agent: string; blocked: boolean; labels: string[] }
-function CardEditor({ card, board, busy, agents, readOnly = false, onClose, onSave, onDelete, onComment, onUpload, onDeleteAttachment, onSaveDescription, moveBoards, onMoveBoard }: {
-  card?: Card; board: string; busy: boolean; agents: AgentCatalog; readOnly?: boolean; onClose: () => void; onSave: (input: EditorInput) => Promise<void>; onDelete?: () => Promise<void>; onComment?: (body: string) => Promise<void>; onUpload?: (file: File) => Promise<Attachment>; onDeleteAttachment?: (attachment: Attachment) => Promise<void>; onSaveDescription?: (description: string) => Promise<void>; moveBoards: BoardSummary[]; onMoveBoard?: (destinationBoard: string) => Promise<void>
+function CardEditor({ card, board, busy, agents, readOnly = false, openOnBoardHref, onClose, onSave, onDelete, onComment, onUpload, onDeleteAttachment, onSaveDescription, moveBoards, onMoveBoard }: {
+  card?: Card; board: string; busy: boolean; agents: AgentCatalog; readOnly?: boolean; openOnBoardHref?: string; onClose: () => void; onSave: (input: EditorInput) => Promise<void>; onDelete?: () => Promise<void>; onComment?: (body: string) => Promise<void>; onUpload?: (file: File) => Promise<Attachment>; onDeleteAttachment?: (attachment: Attachment) => Promise<void>; onSaveDescription?: (description: string) => Promise<void>; moveBoards: BoardSummary[]; onMoveBoard?: (destinationBoard: string) => Promise<void>
 }) {
   const [title, setTitle] = useState(card?.title || '')
   const [description, setDescription] = useState(card?.description || '')
@@ -891,9 +1060,12 @@ function CardEditor({ card, board, busy, agents, readOnly = false, onClose, onSa
   const [attachmentError, setAttachmentError] = useState('')
   const [destinationBoard, setDestinationBoard] = useState('')
   const assignee = assigneeChoice === 'custom' ? customAssignee.trim() : assigneeChoice
+  const operationBusy = isEditorOperationBusy(busy, attachmentBusy)
+  const closeDisabled = operationBusy
+  const dialogRef = useDialogFocus(onClose, closeDisabled)
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <section className="modal card-editor" role="dialog" aria-modal="true" aria-labelledby="card-editor-title">
+    <div className="modal-backdrop" onMouseDown={(event) => { if (!closeDisabled && event.target === event.currentTarget) onClose() }}>
+      <section className="modal card-editor" ref={dialogRef} role="dialog" tabIndex={-1} aria-modal="true" aria-labelledby="card-editor-title">
         <header>
           <div>
             <p className="eyebrow">{displayName(board)} board</p>
@@ -901,19 +1073,20 @@ function CardEditor({ card, board, busy, agents, readOnly = false, onClose, onSa
             {card && <p className="card-meta">Created {new Date(card.createdAt).toLocaleDateString()} · Updated {new Date(card.updatedAt).toLocaleString()}</p>}
           </div>
           <div className="header-actions">
+            {openOnBoardHref && <a aria-disabled={operationBusy} className="quiet button-link" href={openOnBoardHref} onClick={(event) => { if (operationBusy) event.preventDefault() }} tabIndex={operationBusy ? -1 : undefined}>Open on board</a>}
             <button
               aria-pressed={blocked}
               className={`blocked-chip${blocked ? ' on' : ''}`}
-              disabled={readOnly}
+              disabled={readOnly || operationBusy}
               onClick={() => setBlocked((current) => !current)}
               title="Blocked cards show a red border; automation skips them. Applies on save."
               type="button"
             ><span aria-hidden="true">⛔</span> Blocked</button>
-            <button className="icon-button" onClick={onClose} aria-label="Close" type="button">×</button>
+            <button className="icon-button" disabled={closeDisabled} onClick={onClose} aria-label="Close" type="button">×</button>
           </div>
         </header>
-        <form onSubmit={(event) => { event.preventDefault(); if (!readOnly) void onSave({ title, description, dueDate, milestone, priority, status, assignee, agent, blocked, labels: labels.split(',').map((value) => value.trim()).filter(Boolean) }) }}>
-          <fieldset className="editor-fields" disabled={readOnly}>
+        <form onSubmit={(event) => { event.preventDefault(); if (!readOnly && !operationBusy) void onSave({ title, description, dueDate, milestone, priority, status, assignee, agent, blocked, labels: labels.split(',').map((value) => value.trim()).filter(Boolean) }) }}>
+          <fieldset className="editor-fields" disabled={readOnly || operationBusy}>
           <label className="title-field">Title<input autoFocus={!card} className="title-input" maxLength={200} placeholder="What needs doing?" required value={title} onChange={(event) => setTitle(event.target.value)} /></label>
           <div className="description-field">
             <div className="description-head">
@@ -959,15 +1132,16 @@ function CardEditor({ card, board, busy, agents, readOnly = false, onClose, onSa
           </label>}
           </fieldset>
           <div className="modal-actions">
-            <button className="quiet" onClick={onClose} type="button">{readOnly ? 'Close' : 'Cancel'}</button>
-            {!readOnly && <button className="primary" disabled={busy} type="submit">{busy ? 'Saving…' : card ? 'Save card' : 'Create card'}</button>}
+            <button className="quiet" disabled={closeDisabled} onClick={onClose} type="button">{readOnly ? 'Close' : 'Cancel'}</button>
+            {!readOnly && <button className="primary" disabled={operationBusy} type="submit">{busy ? 'Saving…' : card ? 'Save card' : 'Create card'}</button>}
           </div>
         </form>
         {card && <section className="attachments" aria-labelledby="attachments-title">
           <h3 id="attachments-title">Attachments{attachments.length > 0 ? ` (${attachments.length})` : ''}</h3>
           {attachments.length === 0 ? <p className="muted">No attachments yet.</p> : <ul>{attachments.map((attachment) => <li key={attachment.id}>
             <div><a aria-label={`Download ${attachment.filename}`} href={`${API_BASE}/boards/${board}/cards/${card.id}/attachments/${attachment.id}`}>{attachment.filename}</a><span>{formatBytes(attachment.size)}</span></div>
-            {onDeleteAttachment && <button aria-label={`Delete ${attachment.filename}`} className="quiet" disabled={attachmentBusy === attachment.id} onClick={async () => {
+            {onDeleteAttachment && <button aria-label={`Delete ${attachment.filename}`} className="quiet" disabled={operationBusy} onClick={async () => {
+              if (operationBusy) return
               setAttachmentBusy(attachment.id); setAttachmentError('')
               try { await onDeleteAttachment(attachment); setAttachments((current) => current.filter((item) => item.id !== attachment.id)) }
               catch (caught) { setAttachmentError(message(caught)) } finally { setAttachmentBusy('') }
@@ -976,6 +1150,7 @@ function CardEditor({ card, board, busy, agents, readOnly = false, onClose, onSa
           {attachmentError && <div className="form-error" role="alert">{attachmentError}</div>}
           {onUpload && <form className="attachment-upload" onSubmit={async (event) => {
             event.preventDefault()
+            if (operationBusy) return
             const form = event.currentTarget
             if (!attachmentFile) return
             if (attachmentFile.size > 10 * 1024 * 1024) { setAttachmentError('Attachment must be at most 10 MiB.'); return }
@@ -983,20 +1158,20 @@ function CardEditor({ card, board, busy, agents, readOnly = false, onClose, onSa
             try { const uploaded = await onUpload(attachmentFile); setAttachments((current) => [...current, uploaded]); setAttachmentFile(null); form.reset() }
             catch (caught) { setAttachmentError(message(caught)) } finally { setAttachmentBusy('') }
           }}>
-            <label>Choose attachment<input aria-label="Choose attachment" disabled={attachments.length >= 10} onChange={(event) => setAttachmentFile(event.target.files?.[0] || null)} type="file" /></label>
-            <button className="quiet" disabled={!attachmentFile || attachmentBusy === 'upload' || attachments.length >= 10} type="submit">{attachmentBusy === 'upload' ? 'Uploading…' : 'Upload attachment'}</button>
+            <label>Choose attachment<input aria-label="Choose attachment" disabled={operationBusy || attachments.length >= 10} onChange={(event) => setAttachmentFile(event.target.files?.[0] || null)} type="file" /></label>
+            <button className="quiet" disabled={operationBusy || !attachmentFile || attachments.length >= 10} type="submit">{attachmentBusy === 'upload' ? 'Uploading…' : 'Upload attachment'}</button>
             <p className="hint">Up to 10 files per card, 10 MiB each.</p>
           </form>}
         </section>}
-        {card && <div className="comments"><h3>Comments{card.comments.length > 0 ? ` (${card.comments.length})` : ''}</h3>{card.comments.length === 0 ? <p className="muted">No comments yet.</p> : card.comments.map((item) => <article key={item.id}><strong>{item.author}</strong><time>{new Date(item.createdAt).toLocaleString()}</time><p>{item.body}</p></article>)}{onComment && <form className="comment-form" onSubmit={async (event) => { event.preventDefault(); if (!comment.trim()) return; await onComment(comment); setComment('') }}><textarea aria-label="Add comment" maxLength={2000} placeholder="Add a comment…" rows={3} value={comment} onChange={(event) => setComment(event.target.value)} /><button className="quiet" disabled={busy || !comment.trim()} type="submit">Comment</button></form>}</div>}
+        {card && <div className="comments"><h3>Comments{card.comments.length > 0 ? ` (${card.comments.length})` : ''}</h3>{card.comments.length === 0 ? <p className="muted">No comments yet.</p> : card.comments.map((item) => <article key={item.id}><strong>{item.author}</strong><time>{new Date(item.createdAt).toLocaleString()}</time><p>{item.body}</p></article>)}{onComment && <form className="comment-form" onSubmit={async (event) => { event.preventDefault(); if (operationBusy || !comment.trim()) return; await onComment(comment); setComment('') }}><textarea aria-label="Add comment" disabled={operationBusy} maxLength={2000} placeholder="Add a comment…" rows={3} value={comment} onChange={(event) => setComment(event.target.value)} /><button className="quiet" disabled={operationBusy || !comment.trim()} type="submit">Comment</button></form>}</div>}
         {card && (onDelete || (onMoveBoard && moveBoards.length > 0)) && <section className="editor-section card-actions" aria-labelledby="card-actions-title">
           <h3 id="card-actions-title">Card actions</h3>
           {onMoveBoard && moveBoards.length > 0 && <div className="move-board-row">
-            <select aria-label="Destination board" value={destinationBoard} onChange={(event) => setDestinationBoard(event.target.value)}><option value="">Move to another board…</option>{moveBoards.map((item) => <option key={item.name} value={item.name}>{displayName(item.name)}</option>)}</select>
-            <button className="quiet" disabled={busy || !destinationBoard} onClick={() => void onMoveBoard(destinationBoard)} type="button">Move card</button>
+            <select aria-label="Destination board" disabled={operationBusy} value={destinationBoard} onChange={(event) => setDestinationBoard(event.target.value)}><option value="">Move to another board…</option>{moveBoards.map((item) => <option key={item.name} value={item.name}>{displayName(item.name)}</option>)}</select>
+            <button className="quiet" disabled={operationBusy || !destinationBoard} onClick={() => { if (!operationBusy) void onMoveBoard(destinationBoard) }} type="button">Move card</button>
           </div>}
           {onMoveBoard && moveBoards.length > 0 && <p className="hint">Moving preserves the card ID, content, attachments, and history.</p>}
-          {onDelete && <button className="danger-link" disabled={busy} onClick={() => void onDelete()} type="button">Delete card…</button>}
+          {onDelete && <button className="danger-link" disabled={operationBusy} onClick={() => { if (!operationBusy) void onDelete() }} type="button">Delete card…</button>}
         </section>}
       </section>
     </div>
