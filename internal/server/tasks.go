@@ -53,6 +53,24 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// The dashboard keeps its sections to real work and shows lists in a section
+	// of their own; otherwise a long list fills or is cut from "No due date".
+	work, lists := all, []tasks.Task(nil)
+	if withLists {
+		if work, err = s.db.AllTasks(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		inWork := make(map[string]bool, len(work))
+		for _, t := range work {
+			inWork[t.Slug+"\x00"+itoa(t.Line)] = true
+		}
+		for _, t := range all {
+			if !inWork[t.Slug+"\x00"+itoa(t.Line)] {
+				lists = append(lists, t)
+			}
+		}
+	}
 	boardNames := s.boardNames()
 
 	statusFilter := r.URL.Query().Get("status") // "", open, done, all
@@ -72,9 +90,9 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 		`</div>`)
 
 	if statusFilter == "" && sortKey == "" && groupKey == "" {
-		section := func(title, query string) {
+		section := func(title, query string, from []tasks.Task) {
 			q := tasks.ParseQuery(query)
-			groups := q.Run(all)
+			groups := q.Run(from)
 			n := 0
 			for _, g := range groups {
 				n += len(g.Tasks)
@@ -85,11 +103,12 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 			b.WriteString(`<h2>` + template.HTMLEscapeString(title) + `</h2>`)
 			b.WriteString(tasks.RenderHTMLWithOptions(groups, s.base(), tasks.RenderOptions{Boards: boardNames, Selectable: true}))
 		}
-		section("Overdue", "not done\ndue before today\nsort by due, priority")
-		section("Today", "not done\ndue on today\nsort by priority")
-		section("Upcoming", "not done\ndue after today\nsort by due, priority\nlimit 30")
-		section("No due date", "not done\nno due date\nsort by path\nlimit 100")
-		section("Recently completed", "done\nsort by done\nlimit 15")
+		section("Overdue", "not done\ndue before today\nsort by due, priority", work)
+		section("Today", "not done\ndue on today\nsort by priority", work)
+		section("Upcoming", "not done\ndue after today\nsort by due, priority\nlimit 30", work)
+		section("No due date", "not done\nno due date\nsort by path\nlimit 100", work)
+		section("Lists", "not done\ngroup by note", lists)
+		section("Recently completed", "done\nsort by done\nlimit 15", work)
 	} else {
 		var lines []string
 		switch statusFilter {
