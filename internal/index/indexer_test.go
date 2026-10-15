@@ -9,6 +9,7 @@ import (
 
 	"github.com/base698/amythest/internal/index"
 	"github.com/base698/amythest/internal/markdown"
+	"github.com/base698/amythest/internal/tasks"
 	"github.com/base698/amythest/internal/vault"
 )
 
@@ -226,5 +227,52 @@ func TestReconcileSkipsTasksOnlyForCanonicalBooleanFalseAndKeepsNoteSearchable(t
 	results, err := db.Search("marmalade", 10, false)
 	if err != nil || len(results) != 1 || results[0].Slug != "Hidden" {
 		t.Fatalf("hidden-task note search results=%#v err=%v", results, err)
+	}
+}
+
+func TestListNotesAreIndexedButLeftOutUnlessAskedFor(t *testing.T) {
+	root := t.TempDir()
+	writeNote(t, root, "Watchlist.md", "---\ntasks: list\n---\n- [ ] A film\n- [x] Seen it\n")
+	writeNote(t, root, "Work.md", "- [ ] Real work\n")
+	writeNote(t, root, "Hidden.md", "---\ntasks: false\n---\n- [ ] Never indexed\n")
+	v, err := vault.Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.Reconcile(v, markdown.New("/")); err != nil {
+		t.Fatal(err)
+	}
+	slugs := func(ts []tasks.Task) map[string]int {
+		m := map[string]int{}
+		for _, t := range ts {
+			m[t.Slug]++
+		}
+		return m
+	}
+	all, err := db.AllTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := slugs(all); len(got) != 1 || got["Work"] != 1 {
+		t.Fatalf("AllTasks without lists = %v", got)
+	}
+	with, err := db.TasksWithLists(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := slugs(with); got["Work"] != 1 || got["Watchlist"] != 2 || got["Hidden"] != 0 {
+		t.Fatalf("TasksWithLists(true) = %v", got)
+	}
+	rows, err := db.TaskRows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("bases task rows should leave lists out, got %d", len(rows))
 	}
 }
