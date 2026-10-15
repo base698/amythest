@@ -201,11 +201,21 @@ func buildFTSQuery(q string) string {
 
 // ---- tasks ----
 
-// AllTasks returns every indexed task with its source path.
+// AllTasks returns every indexed task with its source path, leaving out tasks
+// in list notes (`tasks: list`). Every view that has no lists toggle uses it.
 func (d *DB) AllTasks() ([]tasks.Task, error) {
+	return d.TasksWithLists(false)
+}
+
+// TasksWithLists is AllTasks, plus the tasks of list notes when withLists is set.
+func (d *DB) TasksWithLists(withLists bool) ([]tasks.Task, error) {
+	where := ` WHERE t.list = 0`
+	if withLists {
+		where = ``
+	}
 	rows, err := d.r.Query(`SELECT t.slug, n.path, t.line, t.text, t.status,
 		t.due, t.scheduled, t.start, t.recurrence, t.priority, t.done_date, t.tags, t.version
-		FROM tasks t JOIN notes n ON n.slug = t.slug`)
+		FROM tasks t JOIN notes n ON n.slug = t.slug` + where)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +258,7 @@ func (d *DB) TaskRows() ([]*bases.Row, error) {
 	rows, err := d.r.Query(`SELECT t.slug, n.path, t.line, t.text, t.status,
 		t.due, t.scheduled, t.start, t.recurrence, t.priority, t.done_date, t.tags,
 		n.mtime, n.ctime
-		FROM tasks t JOIN notes n ON n.slug = t.slug`)
+		FROM tasks t JOIN notes n ON n.slug = t.slug WHERE t.list = 0`)
 	if err != nil {
 		return nil, err
 	}

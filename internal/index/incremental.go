@@ -59,9 +59,18 @@ func (d *DB) InvalidateRenderCache() error {
 // `tasks: false`; the note itself is still rendered, linked, and indexed for
 // search.
 func parseNoteTasks(n *vault.Note, body []byte) ([]tasks.Task, []tasks.InlineField, []tasks.ListItem) {
+	// `tasks: list` is not an opt-out: the checkboxes are indexed, flagged as a
+	// list (see isTaskList), and left out of task views unless lists are asked for.
 	enabled, isBool := n.FM.Meta["tasks"].(bool)
 	if (isBool && !enabled) || strings.HasPrefix(n.Path, "kanban/") {
 		return nil, nil, nil
 	}
 	return tasks.ParseFile(n.Slug, n.Path, body)
+}
+
+// isTaskList reports whether a note declares `tasks: list`: a reading list or
+// watchlist whose checkboxes are things to get to someday, not work. Its tasks
+// are indexed but hidden from task views unless lists are requested.
+func isTaskList(n *vault.Note) bool {
+	return strings.EqualFold(strings.TrimSpace(n.FM.MetaString("tasks")), "list")
 }
