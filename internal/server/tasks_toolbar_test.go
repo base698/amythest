@@ -61,10 +61,28 @@ func TestTasksToolbarActiveChipsToggleOff(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			html := s.tasksToolbar(tc.status, tc.sortKey, tc.group)
+			html := s.tasksToolbar(tc.status, tc.sortKey, tc.group, false)
 			if !strings.Contains(html, tc.wantChip) {
 				t.Fatalf("toolbar missing %q in:\n%s", tc.wantChip, html)
 			}
 		})
+	}
+}
+
+func TestTasksToolbarListsChipTogglesAndIsCarried(t *testing.T) {
+	s := &Server{cfg: config.Config{BaseURL: "/"}}
+	off := s.tasksToolbar("", "", "", false)
+	if !strings.Contains(off, `<a class="chip" href="/tasks?lists=1" title=`) {
+		t.Fatalf("lists off: chip should turn lists on:\n%s", off)
+	}
+	on := s.tasksToolbar("open", "due", "", true)
+	for _, want := range []string{
+		`<a class="chip active" href="/tasks?status=open&amp;sort=due" title=`, // the Lists chip turns it off
+		`<a class="chip active" href="/tasks?sort=due&amp;lists=1">Open</a>`,     // other chips keep lists on
+		`<a class="chip" href="/tasks?lists=1">Dashboard</a>`,
+	} {
+		if !strings.Contains(on, want) {
+			t.Fatalf("lists on: missing %q in:\n%s", want, on)
+		}
 	}
 }

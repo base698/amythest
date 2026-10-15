@@ -207,13 +207,14 @@ func upsertNote(tx *sql.Tx, v *vault.Vault, n *vault.Note, res *markdown.Result,
 		n.Slug, n.Title, res.Plain, strings.Join(tags, " ")); err != nil {
 		return err
 	}
+	list := isTaskList(n)
 	for _, t := range noteTasks {
 		t.Version = n.Hash
 		tagsJSON, _ := json.Marshal(orEmpty(t.Tags))
-		if _, err := tx.Exec(`INSERT INTO tasks(slug,line,text,status,due,scheduled,start,recurrence,priority,done_date,tags,version)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		if _, err := tx.Exec(`INSERT INTO tasks(slug,line,text,status,due,scheduled,start,recurrence,priority,done_date,tags,version,list)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			t.Slug, t.Line, t.Text, t.Status, t.Due, t.Scheduled, t.Start,
-			t.Recurrence, t.Priority, t.DoneDate, string(tagsJSON), t.Version); err != nil {
+			t.Recurrence, t.Priority, t.DoneDate, string(tagsJSON), t.Version, list); err != nil {
 			return err
 		}
 	}
