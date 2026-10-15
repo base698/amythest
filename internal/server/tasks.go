@@ -45,7 +45,10 @@ func (s *Server) expandDynamicBlocks(html template.HTML) template.HTML {
 // Everything is plain links (GET params), so it works in any browser and
 // the underlying tasks stay ordinary markdown any other app can read.
 func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
-	all, err := s.db.AllTasks()
+	// Lists (notes with `tasks: list`, such as a reading list) stay out of the
+	// page unless the Lists chip is on.
+	withLists := r.URL.Query().Get("lists") == "1"
+	all, err := s.db.TasksWithLists(withLists)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -57,7 +60,7 @@ func (s *Server) handleTasksPage(w http.ResponseWriter, r *http.Request) {
 	groupKey := r.URL.Query().Get("group")      // "", note, folder, priority, status
 
 	var b strings.Builder
-	b.WriteString(s.tasksToolbar(statusFilter, sortKey, groupKey))
+	b.WriteString(s.tasksToolbar(statusFilter, sortKey, groupKey, withLists))
 	// Selection is an explicit mode: without it every row would show a second
 	// checkbox next to the completion toggle, which reads as a duplicate.
 	b.WriteString(`<div class="tasks-bulkbar" data-task-bulkbar>` +
@@ -166,29 +169,10 @@ func (s *Server) boardNames() []string {
 // tasksToolbar renders the status/sort/group controls as plain links. An
 // active chip links to the same view with its own dimension cleared, so
 // clicking it again toggles that filter off.
-func (s *Server) tasksToolbar(status, sortKey, group string) string {
+func (s *Server) tasksToolbar(status, sortKey, group string, withLists bool) string {
 	var b strings.Builder
 	link := func(label, st, so, gr string, active bool) {
-		cls := "chip"
-		if active {
-			cls = "chip active"
-		}
-		params := []string{}
-		if st != "" {
-			params = append(params, "status="+st)
-		}
-		if so != "" {
-			params = append(params, "sort="+so)
-		}
-		if gr != "" {
-			params = append(params, "group="+gr)
-		}
-		href := s.base() + "tasks"
-		if len(params) > 0 {
-			href += "?" + strings.Join(params, "&")
-		}
-		b.WriteString(`<a class="` + cls + `" href="` + template.HTMLEscapeString(href) + `">` +
-			template.HTMLEscapeString(label) + `</a>`)
+		s.toolbarChip(&b, label, st, so, gr, withLists, active)
 	}
 	toggle := func(current, k string) string {
 		if current == k {
@@ -201,6 +185,7 @@ func (s *Server) tasksToolbar(status, sortKey, group string) string {
 	link("Open", toggle(status, "open"), sortKey, group, status == "open")
 	link("Done", toggle(status, "done"), sortKey, group, status == "done")
 	link("All", toggle(status, "all"), sortKey, group, status == "all")
+	s.toolbarChip(&b, "Lists", status, sortKey, group, !withLists, withLists)
 	b.WriteString(`<a class="chip triage-chip" href="` + template.HTMLEscapeString(s.base()+"tasks/triage") + `">Triage no dates</a>`)
 	b.WriteString(`<span class="eyebrow">Sort</span>`)
 	for _, k := range []string{"due", "priority", "path", "description"} {
@@ -220,6 +205,38 @@ func (s *Server) tasksToolbar(status, sortKey, group string) string {
 	}
 	b.WriteString(`</div>`)
 	return b.String()
+}
+
+// toolbarChip writes one toolbar link for the given view. Every chip carries the
+// Lists setting, so turning lists on survives changes of status, sort and group.
+func (s *Server) toolbarChip(b *strings.Builder, label, st, so, gr string, withLists, active bool) {
+	cls := "chip"
+	if active {
+		cls = "chip active"
+	}
+	params := []string{}
+	if st != "" {
+		params = append(params, "status="+st)
+	}
+	if so != "" {
+		params = append(params, "sort="+so)
+	}
+	if gr != "" {
+		params = append(params, "group="+gr)
+	}
+	if withLists {
+		params = append(params, "lists=1")
+	}
+	href := s.base() + "tasks"
+	if len(params) > 0 {
+		href += "?" + strings.Join(params, "&")
+	}
+	title := ""
+	if label == "Lists" {
+		title = ` title="Show checkboxes from notes marked tasks: list, such as reading lists and watchlists"`
+	}
+	b.WriteString(`<a class="` + cls + `" href="` + template.HTMLEscapeString(href) + `"` + title + `>` +
+		template.HTMLEscapeString(label) + `</a>`)
 }
 
 // handleTasksAPI executes a tasks query (newline- or semicolon-separated
