@@ -1557,6 +1557,69 @@ func TestCreateBoardRejectsFourthActiveFavorite(t *testing.T) {
 	}
 }
 
+func TestEnsureBoardCreatesImplicitFourthBoardUnpinned(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	pinned := true
+	for _, name := range []string{"one", "two", "three"} {
+		if _, err := store.CreateBoardWithInput(BoardInput{Name: name, Pinned: &pinned}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := store.EnsureBoard("four"); err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Load("four")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Pinned {
+		t.Fatal("implicitly ensured fourth board is pinned")
+	}
+}
+
+func TestConcurrentCreateCardImplicitBoardsAreUnpinnedAcrossStoreInstances(t *testing.T) {
+	root := t.TempDir()
+	setup := NewStore(root, fixedClock)
+	pinned := true
+	for _, name := range []string{"one", "two", "three"} {
+		if _, err := setup.CreateBoardWithInput(BoardInput{Name: name, Pinned: &pinned}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	start := make(chan struct{})
+	type result struct {
+		name string
+		card Card
+		err  error
+	}
+	results := make(chan result, 2)
+	for index, name := range []string{"four", "five"} {
+		store := []*Store{setup, NewStore(root, fixedClock)}[index]
+		go func(store *Store, name string) {
+			<-start
+			card, err := store.CreateCard(name, CardInput{Title: "Implicit " + name, Status: Triage})
+			results <- result{name: name, card: card, err: err}
+		}(store, name)
+	}
+	close(start)
+
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("CreateCard(%q): %v", result.name, result.err)
+		}
+		created, err := setup.Load(result.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if created.Pinned || len(created.Cards) != 1 || created.Cards[0].ID != result.card.ID {
+			t.Fatalf("implicit board %q = %#v, card = %#v", result.name, created, result.card)
+		}
+	}
+}
+
 func TestPatchBoardSettingsRejectsFourthActiveFavorite(t *testing.T) {
 	store := NewStore(t.TempDir(), fixedClock)
 	pinned := true
@@ -1595,8 +1658,8 @@ func TestCreateFavoriteRejectsWhenExistingBoardCannotBeInspected(t *testing.T) {
 		t.Fatalf("permissive board names = %v, want unreadable board omitted", names)
 	}
 
-	if _, err := store.CreateBoardWithInput(BoardInput{Name: "candidate", Pinned: &pinned}); !errors.Is(err, inspectionErr) {
-		t.Fatalf("favorite create error = %v, want inspection error", err)
+	if _, err := store.CreateBoardWithInput(BoardInput{Name: "candidate", Pinned: &pinned}); !errors.Is(err, inspectionErr) || !errors.Is(err, ErrFavoriteInspection) {
+		t.Fatalf("favorite create error = %v, want inspection classification and cause", err)
 	}
 	if _, err := os.Stat(store.boardPath("candidate")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("rejected board was created: %v", err)
@@ -1620,8 +1683,8 @@ func TestFavoriteSettingsRejectWhenExistingBoardCannotBeInspected(t *testing.T) 
 		return boardFileExists(path)
 	}
 
-	if _, err := store.PatchBoardSettings("candidate", BoardSettingsPatch{Pinned: &pinned}); !errors.Is(err, inspectionErr) {
-		t.Fatalf("favorite settings error = %v, want inspection error", err)
+	if _, err := store.PatchBoardSettings("candidate", BoardSettingsPatch{Pinned: &pinned}); !errors.Is(err, inspectionErr) || !errors.Is(err, ErrFavoriteInspection) {
+		t.Fatalf("favorite settings error = %v, want inspection classification and cause", err)
 	}
 	loaded, err := store.Load("candidate")
 	if err != nil || loaded.Pinned {

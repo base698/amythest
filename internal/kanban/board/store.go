@@ -51,6 +51,7 @@ var boardColorPattern = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
 var ErrBoardExists = errors.New("board already exists")
 var ErrCardExists = errors.New("card already exists on destination board")
 var ErrFavoriteLimit = errors.New("at most three active boards may be favorites")
+var ErrFavoriteInspection = errors.New("favorite board inspection failed")
 
 const MaxFavoriteBoards = 3
 
@@ -396,7 +397,7 @@ func (s *Store) validateFavoriteLimit(candidate Board, candidateName string) err
 	}
 	names, err := s.strictBoardNames()
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrFavoriteInspection, err)
 	}
 	count := 0
 	for _, name := range names {
@@ -405,7 +406,7 @@ func (s *Store) validateFavoriteLimit(candidate Board, candidateName string) err
 		}
 		value, err := readBoard(s.boardPath(name))
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %w", ErrFavoriteInspection, err)
 		}
 		if value.Pinned && !value.Archived {
 			count++
@@ -1765,7 +1766,8 @@ func (s *Store) ensureUnlocked(name string) error {
 	if err := os.MkdirAll(filepath.Join(s.root, name), 0o750); err != nil {
 		return err
 	}
-	created, err := boardFromInput(BoardInput{Name: name})
+	pinned := false
+	created, err := boardFromInput(BoardInput{Name: name, Pinned: &pinned})
 	if err != nil {
 		return err
 	}

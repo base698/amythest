@@ -586,6 +586,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
+	if errors.Is(err, board.ErrFavoriteInspection) {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
 	writeError(w, http.StatusBadRequest, err.Error())
 }
 func writeJSON(w http.ResponseWriter, status int, value any) {

@@ -9,6 +9,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -21,7 +23,7 @@ func testServer(t *testing.T) (*httptest.Server, *board.Store) {
 	t.Helper()
 	clock := func() time.Time { return time.Date(2026, 7, 24, 14, 0, 0, 0, time.UTC) }
 	store := board.NewStore(t.TempDir(), clock)
-	if err := store.EnsureBoard("proof"); err != nil {
+	if _, err := store.CreateBoard("proof"); err != nil {
 		t.Fatal(err)
 	}
 	manager, err := auth.NewManager("operator", "correct horse", []byte("01234567890123456789012345678901"), time.Hour)
@@ -108,6 +110,52 @@ func TestAPIRequiresLoginAndCSRFThenCreatesCard(t *testing.T) {
 	}
 }
 
+func TestCreateCardAPIImplicitFourthBoardIsUnpinned(t *testing.T) {
+	srv, store := testServer(t)
+	defer srv.Close()
+	pinned := true
+	for _, name := range []string{"second", "third"} {
+		if _, err := store.CreateBoardWithInput(board.BoardInput{Name: name, Pinned: &pinned}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"operator","password":"correct horse"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loginResp.Body.Close()
+	var login struct {
+		CSRF string `json:"csrf"`
+	}
+	if err := json.NewDecoder(loginResp.Body).Decode(&login); err != nil {
+		t.Fatal(err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/boards/fourth/cards", bytes.NewBufferString(`{"title":"Implicit card","status":"triage"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", login.CSRF)
+	req.AddCookie(loginResp.Cookies()[0])
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create card status = %d body=%s", resp.StatusCode, readResponse(t, resp))
+	}
+	created, err := store.Load("fourth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Pinned || len(created.Cards) != 1 || created.Cards[0].Title != "Implicit card" {
+		t.Fatalf("implicit board = %#v", created)
+	}
+}
+
 func TestCreateBoardAPIRequiresAuthenticationAndCSRFAndRejectsDuplicateOrInvalidNames(t *testing.T) {
 	srv, store := testServer(t)
 	defer srv.Close()
@@ -163,6 +211,53 @@ func TestCreateBoardAPIRequiresAuthenticationAndCSRFAndRejectsDuplicateOrInvalid
 	}
 	if got := create(cookie, login.CSRF, `{"name":"../escape"}`).StatusCode; got != http.StatusBadRequest {
 		t.Fatalf("invalid create = %d", got)
+	}
+}
+
+func TestCreateFavoriteAPIReturnsGenericInternalErrorForStrictReadFailure(t *testing.T) {
+	root := t.TempDir()
+	clock := func() time.Time { return time.Date(2026, 7, 24, 14, 0, 0, 0, time.UTC) }
+	store := board.NewStore(root, clock)
+	if _, err := store.CreateBoard("existing"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "existing", "board.md"), []byte("not valid board data"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := auth.NewManager("operator", "correct horse", []byte("01234567890123456789012345678901"), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets := fstest.MapFS{"index.html": {Data: []byte("<html><body>kanban app</body></html>")}}
+	srv := httptest.NewServer(New(Config{Store: store, Auth: manager, Assets: assets, Now: clock}))
+	defer srv.Close()
+
+	loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"operator","password":"correct horse"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loginResp.Body.Close()
+	var login struct {
+		CSRF string `json:"csrf"`
+	}
+	if err := json.NewDecoder(loginResp.Body).Decode(&login); err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/boards", bytes.NewBufferString(`{"name":"candidate","pinned":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", login.CSRF)
+	req.AddCookie(loginResp.Cookies()[0])
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body := readResponse(t, resp)
+	if resp.StatusCode != http.StatusInternalServerError || body != `{"error":"internal server error"}`+"\n" {
+		t.Fatalf("strict read failure response = %d %q", resp.StatusCode, body)
 	}
 }
 
