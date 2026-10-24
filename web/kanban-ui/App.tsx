@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { BoardView, type Attachment, type Card, type Priority, type Status } from './BoardView'
+import { BoardSelector, MAX_FAVORITE_BOARDS } from './BoardSelector.ts'
 import {
   allLabelOptions,
   boardFilterURL,
@@ -114,6 +115,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
   const navigationRequest = useRef(0)
   const focusDataRequest = useRef(0)
   const [busy, setBusy] = useState(false)
+  const [favoriteBusy, setFavoriteBusy] = useState(false)
   const [jobsOpen, setJobsOpen] = useState(false)
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [newBoardOpen, setNewBoardOpen] = useState(false)
@@ -366,6 +368,20 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
     } catch (caught) { setError(message(caught)) }
   }
 
+  async function setBoardFavorite(name: string, favorite: boolean) {
+    setFavoriteBusy(true)
+    setError('')
+    try {
+      const updated = await mutate<BoardData>(`${API_BASE}/boards/${name}/settings`, 'PATCH', { pinned: favorite })
+      setBoards((current) => current.map((item) => item.name === name ? { ...item, ...updated, counts: item.counts } : item))
+      if (board?.name === name) setBoard(updated)
+    } catch (caught) {
+      setError(message(caught))
+    } finally {
+      setFavoriteBusy(false)
+    }
+  }
+
   async function moveCard(card: Card, status: Status, beforeId?: string) {
     if (status === 'done' && !window.confirm(`Archive “${card.title}” as done?`)) return
     try {
@@ -401,6 +417,13 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
     <div className="app-shell">
       <header className="topbar">
         <div className="brand"><span className="brand-mark">A</span><span>Amythest Kanban</span></div>
+        <BoardSelector
+          activeBoard={focusMode ? '' : activeBoard}
+          boards={boards}
+          disabled={favoriteBusy}
+          onFavorite={(name, favorite) => void setBoardFavorite(name, favorite)}
+          onSelect={(name) => void selectBoard(name, 'push', [], { mode: 'or', excluded: [] })}
+        />
         <nav className="board-tabs" aria-label="Pinned boards">
           <button className={focusMode ? 'active focus-tab' : 'focus-tab'} onClick={() => void loadFocusView()} type="button"><span aria-hidden="true">◎</span> Focus</button>
           {[...organizedBoards.pinned, ...(!activeSummary?.pinned && activeSummary && !activeSummary.archived ? [activeSummary] : [])].map((item) => (
@@ -485,6 +508,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
       />}
       {boardSettingsOpen && board && <BoardSettingsDialog
         board={board}
+        canPin={board.pinned || organizedBoards.pinned.length < MAX_FAVORITE_BOARDS}
         onClose={() => setBoardSettingsOpen(false)}
         onDelete={async () => {
           if (!window.confirm(`Permanently delete the empty “${boardLabel(board)}” board? Archived or active cards prevent deletion.`)) return false
@@ -518,7 +542,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
         await refresh()
       }} />}
       {jobsOpen && <JobsPanel board={activeBoard} onClose={() => setJobsOpen(false)} onCancel={(id) => mutate<DispatchRun>(`${API_BASE}/dispatch/runs/${id}/cancel`, 'POST')} />}
-      {newBoardOpen && <NewBoardDialog onClose={() => setNewBoardOpen(false)} onCreate={async (input) => {
+      {newBoardOpen && <NewBoardDialog canPin={organizedBoards.pinned.length < MAX_FAVORITE_BOARDS} onClose={() => setNewBoardOpen(false)} onCreate={async (input) => {
         const created = await mutate<BoardData>(`${API_BASE}/boards`, 'POST', input)
         navigationRequest.current++
         setBoards((current) => [...current, { ...created, counts: {} }])
@@ -851,13 +875,13 @@ interface BoardFormInput {
 
 type BoardSettingsInput = Omit<BoardFormInput, 'name'> & { archived: boolean }
 
-function NewBoardDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (input: BoardFormInput) => Promise<void> }) {
+function NewBoardDialog({ canPin, onClose, onCreate }: { canPin: boolean; onClose: () => void; onCreate: (input: BoardFormInput) => Promise<void> }) {
   const [name, setName] = useState('')
   const [displayNameValue, setDisplayNameValue] = useState('')
   const [description, setDescription] = useState('')
   const [icon, setIcon] = useState('')
   const [color, setColor] = useState('')
-  const [pinned, setPinned] = useState(true)
+  const [pinned, setPinned] = useState(canPin)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
@@ -880,14 +904,15 @@ function NewBoardDialog({ onClose, onCreate }: { onClose: () => void; onCreate: 
           <label>Icon<input maxLength={32} placeholder="🚀 or short text" value={icon} onChange={(event) => setIcon(event.target.value)} /></label>
           <label>Color<input maxLength={7} pattern="#[0-9A-Fa-f]{6}" placeholder="#8b5cf6" value={color} onChange={(event) => setColor(event.target.value)} /></label>
         </div>
-        <label className="checkbox-row"><input checked={pinned} onChange={(event) => setPinned(event.target.checked)} type="checkbox" /> Pin this board in the top bar</label>
+        <label className="checkbox-row"><input checked={pinned} disabled={!canPin && !pinned} onChange={(event) => setPinned(event.target.checked)} type="checkbox" /> Favorite this board</label>
+        {!canPin && <p className="hint">You can favorite up to {MAX_FAVORITE_BOARDS} boards. Unfavorite one to make room.</p>}
         <div className="modal-actions"><button className="quiet" onClick={onClose} type="button">Cancel</button><button className="primary" disabled={busy} type="submit">{busy ? 'Creating…' : 'Create board'}</button></div>
       </form>
     </section>
   </div>
 }
 
-function BoardSettingsDialog({ board, onClose, onSave, onDelete }: { board: BoardData; onClose: () => void; onSave: (input: BoardSettingsInput) => Promise<void>; onDelete: () => Promise<boolean> }) {
+function BoardSettingsDialog({ board, canPin, onClose, onSave, onDelete }: { board: BoardData; canPin: boolean; onClose: () => void; onSave: (input: BoardSettingsInput) => Promise<void>; onDelete: () => Promise<boolean> }) {
   const [displayNameValue, setDisplayNameValue] = useState(board.displayName)
   const [description, setDescription] = useState(board.description || '')
   const [icon, setIcon] = useState(board.icon || '')
@@ -914,7 +939,8 @@ function BoardSettingsDialog({ board, onClose, onSave, onDelete }: { board: Boar
           <label>Color<input maxLength={7} pattern="#[0-9A-Fa-f]{6}" placeholder="#8b5cf6" value={color} onChange={(event) => setColor(event.target.value)} /></label>
           <label>Sort order<input max={10000} min={-10000} type="number" value={sortOrder} onChange={(event) => setSortOrder(Number(event.target.value))} /></label>
         </div>
-        <label className="checkbox-row"><input checked={pinned} onChange={(event) => setPinned(event.target.checked)} type="checkbox" /> Pin in the top bar</label>
+        <label className="checkbox-row"><input checked={pinned} disabled={!canPin && !pinned} onChange={(event) => setPinned(event.target.checked)} type="checkbox" /> Favorite this board</label>
+        {!canPin && <p className="hint">You can favorite up to {MAX_FAVORITE_BOARDS} boards. Unfavorite one to make room.</p>}
         <label className={`checkbox-row archive-board-toggle${archived ? ' on' : ''}`}><input checked={archived} onChange={(event) => setArchived(event.target.checked)} type="checkbox" /> {archived ? 'Board is archived' : 'Archive this board'}</label>
         <p className="hint">Archiving is the normal lifecycle. Permanent deletion succeeds only when both the active board and its archive are empty.</p>
         <div className="modal-actions"><button className="danger-link" disabled={busy} onClick={async () => { setBusy(true); setError(''); try { if (!await onDelete()) setBusy(false) } catch (caught) { setError(message(caught)); setBusy(false) } }} type="button">Delete empty board…</button><span className="actions-spacer" /><button className="quiet" onClick={onClose} type="button">Cancel</button><button className="primary" disabled={busy} type="submit">{busy ? 'Saving…' : 'Save settings'}</button></div>

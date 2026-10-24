@@ -38,6 +38,13 @@ export function organizeBoards<T extends BoardMetadata>(boards: readonly T[]): {
   return { active, pinned: active.filter((board) => board.pinned), archived }
 }
 
+export function canFavoriteBoard(boards: readonly BoardMetadata[], name: string, limit = 3): boolean {
+  const board = boards.find((item) => item.name === name)
+  if (!board || board.archived) return false
+  if (board.pinned) return true
+  return boards.filter((item) => item.pinned && !item.archived).length < limit
+}
+
 export function selectedFocusCard<T extends FocusableCard>(cards: readonly T[], focusCardId?: string): T | undefined {
   if (!focusCardId) return undefined
   return cards.find((card) => card.id === focusCardId)

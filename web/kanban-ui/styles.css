@@ -515,3 +515,18 @@
   --danger-text: #ffaab5;
   --glow: #47205e;
 }
+
+/* Board selector and persisted favorites. */
+.board-selector { align-items:center; display:flex; flex:0 1 250px; gap:5px; min-width:150px; }
+.board-selector select { background:var(--input-bg); border:1px solid var(--border-2); border-radius:8px; color:var(--text); min-height:38px; min-width:0; padding:7px 28px 7px 9px; width:100%; }
+.board-selector select:focus-visible, .board-favorite-button:focus-visible { outline:2px solid var(--accent-2); outline-offset:2px; }
+.board-favorite-button { align-items:center; background:var(--panel-2); border:1px solid var(--border); border-radius:8px; color:var(--muted); cursor:pointer; display:inline-flex; justify-content:center; min-height:38px; min-width:38px; padding:0; }
+.board-favorite-button[aria-pressed="true"] { border-color:var(--accent-deep); color:var(--accent-text); }
+.board-favorite-button:disabled { cursor:not-allowed; opacity:.5; }
+@media (max-width: 650px) {
+  .board-selector { flex:1 1 auto; min-width:130px; }
+  .board-selector select, .board-favorite-button { min-height:44px; }
+  .board-favorite-button { min-width:44px; }
+  .board-tabs button:not(.focus-tab) { display:none; }
+  .board-tabs { flex:0 0 auto; overflow:visible; }
+}

@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   boardFocusCandidate,
   boardLabel,
+  canFavoriteBoard,
   organizeBoards,
   selectedFocusCard,
   suggestedFocusCard,
@@ -25,6 +26,13 @@ test('organizes active boards with pinned boards first and archives separately',
   assert.deepEqual(result.active.map((board) => board.name), ['home', 'later', 'ideas'])
   assert.deepEqual(result.pinned.map((board) => board.name), ['home', 'later'])
   assert.deepEqual(result.archived.map((board) => board.name), ['archive'])
+})
+
+test('allows at most three active boards to be favorited', () => {
+  assert.equal(canFavoriteBoard(boards, 'ideas', 3), true)
+  const threeFavorites = [...boards, { name: 'third', pinned: true, archived: false }]
+  assert.equal(canFavoriteBoard(threeFavorites, 'ideas', 3), false)
+  assert.equal(canFavoriteBoard(threeFavorites, 'home', 3), true, 'an existing favorite can always be unfavorited')
 })
 
 test('uses explicit display names and falls back to a readable slug', () => {
