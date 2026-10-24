@@ -475,7 +475,7 @@
 @media (max-width: 650px) {
   .topbar { padding: 0 10px; }
   .board-tabs { order: 2; }
-  .top-actions a { display: none; }
+  .top-actions .notes-home-link { display: none; }
   main { padding-left: 12px; padding-right: 12px; }
   .board-toolbar { align-items: flex-start; gap: 14px; }
   .focus-card-content, .focus-card-actions, .focus-page-header { align-items: stretch; flex-direction: column; }
@@ -529,4 +529,12 @@
   .board-favorite-button { min-width:44px; }
   .board-tabs button:not(.focus-tab) { display:none; }
   .board-tabs { flex:0 0 auto; overflow:visible; }
+}
+.visually-hidden { clip:rect(0 0 0 0); clip-path:inset(50%); height:1px; overflow:hidden; position:absolute; white-space:nowrap; width:1px; }
+@media (max-width: 540px) {
+  .topbar { display:grid; gap:6px; grid-template-areas:"brand selector actions" "tabs tabs tabs"; grid-template-columns:28px minmax(0, 1fr) auto; height:auto; max-width:100vw; min-height:52px; overflow-x:clip; padding:7px 10px 0; width:100%; }
+  .brand { grid-area:brand; min-width:0; }
+  .board-selector { grid-area:selector; min-width:0; width:100%; }
+  .board-tabs { grid-area:tabs; height:38px; min-width:0; overflow-x:auto; width:100%; }
+  .top-actions { grid-area:actions; min-width:0; }
 }

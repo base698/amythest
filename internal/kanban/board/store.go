@@ -50,6 +50,9 @@ var boardColorPattern = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
 
 var ErrBoardExists = errors.New("board already exists")
 var ErrCardExists = errors.New("card already exists on destination board")
+var ErrFavoriteLimit = errors.New("at most three active boards may be favorites")
+
+const MaxFavoriteBoards = 3
 
 type Store struct {
 	root           string
@@ -117,6 +120,11 @@ func (s *Store) CreateBoardWithInput(input BoardInput) (Board, error) {
 	}
 	name := created.Name
 	err = s.withLock(name, func() error {
+		unlock, err := s.lockFavorites()
+		if err != nil {
+			return err
+		}
+		defer unlock()
 		for _, file := range []string{s.boardPath(name), s.donePath(name)} {
 			exists, err := boardFileExists(file)
 			if err != nil {
@@ -125,6 +133,9 @@ func (s *Store) CreateBoardWithInput(input BoardInput) (Board, error) {
 			if exists {
 				return ErrBoardExists
 			}
+		}
+		if err := s.validateFavoriteLimit(created, name); err != nil {
+			return err
 		}
 		now := s.now().UTC()
 		if err := atomicWrite(s.donePath(name), renderBoard(created, true, now)); err != nil {
@@ -300,12 +311,19 @@ func (s *Store) UpdateBoardSettings(name string, dispatchEnabled bool) (Board, e
 func (s *Store) PatchBoardSettings(name string, patch BoardSettingsPatch) (Board, error) {
 	var updated Board
 	err := s.withLock(name, func() error {
-		var err error
+		unlock, err := s.lockFavorites()
+		if err != nil {
+			return err
+		}
+		defer unlock()
 		updated, err = readBoard(s.boardPath(name))
 		if err != nil {
 			return err
 		}
 		if err := applyBoardSettingsPatch(&updated, patch); err != nil {
+			return err
+		}
+		if err := s.validateFavoriteLimit(updated, name); err != nil {
 			return err
 		}
 		if updated.FocusCardID != "" && cardIndex(updated.Cards, updated.FocusCardID) < 0 {
@@ -323,6 +341,47 @@ func (s *Store) PatchBoardSettings(name string, patch BoardSettingsPatch) (Board
 		})
 	})
 	return updated, err
+}
+
+func (s *Store) lockFavorites() (func(), error) {
+	if err := os.MkdirAll(s.root, 0o750); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(filepath.Join(s.root, ".favorites.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = file.Close()
+	}, nil
+}
+
+func (s *Store) validateFavoriteLimit(candidate Board, candidateName string) error {
+	if !candidate.Pinned || candidate.Archived {
+		return nil
+	}
+	count := 0
+	for _, name := range s.BoardNames() {
+		if name == candidateName {
+			continue
+		}
+		value, err := readBoard(s.boardPath(name))
+		if err != nil {
+			return err
+		}
+		if value.Pinned && !value.Archived {
+			count++
+		}
+	}
+	if count >= MaxFavoriteBoards {
+		return ErrFavoriteLimit
+	}
+	return nil
 }
 
 func (s *Store) CreateCard(name string, input CardInput) (Card, error) {

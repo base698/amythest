@@ -1541,6 +1541,144 @@ func TestCrossBoardMovesRejectDestinationIDCollisionInEitherFile(t *testing.T) {
 	}
 }
 
+func TestCreateBoardRejectsFourthActiveFavorite(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	pinned := true
+	for _, name := range []string{"one", "two", "three"} {
+		if _, err := store.CreateBoardWithInput(BoardInput{Name: name, Pinned: &pinned}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.CreateBoardWithInput(BoardInput{Name: "four", Pinned: &pinned}); !errors.Is(err, ErrFavoriteLimit) {
+		t.Fatalf("fourth favorite create error = %v, want ErrFavoriteLimit", err)
+	}
+	if _, err := os.Stat(store.boardPath("four")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected board was created: %v", err)
+	}
+}
+
+func TestPatchBoardSettingsRejectsFourthActiveFavorite(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	pinned := true
+	for _, name := range []string{"one", "two", "three"} {
+		if _, err := store.CreateBoardWithInput(BoardInput{Name: name, Pinned: &pinned}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unpinned := false
+	if _, err := store.CreateBoardWithInput(BoardInput{Name: "four", Pinned: &unpinned}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PatchBoardSettings("four", BoardSettingsPatch{Pinned: &pinned}); !errors.Is(err, ErrFavoriteLimit) {
+		t.Fatalf("fourth favorite patch error = %v, want ErrFavoriteLimit", err)
+	}
+	loaded, err := store.Load("four")
+	if err != nil || loaded.Pinned {
+		t.Fatalf("rejected patch persisted: pinned=%t err=%v", loaded.Pinned, err)
+	}
+}
+
+func TestConcurrentFavoritePatchesCannotExceedLimit(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root, fixedClock)
+	pinned := true
+	for _, name := range []string{"one", "two"} {
+		if _, err := store.CreateBoardWithInput(BoardInput{Name: name, Pinned: &pinned}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unpinned := false
+	for _, name := range []string{"three", "four"} {
+		if _, err := store.CreateBoardWithInput(BoardInput{Name: name, Pinned: &unpinned}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for index, name := range []string{"three", "four"} {
+		concurrentStore := []*Store{store, NewStore(root, fixedClock)}[index]
+		go func(store *Store, name string) {
+			<-start
+			_, err := store.PatchBoardSettings(name, BoardSettingsPatch{Pinned: &pinned})
+			errs <- err
+		}(concurrentStore, name)
+	}
+	close(start)
+	var succeeded, rejected int
+	for range 2 {
+		if err := <-errs; err == nil {
+			succeeded++
+		} else if errors.Is(err, ErrFavoriteLimit) {
+			rejected++
+		} else {
+			t.Fatalf("unexpected concurrent patch error: %v", err)
+		}
+	}
+	if succeeded != 1 || rejected != 1 {
+		t.Fatalf("concurrent results: succeeded=%d rejected=%d", succeeded, rejected)
+	}
+}
+
+func TestConcurrentFavoriteCreatesCannotExceedLimit(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root, fixedClock)
+	pinned := true
+	for _, name := range []string{"one", "two"} {
+		if _, err := store.CreateBoardWithInput(BoardInput{Name: name, Pinned: &pinned}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for index, name := range []string{"three", "four"} {
+		concurrentStore := []*Store{store, NewStore(root, fixedClock)}[index]
+		go func(store *Store, name string) {
+			<-start
+			_, err := store.CreateBoardWithInput(BoardInput{Name: name, Pinned: &pinned})
+			errs <- err
+		}(concurrentStore, name)
+	}
+	close(start)
+	var succeeded, rejected int
+	for range 2 {
+		if err := <-errs; err == nil {
+			succeeded++
+		} else if errors.Is(err, ErrFavoriteLimit) {
+			rejected++
+		} else {
+			t.Fatalf("unexpected concurrent create error: %v", err)
+		}
+	}
+	if succeeded != 1 || rejected != 1 {
+		t.Fatalf("concurrent results: succeeded=%d rejected=%d", succeeded, rejected)
+	}
+}
+
+func TestRestoringPinnedArchivedBoardRejectsFourthActiveFavorite(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	pinned := true
+	if _, err := store.CreateBoardWithInput(BoardInput{Name: "archived", Pinned: &pinned}); err != nil {
+		t.Fatal(err)
+	}
+	archived := true
+	if _, err := store.PatchBoardSettings("archived", BoardSettingsPatch{Archived: &archived}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"one", "two", "three"} {
+		if _, err := store.CreateBoardWithInput(BoardInput{Name: name, Pinned: &pinned}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restore := false
+	if _, err := store.PatchBoardSettings("archived", BoardSettingsPatch{Archived: &restore}); !errors.Is(err, ErrFavoriteLimit) {
+		t.Fatalf("restore error = %v, want ErrFavoriteLimit", err)
+	}
+	loaded, err := store.Load("archived")
+	if err != nil || !loaded.Archived || !loaded.Pinned {
+		t.Fatalf("rejected restore changed board: archived=%t pinned=%t err=%v", loaded.Archived, loaded.Pinned, err)
+	}
+}
+
 func setDivergentDoneMetadata(t *testing.T, store *Store, name, displayName string) {
 	t.Helper()
 	done, err := readBoard(store.donePath(name))

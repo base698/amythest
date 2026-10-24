@@ -557,6 +557,73 @@ func TestPatchBoardSettingsRequiresCSRFAndPersistsFocus(t *testing.T) {
 	}
 }
 
+func TestConcurrentFavoriteRequestsCannotExceedLimit(t *testing.T) {
+	for _, operation := range []string{"create", "settings"} {
+		t.Run(operation, func(t *testing.T) {
+			srv, store := testServer(t)
+			defer srv.Close()
+			pinned, unpinned := true, false
+			if _, err := store.CreateBoardWithInput(board.BoardInput{Name: "second", Pinned: &pinned}); err != nil {
+				t.Fatal(err)
+			}
+			if operation == "settings" {
+				for _, name := range []string{"candidate-a", "candidate-b"} {
+					if _, err := store.CreateBoardWithInput(board.BoardInput{Name: name, Pinned: &unpinned}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+
+			loginResp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewBufferString(`{"username":"operator","password":"correct horse"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var login struct {
+				CSRF string `json:"csrf"`
+			}
+			if err := json.NewDecoder(loginResp.Body).Decode(&login); err != nil {
+				t.Fatal(err)
+			}
+			_ = loginResp.Body.Close()
+			cookie := loginResp.Cookies()[0]
+			start := make(chan struct{})
+			statuses := make(chan int, 2)
+			for _, name := range []string{"candidate-a", "candidate-b"} {
+				go func(name string) {
+					<-start
+					method, url, payload := http.MethodPost, srv.URL+"/api/boards", `{"name":"`+name+`","pinned":true}`
+					if operation == "settings" {
+						method, url, payload = http.MethodPatch, srv.URL+"/api/boards/"+name+"/settings", `{"pinned":true}`
+					}
+					req, _ := http.NewRequest(method, url, bytes.NewBufferString(payload))
+					req.Header.Set("Content-Type", "application/json")
+					req.Header.Set("X-CSRF-Token", login.CSRF)
+					req.AddCookie(cookie)
+					resp, requestErr := http.DefaultClient.Do(req)
+					if requestErr != nil {
+						statuses <- 0
+						return
+					}
+					_ = resp.Body.Close()
+					statuses <- resp.StatusCode
+				}(name)
+			}
+			close(start)
+			counts := map[int]int{}
+			for range 2 {
+				counts[<-statuses]++
+			}
+			wantSuccess := http.StatusOK
+			if operation == "create" {
+				wantSuccess = http.StatusCreated
+			}
+			if counts[wantSuccess] != 1 || counts[http.StatusBadRequest] != 1 {
+				t.Fatalf("concurrent %s statuses = %#v", operation, counts)
+			}
+		})
+	}
+}
+
 func TestMoveArchivedCardToBoardAPIRequiresConfirmation(t *testing.T) {
 	srv, store := testServer(t)
 	defer srv.Close()

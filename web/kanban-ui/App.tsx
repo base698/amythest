@@ -14,6 +14,7 @@ import { Markdown } from './MarkdownView'
 import { toggleTaskLine } from './markdown'
 import { KANBAN_MOUNT, NOTES_BASE, cardIdFromHash } from './mount.ts'
 import { boardFocusCandidate, boardLabel, organizeBoards, selectedFocusCard } from './boardOrganization.ts'
+import { applyFavoriteMutation, boardSummaryFromData, shouldLeaveAfterSettingsSave } from './boardUpdates.ts'
 import {
   FocusReviewSection,
   FocusTaskDialog,
@@ -373,8 +374,8 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
     setError('')
     try {
       const updated = await mutate<BoardData>(`${API_BASE}/boards/${name}/settings`, 'PATCH', { pinned: favorite })
-      setBoards((current) => current.map((item) => item.name === name ? { ...item, ...updated, counts: item.counts } : item))
-      if (board?.name === name) setBoard(updated)
+      setBoards((current) => applyFavoriteMutation(current, null, name, updated).summaries)
+      setBoard((current) => applyFavoriteMutation([], current, name, updated).board)
     } catch (caught) {
       setError(message(caught))
     } finally {
@@ -530,7 +531,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
           setBoard(updated)
           await loadBoardCounts()
           setBoardSettingsOpen(false)
-          if (updated.archived) {
+          if (shouldLeaveAfterSettingsSave(board.archived, updated.archived)) {
             const next = organizeBoards(await api<BoardSummary[]>(`${API_BASE}/boards`)).active.find((item) => item.name !== updated.name)
             if (next) await selectBoard(next.name, 'replace', [], { mode: 'or', excluded: [] })
             setBoardDirectoryOpen(true)
@@ -545,7 +546,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
       {newBoardOpen && <NewBoardDialog canPin={organizedBoards.pinned.length < MAX_FAVORITE_BOARDS} onClose={() => setNewBoardOpen(false)} onCreate={async (input) => {
         const created = await mutate<BoardData>(`${API_BASE}/boards`, 'POST', input)
         navigationRequest.current++
-        setBoards((current) => [...current, { ...created, counts: {} }])
+        setBoards((current) => [...current, boardSummaryFromData(created, {})])
         focusModeRef.current = false
         setFocusMode(false)
         setActiveBoard(created.name)

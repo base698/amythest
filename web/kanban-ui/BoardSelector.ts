@@ -21,6 +21,9 @@ export function BoardSelector<T extends BoardMetadata>({ boards, activeBoard, di
     organized.archived.map((item) => createElement('option', { key: item.name, value: item.name }, boardLabel(item))),
   ))
 
+  const favoriteLimitReached = Boolean(selected && !selected.pinned && !canToggleFavorite)
+  const favoriteHelpId = favoriteLimitReached ? 'favorite-limit-help' : undefined
+
   return createElement('div', { className: 'board-selector' },
     createElement('select', {
       'aria-label': 'Select board',
@@ -29,13 +32,16 @@ export function BoardSelector<T extends BoardMetadata>({ boards, activeBoard, di
       value: selected?.name || '',
     }, children),
     selected && !selected.archived ? createElement('button', {
+      'aria-describedby': favoriteHelpId,
       'aria-label': `${selected.pinned ? 'Unfavorite' : 'Favorite'} ${boardLabel(selected)}`,
       'aria-pressed': Boolean(selected.pinned),
       className: 'board-favorite-button',
       disabled: disabled || !canToggleFavorite,
       onClick: () => onFavorite(selected.name, !selected.pinned),
-      title: !selected.pinned && !canToggleFavorite ? `You can favorite up to ${MAX_FAVORITE_BOARDS} boards` : undefined,
       type: 'button',
     }, createElement('span', { 'aria-hidden': 'true' }, selected.pinned ? '★' : '☆')) : null,
+    favoriteLimitReached ? createElement('p', { className: 'visually-hidden', id: favoriteHelpId },
+      `You can favorite up to ${MAX_FAVORITE_BOARDS} boards. Unfavorite one to make room.`,
+    ) : null,
   )
 }
