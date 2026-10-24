@@ -587,7 +587,11 @@ func TestConcurrentFavoriteRequestsCannotExceedLimit(t *testing.T) {
 			_ = loginResp.Body.Close()
 			cookie := loginResp.Cookies()[0]
 			start := make(chan struct{})
-			statuses := make(chan int, 2)
+			type result struct {
+				status int
+				body   string
+			}
+			results := make(chan result, 2)
 			for _, name := range []string{"candidate-a", "candidate-b"} {
 				go func(name string) {
 					<-start
@@ -601,17 +605,27 @@ func TestConcurrentFavoriteRequestsCannotExceedLimit(t *testing.T) {
 					req.AddCookie(cookie)
 					resp, requestErr := http.DefaultClient.Do(req)
 					if requestErr != nil {
-						statuses <- 0
+						results <- result{}
 						return
 					}
+					body, readErr := io.ReadAll(resp.Body)
 					_ = resp.Body.Close()
-					statuses <- resp.StatusCode
+					if readErr != nil {
+						results <- result{}
+						return
+					}
+					results <- result{status: resp.StatusCode, body: string(body)}
 				}(name)
 			}
 			close(start)
 			counts := map[int]int{}
+			var rejectionBody string
 			for range 2 {
-				counts[<-statuses]++
+				result := <-results
+				counts[result.status]++
+				if result.status == http.StatusBadRequest {
+					rejectionBody = result.body
+				}
 			}
 			wantSuccess := http.StatusOK
 			if operation == "create" {
@@ -619,6 +633,10 @@ func TestConcurrentFavoriteRequestsCannotExceedLimit(t *testing.T) {
 			}
 			if counts[wantSuccess] != 1 || counts[http.StatusBadRequest] != 1 {
 				t.Fatalf("concurrent %s statuses = %#v", operation, counts)
+			}
+			wantBody := `{"error":"at most three active boards may be favorites"}` + "\n"
+			if rejectionBody != wantBody {
+				t.Fatalf("concurrent %s rejection body = %q, want %q", operation, rejectionBody, wantBody)
 			}
 		})
 	}

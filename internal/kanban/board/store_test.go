@@ -1578,6 +1578,57 @@ func TestPatchBoardSettingsRejectsFourthActiveFavorite(t *testing.T) {
 	}
 }
 
+func TestCreateFavoriteRejectsWhenExistingBoardCannotBeInspected(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	pinned := true
+	if _, err := store.CreateBoardWithInput(BoardInput{Name: "existing", Pinned: &pinned}); err != nil {
+		t.Fatal(err)
+	}
+	inspectionErr := errors.New("injected board inspection failure")
+	store.boardFileExists = func(path string) (bool, error) {
+		if path == store.boardPath("existing") {
+			return false, inspectionErr
+		}
+		return boardFileExists(path)
+	}
+	if names := store.BoardNames(); len(names) != 0 {
+		t.Fatalf("permissive board names = %v, want unreadable board omitted", names)
+	}
+
+	if _, err := store.CreateBoardWithInput(BoardInput{Name: "candidate", Pinned: &pinned}); !errors.Is(err, inspectionErr) {
+		t.Fatalf("favorite create error = %v, want inspection error", err)
+	}
+	if _, err := os.Stat(store.boardPath("candidate")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected board was created: %v", err)
+	}
+}
+
+func TestFavoriteSettingsRejectWhenExistingBoardCannotBeInspected(t *testing.T) {
+	store := NewStore(t.TempDir(), fixedClock)
+	pinned, unpinned := true, false
+	if _, err := store.CreateBoardWithInput(BoardInput{Name: "existing", Pinned: &pinned}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateBoardWithInput(BoardInput{Name: "candidate", Pinned: &unpinned}); err != nil {
+		t.Fatal(err)
+	}
+	inspectionErr := errors.New("injected board inspection failure")
+	store.boardFileExists = func(path string) (bool, error) {
+		if path == store.boardPath("existing") {
+			return false, inspectionErr
+		}
+		return boardFileExists(path)
+	}
+
+	if _, err := store.PatchBoardSettings("candidate", BoardSettingsPatch{Pinned: &pinned}); !errors.Is(err, inspectionErr) {
+		t.Fatalf("favorite settings error = %v, want inspection error", err)
+	}
+	loaded, err := store.Load("candidate")
+	if err != nil || loaded.Pinned {
+		t.Fatalf("rejected patch persisted: pinned=%t err=%v", loaded.Pinned, err)
+	}
+}
+
 func TestConcurrentFavoritePatchesCannotExceedLimit(t *testing.T) {
 	root := t.TempDir()
 	store := NewStore(root, fixedClock)

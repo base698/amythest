@@ -55,12 +55,13 @@ var ErrFavoriteLimit = errors.New("at most three active boards may be favorites"
 const MaxFavoriteBoards = 3
 
 type Store struct {
-	root           string
-	now            func() time.Time
-	mutex          sync.Mutex
-	writeFile      func(string, []byte) error
-	writeResult    func(string, []byte) (bool, error)
-	moveCheckpoint func(string)
+	root            string
+	now             func() time.Time
+	mutex           sync.Mutex
+	boardFileExists func(string) (bool, error)
+	writeFile       func(string, []byte) error
+	writeResult     func(string, []byte) (bool, error)
+	moveCheckpoint  func(string)
 }
 
 type archiveJournal struct {
@@ -100,7 +101,10 @@ func NewStore(root string, clock func() time.Time) *Store {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Store{root: root, now: clock, writeFile: atomicWrite, writeResult: atomicWriteResult}
+	return &Store{
+		root: root, now: clock, boardFileExists: boardFileExists,
+		writeFile: atomicWrite, writeResult: atomicWriteResult,
+	}
 }
 
 func (s *Store) EnsureBoard(name string) error {
@@ -168,13 +172,38 @@ func (s *Store) BoardNames() []string {
 		if !entry.IsDir() || !validBoardName(entry.Name()) {
 			continue
 		}
-		if exists, err := boardFileExists(s.boardPath(entry.Name())); err != nil || !exists {
+		if exists, err := s.boardFileExists(s.boardPath(entry.Name())); err != nil || !exists {
 			continue // a directory without a board file is not a board yet
 		}
 		out = append(out, entry.Name())
 	}
 	sort.Strings(out)
 	return out
+}
+
+// strictBoardNames is the fail-closed counterpart to BoardNames for invariant
+// checks. An inspection error makes the board set incomplete, so callers must
+// reject the mutation rather than treating the partial list as authoritative.
+func (s *Store) strictBoardNames() ([]string, error) {
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, entry := range entries {
+		if !entry.IsDir() || !validBoardName(entry.Name()) {
+			continue
+		}
+		exists, err := s.boardFileExists(s.boardPath(entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("inspect board %q: %w", entry.Name(), err)
+		}
+		if exists {
+			out = append(out, entry.Name())
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 func (s *Store) ListBoards() ([]BoardSummary, error) {
@@ -365,8 +394,12 @@ func (s *Store) validateFavoriteLimit(candidate Board, candidateName string) err
 	if !candidate.Pinned || candidate.Archived {
 		return nil
 	}
+	names, err := s.strictBoardNames()
+	if err != nil {
+		return err
+	}
 	count := 0
-	for _, name := range s.BoardNames() {
+	for _, name := range names {
 		if name == candidateName {
 			continue
 		}
