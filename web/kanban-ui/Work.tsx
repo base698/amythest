@@ -2,13 +2,14 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { NOTES_BASE } from './mount'
 import type { Card } from './BoardView'
 import './work.css'
+import { githubCommitURL, diffLineClass } from './work-artifacts'
 import { groupAttention, attentionStatus, type Attention, type AttentionGroup } from './work-inbox'
 const API = `${NOTES_BASE}api/work`
 type Run = { id: string; collector: string; session_id: string; card_id: string; project: string; started_at: string; finished_at: string; outcome: string; output_version: number; reviewed_through_version: number; historical: boolean; reviewable: boolean }
 type Binding = { id: string; version: number; card_id: string; acknowledged: boolean }
 type Slot = { collector: string; pane: string; session_id: string; status: string; project: string; tab: string; binding?: Binding; binding_version: number }
 type Machine = { collector: string; name: string; online: boolean; syncing: boolean }
-type Artifact = { id: string; link_id: string; run_id: string; card_id: string; kind: string; ref: string; title: string; media_hash: string; available: boolean; remote_path: string; attribution: string; featured: boolean }
+type Artifact = { identity_key: string; id: string; link_id: string; run_id: string; card_id: string; kind: string; ref: string; title: string; media_hash: string; available: boolean; remote_path: string; attribution: string; featured: boolean }
 type Document = { key: string; run_id: string; title: string; body: string }
 type SessionProject = { session_id: string; collector: string; agent: string; provider_ref: string; title: string; status: string; project: string; source_project: string; assigned: boolean; project_version: number }
 type Snapshot = { projects: string[]; sessions: SessionProject[]; runs: Run[]; slots: Slot[]; machines: Machine[]; artifacts: Artifact[]; documents: Document[] }
@@ -62,7 +63,10 @@ export function WorkPanel({ card, readOnly = false }: { card: string; readOnly?:
   </article>)}
  </section>
 }
-function ArtifactView({ artifact: a, file }: { artifact: Artifact; file?: () => void }) {
+function ArtifactView({ artifact, file }: { artifact: Artifact; file?: () => void }) {
+ return artifact.kind === 'commit' ? <CommitArtifact artifact={artifact} file={file} /> : <FileArtifact artifact={artifact} file={file} />
+}
+function FileArtifact({ artifact: a, file }: { artifact: Artifact; file?: () => void }) {
  const [expanded, setExpanded] = useState(false), [failed, setFailed] = useState(false)
  const dialog = useRef<HTMLDialogElement>(null)
  const safe = /^https?:\/\//i.test(a.ref), available = !!a.media_hash && a.available
@@ -86,6 +90,43 @@ function ArtifactView({ artifact: a, file }: { artifact: Artifact; file?: () => 
    <header><strong>{title}</strong><button className="quiet" type="button" autoFocus onClick={() => setExpanded(false)}>Close</button></header>
    {expanded && <img src={media} alt={title} />}
    <footer><a href={media} target="_blank" rel="noreferrer">Open in new tab</a><a href={download} download={title}>Download</a></footer>
+  </dialog>}
+ </li>
+}
+
+function CommitArtifact({ artifact: a, file }: { artifact: Artifact; file?: () => void }) {
+ const [expanded, setExpanded] = useState(false), [patch, setPatch] = useState<string | null>(null), [error, setError] = useState('')
+ const dialog = useRef<HTMLDialogElement>(null)
+ const github = githubCommitURL(a.identity_key || '', a.ref), available = !!a.media_hash && a.available
+ const title = a.title || 'Commit', sha = a.ref.slice(0, 12)
+ const media = `${API}/media/${a.media_hash}`, view = `${media}?view=diff`, download = `${media}?download=1&filename=${encodeURIComponent(sha + '.patch')}`
+ useEffect(() => { if (expanded) dialog.current?.showModal(); else dialog.current?.close() }, [expanded])
+ useEffect(() => {
+  if (!expanded || !available) return
+  const abort = new AbortController(); setPatch(null); setError('')
+  void fetch(view, { credentials: 'same-origin', signal: abort.signal }).then(async response => {
+   if (!response.ok) throw new Error('The diff is unavailable. Try downloading the patch or opening the repository.')
+   const text = await response.text(); if (!abort.signal.aborted) setPatch(text)
+  }).catch(e => { if (!abort.signal.aborted) setError(String(e)) })
+  return () => abort.abort()
+ }, [expanded, available, view])
+ const lines = patch?.split('\n') || []
+ return <li className="work-artifact work-commit">
+  <div className="work-artifact-info"><span className="work-kind">Commit</span>{!a.card_id && <small>Suggested · unfiled</small>}
+   {available ? <button type="button" className="work-artifact-title" onClick={() => setExpanded(true)}>{title}</button> : github ? <a href={github} target="_blank" rel="noreferrer">{title}</a> : <strong>{title}</strong>}
+   <code>{sha}</code>
+  </div>
+  <div className="work-artifact-actions">
+   {available && <><button className="quiet" type="button" onClick={() => setExpanded(true)}>View diff</button><a href={view} target="_blank" rel="noreferrer">Open diff in new tab</a><a href={download} download={`${sha}.patch`}>Download patch</a></>}
+   {github && <a href={github} target="_blank" rel="noreferrer">Open on GitHub</a>}
+   {!available && <small>{github ? 'Local diff has not been uploaded yet.' : 'Diff has not been uploaded; this commit has no GitHub link.'}</small>}
+   {file && <button type="button" className="quiet" onClick={file}>File on this card</button>}
+  </div>
+  {available && <dialog ref={dialog} className="work-image-dialog work-diff-dialog" aria-label={`Diff: ${title}`} onClose={() => setExpanded(false)} onClick={e => { if (e.target === e.currentTarget) setExpanded(false) }}>
+   <header><div><strong>{title}</strong><code>{sha}</code></div><button className="quiet" type="button" autoFocus onClick={() => setExpanded(false)}>Close</button></header>
+   {error && <p role="alert">{error}</p>}{patch === null && !error && <p>Loading diff…</p>}
+   {patch !== null && <><pre className="work-diff" tabIndex={0} aria-label="Commit diff">{lines.slice(0, 4000).map((line, index) => <span key={index} className={diffLineClass(line)}>{line || '\u00a0'}</span>)}</pre>{lines.length > 4000 && <p>Showing the first 4,000 lines. Open or download the captured patch for the rest.</p>}</>}
+   <footer><a href={view} target="_blank" rel="noreferrer">Open diff in new tab</a><a href={download} download={`${sha}.patch`}>Download patch</a>{github && <a href={github} target="_blank" rel="noreferrer">Open on GitHub</a>}</footer>
   </dialog>}
  </li>
 }

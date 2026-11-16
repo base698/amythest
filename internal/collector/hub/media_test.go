@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -119,5 +121,47 @@ func TestMediaStagingRejectsSymlinksAndDisguisedFiles(t *testing.T) {
 	f.Close()
 	if _, e = q.stageMedia(Artifact{Kind: "image", RemotePath: source}); e == nil {
 		t.Fatal("staged oversized file")
+	}
+}
+
+func TestCompletedCommitQueuesCapturedDiff(t *testing.T) {
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "repo")
+	os.Mkdir(repo, 0700)
+	git := func(args ...string) string {
+		t.Helper()
+		c := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Example", "GIT_AUTHOR_EMAIL=example@example.com", "GIT_COMMITTER_NAME=Example", "GIT_COMMITTER_EMAIL=example@example.com")
+		b, e := c.CombinedOutput()
+		if e != nil {
+			t.Fatal(string(b), e)
+		}
+		return strings.TrimSpace(string(b))
+	}
+	git("init")
+	os.WriteFile(filepath.Join(repo, "sample.txt"), []byte("captured version\n"), 0600)
+	git("add", ".")
+	git("commit", "-m", "Capture a change")
+	sha := git("rev-parse", "HEAD")
+	q, e := Open(filepath.Join(dir, "state"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer q.Close()
+	job := Job{Session: Session{ID: "session", Run: "run"}, At: time.Now()}
+	if e = q.Update(func(s *State) error { s.Jobs = []Job{job}; return nil }); e != nil {
+		t.Fatal(e)
+	}
+	if e = q.Complete(job, []Artifact{{Key: "commit:" + sha, Kind: "commit", Ref: sha, Repo: repo}}); e != nil {
+		t.Fatal(e)
+	}
+	state := q.Snapshot()
+	a := state.Events[0].Artifact
+	if a.MediaHash == "" || !state.MediaPending[a.MediaHash] {
+		t.Fatal("commit has no durable upload", state)
+	}
+	patch, e := os.ReadFile(filepath.Join(dir, "state", "media-outbox", a.MediaHash))
+	if e != nil || !bytes.Contains(patch, []byte(sha)) || !bytes.Contains(patch, []byte("+captured version")) {
+		t.Fatal(string(patch), e)
 	}
 }

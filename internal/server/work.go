@@ -237,6 +237,22 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			defer f.Close()
+			if r.URL.Query().Get("view") == "diff" {
+				ok, err := s.work.IsCommitMedia(digest)
+				if err != nil {
+					s.workError(w, err)
+					return
+				}
+				if !ok {
+					http.NotFound(w, r)
+					return
+				}
+				if m.Bytes > 512<<10 {
+					http.Error(w, "Diff exceeds preview limit; download the patch instead.", 413)
+					return
+				}
+				m.Type = "text/plain; charset=utf-8"
+			}
 			w.Header().Set("Content-Type", m.Type)
 			w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 			if r.URL.Query().Get("download") == "1" || m.Type == "application/octet-stream" {

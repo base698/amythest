@@ -179,3 +179,10 @@ func (s *Store) Evict(digest string) error {
 	}
 	return e
 }
+
+// Only a blob explicitly attached to a commit may be presented as a text diff.
+func (s *Store) IsCommitMedia(digest string) (bool, error) {
+	var exists bool
+	e := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM artifacts WHERE kind='commit' AND media_hash=?)`, digest).Scan(&exists)
+	return exists, e
+}

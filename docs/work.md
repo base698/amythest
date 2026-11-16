@@ -43,6 +43,12 @@ under each image and inside its preview. Supported videos have playback controls
 Unavailable files remain labeled as being on the collector. Media requires the same
 private authentication as Work.
 
+Commit artifacts offer **View diff**, **Open diff in new tab**, and **Download
+patch** when their captured diff is available. **Open on GitHub** links to the exact
+commit when its recorded repository identity is on github.com. An unpushed commit
+may not yet exist there; the captured diff remains available in Work. Large captured
+diffs are explicitly marked as truncated, and the modal shows up to 4,000 lines.
+
 The board displays Work badges. Focus has **Needs you**, with completed turns grouped
 by session, card and outcome. Each entry identifies the session, project, collector
 and completion time, and previews captured output. A successful turn only means the

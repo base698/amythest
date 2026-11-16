@@ -20,6 +20,9 @@ const mediaOutboxLimit = 512 << 20
 // or disappear after a turn; retries must upload the exact bytes originally seen.
 // Caller holds mediaMu through the queue update that records the pending upload.
 func (q *Queue) stageMedia(a Artifact) (string, error) {
+	if a.Kind == "commit" && a.MediaHash == "" {
+		return q.stageCommit(a)
+	}
 	if a.MediaHash != "" || (a.Kind != "image" && a.Kind != "video") || !filepath.IsAbs(a.RemotePath) {
 		return a.MediaHash, nil
 	}
@@ -52,22 +55,9 @@ func (q *Queue) stageMedia(a Artifact) (string, error) {
 	if _, e = src.Seek(0, 0); e != nil {
 		return "", e
 	}
-	dir := filepath.Join(filepath.Dir(q.path), "media-outbox")
-	if e = os.MkdirAll(dir, 0700); e != nil {
-		return "", e
-	}
-	files, e := os.ReadDir(dir)
+	dir, e := q.mediaRoom(info.Size())
 	if e != nil {
 		return "", e
-	}
-	var total int64
-	for _, f := range files {
-		if i, e := f.Info(); e == nil {
-			total += i.Size()
-		}
-	}
-	if total+info.Size() > mediaOutboxLimit {
-		return "", errors.New("media outbox is full")
 	}
 	dst, e := os.CreateTemp(dir, ".capture-")
 	if e != nil {
@@ -106,6 +96,28 @@ func (q *Queue) stageMedia(a Artifact) (string, error) {
 	}
 	defer directory.Close()
 	return digest, directory.Sync()
+}
+
+func (q *Queue) mediaRoom(size int64) (string, error) {
+	dir := filepath.Join(filepath.Dir(q.path), "media-outbox")
+	if e := os.MkdirAll(dir, 0700); e != nil {
+		return "", e
+	}
+	files, e := os.ReadDir(dir)
+	if e != nil {
+		return "", e
+	}
+	var total int64
+	for _, f := range files {
+		if i, e := f.Info(); e == nil {
+			total += i.Size()
+		}
+	}
+	if total+size > mediaOutboxLimit {
+		return "", errors.New("media outbox is full")
+	}
+
+	return dir, nil
 }
 
 func mediaDigest(digest string) bool {

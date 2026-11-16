@@ -141,3 +141,11 @@ retry independently of acknowledged events and survive restarts; successful uplo
 remove the local copy. Each sync attempts one file, with a one-minute timeout, so
 lifecycle delivery continues during media failures. Missing, unsupported or oversized
 files remain listed as being on the collector. Server media quotas still apply.
+
+
+Commit artifacts also capture the exact commit's text diff into the same durable
+outbox. Capture includes the file summary and first-parent diff for merges; external
+diff commands and text conversion are disabled. Working-tree changes are excluded.
+Captures are limited to 256 KiB with an explicit truncation notice; binary changes
+are summarized rather than bundled. Private/local repositories remain viewable in
+Work without publishing source code to a Git host.
