@@ -3,3 +3,21 @@ node_modules/
 data/
 *.log
 .DS_Store
+
+# Local credentials, runtime state and publication artifacts
+.env
+.env.*
+!.env.example
+*.credential.json
+credential.json
+credentials.json
+*.db
+*.db-wal
+*.db-shm
+*.sqlite*
+*.pem
+*.key
+*.jsonl
+hub.json
+codex.json
+__pycache__/

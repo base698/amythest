@@ -32,10 +32,12 @@ import (
 	"github.com/base698/amythest/internal/share"
 	"github.com/base698/amythest/internal/tasks"
 	"github.com/base698/amythest/internal/vault"
+	"github.com/base698/amythest/internal/work"
 	"github.com/base698/amythest/web"
 )
 
 type Server struct {
+	work   *work.Store
 	cfg    config.Config
 	tmpl   *template.Template
 	mux    *http.ServeMux
@@ -84,6 +86,10 @@ func jsonDecodeLimit(r *http.Request, into any, limit int64) error {
 }
 
 func New(cfg config.Config) (*Server, error) {
+	cfg.AuthMode = strings.ToLower(strings.TrimSpace(cfg.AuthMode))
+	if cfg.Work.Enabled && cfg.AuthMode != "private" {
+		return nil, errors.New("work requires private authentication")
+	}
 	// Canonicalize once so every consumer — the vault scanner, the no-follow
 	// task writer, the kanban store, share — agrees on one symlink-free root.
 	resolvedVault, err := filepath.EvalSymlinks(cfg.Vault)
@@ -134,6 +140,10 @@ func New(cfg config.Config) (*Server, error) {
 		return nil, err
 	}
 
+	if err := s.mountWork(); err != nil {
+		s.Close()
+		return nil, err
+	}
 	if err := s.Rescan(); err != nil {
 		return nil, err
 	}
@@ -212,6 +222,7 @@ func New(cfg config.Config) (*Server, error) {
 	})
 
 	mcpDeps := mcp.Deps{
+		Work:          s.work,
 		DB:            s.db,
 		Catalog:       s.catalog,
 		Kanban:        s.kanban,
@@ -222,7 +233,12 @@ func New(cfg config.Config) (*Server, error) {
 	}
 	jwtProtectsMCP := strings.ToLower(cfg.AuthMode) == "jwt" &&
 		(cfg.AuthProtect == "" || cfg.AuthProtect == "mcp" || cfg.AuthProtect == "all")
-	if jwtProtectsMCP {
+	if cfg.AuthMode == "private" {
+		mcpDeps.ReadOnly = true
+		h := mcp.HandlerNoAuth(mcpDeps)
+		s.mux.Handle("/mcp", h)
+		s.mux.Handle("/mcp/", h)
+	} else if jwtProtectsMCP {
 		// JWT replaces the static token gate on the MCP surface; the guard
 		// installed below authenticates it.
 		h := mcp.HandlerNoAuth(mcpDeps)
@@ -250,6 +266,12 @@ func New(cfg config.Config) (*Server, error) {
 }
 
 func (s *Server) Close() error {
+	if s.work != nil {
+		_ = s.work.Close()
+	}
+	if s.kanbanAuth != nil {
+		_ = s.kanbanAuth.Close()
+	}
 	if s.catalog != nil {
 		_ = s.catalog.Close()
 	}

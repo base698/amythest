@@ -1,4 +1,5 @@
 import { StrictMode } from 'react'
+import { WorkProvider } from './Work'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
 
@@ -12,4 +13,4 @@ document.documentElement.dataset.theme =
 const palette = localStorage.getItem('palette')
 if (palette && palette !== 'default') document.documentElement.dataset.palette = palette
 
-createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>)
+createRoot(document.getElementById('root')!).render(<StrictMode><WorkProvider><App /></WorkProvider></StrictMode>)

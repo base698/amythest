@@ -8,7 +8,7 @@ tags: [kanban, fixture, board]
 
 # Fixture Board Kanban
 
-> Managed by Netexplore Kanban. The structured data and readable board live together in this note.
+> Managed by Amythest Kanban. The structured data and readable board live together in this note.
 
 > A board used to freeze the legacy markdown format.
 > Second line.

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/base698/amythest/internal/work"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,6 +22,7 @@ type WebTheme struct {
 }
 
 type Config struct {
+	Work work.Config `yaml:"work"`
 	// Vault is the root of the Obsidian-style notes vault. May be a symlink.
 	Vault string `yaml:"vault"`
 	// Listen is the HTTP listen address. Loopback by default; the server is
@@ -29,8 +31,8 @@ type Config struct {
 	// BaseURL is the public path prefix the site is served under, e.g. "/"
 	// or "/notes". Used when generating absolute links.
 	BaseURL string `yaml:"base_url"`
-	// DataDir holds the SQLite indexes and render cache. Safe to delete;
-	// everything in it is derived from the vault.
+	// DataDir holds indexes, render cache and durable auth.db credentials.
+	// Do not delete the directory to rebuild an index.
 	DataDir string `yaml:"data_dir"`
 	// SiteName is shown in the page title and header.
 	SiteName string `yaml:"site_name"`
@@ -70,6 +72,10 @@ type Config struct {
 	// Auth: off (default, today's behavior), static (the existing
 	// AMYTHEST_MCP_TOKEN bearer check), or jwt (JWKS-validated bearer
 	// tokens). Protect selects the surface: mcp|ui|all.
+	AuthPublicURL     string        `yaml:"auth_public_url"`
+	AuthSessionTTL    time.Duration `yaml:"auth_session_ttl"`
+	AuthAllowHTTP     bool          `yaml:"auth_allow_http"`
+	LegacyMCPToken    bool          `yaml:"auth_legacy_mcp_token"`
 	AuthMode          string        `yaml:"auth_mode"`
 	AuthJWKSURI       string        `yaml:"auth_jwks_uri"`
 	AuthIssuer        string        `yaml:"auth_issuer"`
@@ -121,7 +127,7 @@ func Load(args []string) (Config, error) {
 	logOutput := fs.String("log-output", "", "log output: stdout|stderr")
 	logSource := fs.Bool("log-source", false, "include source file:line in logs")
 	requestIDHeader := fs.String("request-id-header", "", "correlation id header name")
-	authMode := fs.String("auth-mode", "", "auth mode: off|static|jwt")
+	authMode := fs.String("auth-mode", "", "auth mode: private|off|static|jwt")
 	authJWKS := fs.String("auth-jwks-uri", "", "JWKS document URL (jwt mode)")
 	authIssuer := fs.String("auth-issuer", "", "expected iss claim")
 	authAudience := fs.String("auth-audience", "", "expected aud claim")
@@ -196,6 +202,12 @@ func Load(args []string) (Config, error) {
 	if cfg.DataDir, err = expandHome(cfg.DataDir); err != nil {
 		return cfg, err
 	}
+	if cfg.Work.DB, err = expandHome(cfg.Work.DB); err != nil {
+		return Config{}, err
+	}
+	if cfg.Work.MediaDir, err = expandHome(cfg.Work.MediaDir); err != nil {
+		return Config{}, err
+	}
 	abs, err := filepath.Abs(cfg.Vault)
 	if err != nil {
 		return cfg, err
@@ -235,6 +247,18 @@ func applyEnv(cfg *Config) {
 	}
 	envStr(&cfg.RequestIDHeader, "AMYTHEST_REQUEST_ID_HEADER")
 	envStr(&cfg.AuthMode, "AMYTHEST_AUTH_MODE")
+	envStr(&cfg.AuthPublicURL, "AMYTHEST_AUTH_PUBLIC_URL")
+	if v := os.Getenv("AMYTHEST_AUTH_SESSION_TTL"); v != "" {
+		if d, e := time.ParseDuration(v); e == nil {
+			cfg.AuthSessionTTL = d
+		}
+	}
+	if v := os.Getenv("AMYTHEST_AUTH_ALLOW_HTTP"); v != "" {
+		cfg.AuthAllowHTTP = v == "true"
+	}
+	if v := os.Getenv("AMYTHEST_AUTH_LEGACY_MCP_TOKEN"); v != "" {
+		cfg.LegacyMCPToken = v == "true"
+	}
 	envStr(&cfg.AuthJWKSURI, "AMYTHEST_AUTH_JWKS_URI")
 	envStr(&cfg.AuthIssuer, "AMYTHEST_AUTH_ISSUER")
 	envStr(&cfg.AuthAudience, "AMYTHEST_AUTH_AUDIENCE")

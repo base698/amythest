@@ -20,7 +20,7 @@ export function setupSPA(onNav: () => void) {
   document.addEventListener("click", (e) => {
     if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
     const a = (e.target as Element).closest?.("a") as HTMLAnchorElement | null
-    if (!a || !a.href || a.target === "_blank" || a.hasAttribute("download")) return
+    if (!a || !a.href || a.target === "_blank" || a.hasAttribute("download") || a.hasAttribute("data-no-spa")) return
     const url = new URL(a.href)
     if (url.origin !== location.origin) return
     const base = document.body.dataset.base || "/"
@@ -39,6 +39,10 @@ export function setupSPA(onNav: () => void) {
 async function go(url: URL, push: boolean, onNav: () => void, keepScroll = false) {
   try {
     const res = await fetch(url.pathname + url.search)
+    if (res.redirected) {
+      location.href = res.url
+      return
+    }
     if (!res.ok) {
       location.href = url.href
       return

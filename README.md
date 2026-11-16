@@ -6,38 +6,12 @@ experience — wikilinks, backlinks, an interactive spring graph, ⌘K full-text
 search, a polished reading UI — plus the things a static site generator can't
 do, at a fraction of the memory.
 
-Born as a replacement for a Node/Quartz setup that peaked at **1.24 GiB RSS**
-on a Raspberry Pi. Amythest serves the same 1,700-note vault in **~50 MB**,
-cold-indexes it in about a second, and never serves a stale build because
-there is no build.
-
-![Resident memory before and after replacing Quartz with Amythest: the
-Quartz process idles around 600 MB with spikes past 1.1 GB, then the
-Amythest line takes over at roughly 50 MB](docs/memory-before-after.png)
-
-*Same vault, same Raspberry Pi, same day: Quartz (teal) vs Amythest
-(green) resident memory across the cutover.*
-
-![The notes UI: explorer sidebar with section nav, a rendered wiki index
-note with callout, and the spring graph, table of contents, and backlinks
-in the right rail — dark theme](docs/notes-ui.png)
-
-*Notes: explorer + section nav, rendered note, spring graph, table of
-contents, and backlinks.*
-
-![The kanban board: five status columns with cards carrying labels,
-comments, a blocked toggle, and a prominent New card button — dark
-theme](docs/kanban-ui.png)
-
-*Kanban: markdown-backed boards with metadata, P0-P3 priority, one explicit focus card per board,
-card search, labels, comments, due dates, blocked flags, and safe cross-board moves.*
-
 ## What's inside
 
 - **Live server, not a build step.** Pages render from an mmap'd SQLite
   index (FTS5) that reconciles with the vault on a fixed interval — the
   rescan *is* the freshness guarantee, so there is no file watcher to die.
-  Full reconcile of ~1,700 notes: ~1.4 s cold, no-op when nothing changed.
+  Unchanged notes do not need to be rendered again.
 - **Obsidian-flavored markdown**, AST-based (goldmark): `[[wikilinks]]` with
   `#heading` and `|alias`, transclusions with cycle guards, callouts
   (including unknown types), `==highlights==`, `#tags`, `[Key:: value]`
@@ -85,6 +59,11 @@ card search, labels, comments, due dates, blocked flags, and safe cross-board mo
   `search_notes` (with an `include_archived` flag), `get_note`, `list_notes`,
   `get_graph`, `query_tasks`, `query_base`, `query_sql`, and full `kanban_*`
   actions — in-process, same locks as the UI.
+
+For one application login, persistent 90-day browser sessions, and individually
+revocable agent/collector credentials, see [Authentication](docs/authentication.md).
+
+For herdr, Hermes and opt-in Codex lifecycle reporting, see [Amythest Collector](docs/collector.md).
 
 ## Quick start
 
@@ -161,9 +140,7 @@ toggle tasks and card checklist items (with Obsidian-style `✅`
 done-dates), quick-add tasks and cards, move or complete cards, and hand
 notes or cards to a running herdr agent as context.
 
-![amy today view](docs/amy-today.png)
 
-![amy board view](docs/amy-board.png)
 
 ```sh
 make install-amy          # builds and installs to ~/bin/amy

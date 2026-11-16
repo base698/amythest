@@ -27,3 +27,10 @@ rescan_interval: 5m
 # OPENAI_API_KEY in the environment.
 # share_plugins:
 #   - /opt/amythest/plugins/openai-transcribe
+
+# Private application login, durable 90-day browser sessions, and named tokens.
+# See docs/authentication.md. Keep disabled until credentials are configured.
+# auth_mode: private
+# auth_public_url: https://notes.example.com
+# auth_session_ttl: 2160h
+# auth_legacy_mcp_token: false

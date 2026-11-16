@@ -109,7 +109,7 @@ func indexRetrieval(tx *sql.Tx, v *vault.Vault, n *vault.Note, plain string, tag
 // Expansion is deliberately inspectable and limited to lexical associations;
 // it does not infer relationships or manufacture a synthesized memory.
 var relatedTerms = [][]string{
-	{"robotics", "robot", "demo-bot", "demo-robot", "example-robot", "trace walking", "computer vision"},
+	{"robotics", "robot", "automation", "computer vision"},
 	{"vision", "camera"}, {"ai", "artificial intelligence"},
 }
 
@@ -124,7 +124,7 @@ func retrievalQuery(query string) string {
 			continue
 		}
 		// Match known multiword aliases before splitting the query into AND terms.
-		// This makes Artificial Intelligence -> AI work in both directions.
+		// This makes artificial intelligence -> AI work in both directions.
 		width := 1
 		for _, group := range relatedTerms {
 			for _, term := range group {

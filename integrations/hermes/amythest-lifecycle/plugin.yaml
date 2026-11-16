@@ -1,0 +1,10 @@
+name: amythest-lifecycle
+version: "1.0.0"
+kind: backend
+description: Durable local lifecycle events for Amythest Work collectors
+provides_hooks:
+  - pre_llm_call
+  - on_session_end
+  - on_session_finalize
+  - pre_approval_request
+  - post_approval_response

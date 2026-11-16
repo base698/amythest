@@ -10,9 +10,8 @@ GOOS=linux GOARCH=arm64 go build -o bin/amythest-linux-arm64 ./cmd/amythest
 ssh "$HOST" 'mkdir -p ~/bin ~/.config/amythest ~/.config/systemd/user'
 scp bin/amythest-linux-arm64 "$HOST":~/bin/amythest.new
 
-# Never overwrite a live unit: hosts customize it (the example deployment runs -config with
-# listen :8088 and base_url /notes to match the portal proxy, while the unit in
-# this repo hardcodes :8639 and no base URL). Clobbering it 502s the site.
+# Never overwrite a live unit: deployments may customize their config file,
+# listen address and base path for a reverse proxy. Preserve those settings.
 if ssh "$HOST" 'test -f ~/.config/systemd/user/amythest.service'; then
   scp deploy/amythest.service "$HOST":~/.config/systemd/user/amythest.service.repo
   if ssh "$HOST" 'diff -q ~/.config/systemd/user/amythest.service ~/.config/systemd/user/amythest.service.repo >/dev/null'; then

@@ -37,6 +37,7 @@
         <a href="{{.Base}}bases/">Bases</a>
         <a href="{{.Base}}db">Data</a>
         <a href="{{.Base}}share">Share</a>
+        {{if .HasAccess}}<a data-no-spa href="{{.Base}}settings/access">Access</a>{{end}}
         {{if .HasKanban}}<a href="{{.Base}}kanban/">Kanban</a>{{end}}
       </nav>
       <nav class="explorer" aria-label="Explorer">

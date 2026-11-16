@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,7 @@ type Session struct {
 }
 
 type Manager struct {
+	db           *sql.DB
 	username     string
 	passwordHash [32]byte
 	secret       []byte
@@ -51,6 +53,9 @@ func (m *Manager) Authenticate(username, password string) bool {
 }
 
 func (m *Manager) NewSession(now time.Time) (string, Session, error) {
+	if m.db != nil {
+		return m.newPersistentSession(now)
+	}
 	csrfBytes := make([]byte, 24)
 	if _, err := rand.Read(csrfBytes); err != nil {
 		return "", Session{}, err
@@ -68,6 +73,9 @@ func (m *Manager) NewSession(now time.Time) (string, Session, error) {
 }
 
 func (m *Manager) Verify(token string, now time.Time) (Session, error) {
+	if m.db != nil {
+		return m.verifyPersistent(token, now)
+	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 2 {
 		return Session{}, ErrInvalidSession

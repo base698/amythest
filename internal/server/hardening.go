@@ -15,6 +15,11 @@ import (
 // for off. jwt mode fails fast on bad config or unreachable JWKS.
 func (s *Server) buildAuthGuard(cfg config.Config) (func(http.Handler) http.Handler, error) {
 	switch strings.ToLower(cfg.AuthMode) {
+	case "private":
+		if s.kanbanAuth == nil {
+			return nil, errors.New("private mode requires application username, password and session secret")
+		}
+		return s.privateGuard, nil
 	case "", "off":
 		return nil, nil
 	case "static":

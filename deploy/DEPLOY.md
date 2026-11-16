@@ -22,5 +22,6 @@ vault gauges, rescan health). A reasonable alert is resident memory
 sustained above ~300MB — normal steady state is well under 100MB with
 `GOMEMLIMIT=150MiB` set (the provided unit sets it).
 
-Everything under the data dir is derived from the vault and safe to
-delete; the first start after deletion just reindexes.
+The data directory can contain authoritative `auth.db` credentials and sessions.
+Do not delete it to rebuild an index. See [authentication.md](../docs/authentication.md)
+for private-mode setup, long-lived sessions, pairing and backup requirements.

@@ -59,6 +59,7 @@ type pageData struct {
 	Slug        string
 	Backlinks   []noteLink
 	HasKanban   bool
+	HasAccess   bool
 	Themes      []string
 }
 
@@ -299,6 +300,7 @@ func (s *Server) notFound(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) renderPage(w http.ResponseWriter, data pageData) {
+	data.HasAccess = s.cfg.AuthMode == "private"
 	s.renderPageStatus(w, http.StatusOK, data)
 }
 

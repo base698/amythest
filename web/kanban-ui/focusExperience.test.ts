@@ -396,3 +396,7 @@ test('Card editor disables every competing mutation control during attachment wo
   assert.match(regularDescription, /setBusy\(true\); setError\(''\)/)
   assert.match(regularDescription, /finally \{ setBusy\(false\) \}/)
 })
+
+test('an empty server task group does not prevent Focus from opening', () => {
+  assert.deepEqual(flattenOpenTasks([{ name: '', tasks: null as unknown as VaultTask[] }]), [])
+})

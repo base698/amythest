@@ -1,3 +1,4 @@
+import { WorkPill } from './Work'
 import type { DragEvent } from 'react'
 import { formatCreatedDate, formatDueDate } from './dates'
 
@@ -114,6 +115,7 @@ export function BoardView({ cards, focusCardId, onMove, onOpen, onBlockedChange,
                   }}
                 >
                   <button className="card-open" aria-label={`Open ${card.title}`} onClick={() => onOpen(card)} type="button">
+                    <WorkPill card={card.id} />
                     <span className="card-title">{card.blocked && <span className="blocked-flag">Blocked</span>}<span className={`priority-badge ${card.priority || 'p2'}`}>{(card.priority || 'p2').toUpperCase()}</span>{card.title}</span>
                     {card.description && <span className="card-description">{card.description}</span>}
                     {card.milestone && <span className="card-milestone">Milestone {card.milestone}</span>}

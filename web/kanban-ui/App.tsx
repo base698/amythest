@@ -1,3 +1,4 @@
+import { WorkPanel, WorkInbox, useWorkEnabled } from './Work'
 import { FormEvent, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { BoardView, type Attachment, type Card, type Priority, type Status } from './BoardView'
 import { BoardSelector, MAX_FAVORITE_BOARDS } from './BoardSelector.ts'
@@ -743,6 +744,7 @@ function FocusView({ boards, tasks, taskError, busy, onOpen, onOpenTask, onRefre
       <div><p className="eyebrow">Across active boards</p><h1 id="focus-page-title">Focus</h1><p>Explicitly selected focus cards always outrank read-only fallback suggestions. Amythest never changes focus or priority automatically.</p></div>
       <button className="quiet" disabled={busy} onClick={onRefresh} type="button">{busy ? 'Refreshing…' : 'Refresh'}</button>
     </header>
+    <WorkInbox boards={boards} onOpen={onOpen} />
     <FocusReviewSection boards={boards} busy={busy} onOpen={onOpen} />
     {busy && boards.length === 0 ? <div className="center-screen"><div className="spinner" aria-label="Loading focus" /></div> : <>
       {overall ? <article className="overall-focus" style={overall.board.color ? { '--board-color': overall.board.color } as CSSProperties : undefined}>
@@ -1066,6 +1068,8 @@ interface EditorInput { title: string; description: string; dueDate: string; mil
 function CardEditor({ card, board, busy, agents, readOnly = false, openOnBoardHref, onClose, onSave, onDelete, onComment, onUpload, onDeleteAttachment, onSaveDescription, moveBoards, onMoveBoard }: {
   card?: Card; board: string; busy: boolean; agents: AgentCatalog; readOnly?: boolean; openOnBoardHref?: string; onClose: () => void; onSave: (input: EditorInput) => Promise<void>; onDelete?: () => Promise<void>; onComment?: (body: string) => Promise<void>; onUpload?: (file: File) => Promise<Attachment>; onDeleteAttachment?: (attachment: Attachment) => Promise<void>; onSaveDescription?: (description: string) => Promise<void>; moveBoards: BoardSummary[]; onMoveBoard?: (destinationBoard: string) => Promise<void>
 }) {
+  const workEnabled = useWorkEnabled()
+  const [editorTab, setEditorTab] = useState<'details' | 'work'>('details')
   const [title, setTitle] = useState(card?.title || '')
   const [description, setDescription] = useState(card?.description || '')
   // Existing cards open on the rendered view; a new card starts in the editor.
@@ -1112,6 +1116,9 @@ function CardEditor({ card, board, busy, agents, readOnly = false, openOnBoardHr
             <button className="icon-button" disabled={closeDisabled} onClick={onClose} aria-label="Close" type="button">×</button>
           </div>
         </header>
+        {card && workEnabled && <nav className="work-tabs" aria-label="Card sections"><button type="button" className="quiet" aria-pressed={editorTab === 'details'} onClick={() => setEditorTab('details')}>Details</button><button type="button" className="quiet" aria-pressed={editorTab === 'work'} onClick={() => setEditorTab('work')}>Work</button></nav>}
+        {card && editorTab === 'work' && <WorkPanel card={card.id} readOnly={readOnly} />}
+        <div hidden={editorTab !== 'details'}>
         <form onSubmit={(event) => { event.preventDefault(); if (!readOnly && !operationBusy) void onSave({ title, description, dueDate, milestone, priority, status, assignee, agent, blocked, labels: labels.split(',').map((value) => value.trim()).filter(Boolean) }) }}>
           <fieldset className="editor-fields" disabled={readOnly || operationBusy}>
           <label className="title-field">Title<input autoFocus={!card} className="title-input" maxLength={200} placeholder="What needs doing?" required value={title} onChange={(event) => setTitle(event.target.value)} /></label>
@@ -1200,6 +1207,7 @@ function CardEditor({ card, board, busy, agents, readOnly = false, openOnBoardHr
           {onMoveBoard && moveBoards.length > 0 && <p className="hint">Moving preserves the card ID, content, attachments, and history.</p>}
           {onDelete && <button className="danger-link" disabled={operationBusy} onClick={() => { if (!operationBusy) void onDelete() }} type="button">Delete card…</button>}
         </section>}
+        </div>
       </section>
     </div>
   )

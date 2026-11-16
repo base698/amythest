@@ -88,7 +88,7 @@ export function collectReviewCards(boards: readonly FocusBoard[]): ReviewCard[] 
 }
 
 export function flattenOpenTasks(groups: readonly TaskGroup[]): VaultTask[] {
-  return groups.flatMap((group) => group.tasks).filter((task) => task.status === 'open')
+  return groups.flatMap((group) => group.tasks || []).filter((task) => task.status === 'open')
 }
 
 export function taskSourcePath(notesBase: string, slug: string): string {
