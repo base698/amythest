@@ -1,6 +1,9 @@
 package work
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"testing"
@@ -166,5 +169,78 @@ func TestAddingMediaToExistingArtifactReopensReviewOnce(t *testing.T) {
 	d, e := s.RunSnapshot("run")
 	if e != nil || len(d.Artifacts) != 1 || d.Runs[0].Version != 3 {
 		t.Fatal(d, e)
+	}
+}
+
+func TestCommitDiffRenditionDoesNotPoisonReplay(t *testing.T) {
+	s := testStore(t)
+	seed(t, s)
+	ingest(t, s, event(2, "run.start"))
+	a := event(3, "artifact")
+	a.Artifact = &Artifact{Key: "commit", Kind: "commit", Ref: strings.Repeat("c", 40), MediaHash: strings.Repeat("a", 64)}
+	ingest(t, s, a)
+	a.Seq = 4
+	a.Artifact.MediaHash = strings.Repeat("b", 64)
+	ingest(t, s, a)
+	d, e := s.RunSnapshot("run")
+	if e != nil || len(d.Artifacts) != 1 || d.Artifacts[0].MediaHash != strings.Repeat("a", 64) || d.Runs[0].Version != 1 {
+		t.Fatal(d, e)
+	}
+	// This exception is specific to commit renderings; image identities remain immutable.
+	a.Seq = 5
+	a.Artifact = &Artifact{Key: "image", Kind: "image", Ref: "photo.jpg", MediaHash: strings.Repeat("a", 64)}
+	ingest(t, s, a)
+	a.Seq = 6
+	a.Artifact.MediaHash = strings.Repeat("b", 64)
+	if _, e = s.Ingest("collector", Batch{Generation: "generation", Events: []Event{a}}); e == nil {
+		t.Fatal("conflicting image content accepted")
+	}
+}
+
+func TestCommitDiffSharedAcrossCollectorRenderings(t *testing.T) {
+	s := testStore(t)
+	seed(t, s)
+	ingest(t, s, event(2, "run.start"))
+	upload := func(collector, text string) string {
+		sum := sha256.Sum256([]byte(text))
+		digest := hex.EncodeToString(sum[:])
+		if _, e := s.Upload(collector, digest, bytes.NewBufferString(text)); e != nil {
+			t.Fatal(e)
+		}
+		return digest
+	}
+	first := upload("collector", "first diff")
+	second := upload("other", "another rendering")
+	a := event(3, "artifact")
+	a.Artifact = &Artifact{Key: "shared-commit", Kind: "commit", Ref: strings.Repeat("c", 40), MediaHash: first}
+	ingest(t, s, a)
+	if _, e := s.Stream("other", "generation"); e != nil {
+		t.Fatal(e)
+	}
+	_, e := s.Ingest("other", Batch{Generation: "generation", Events: []Event{
+		{Seq: 1, At: time.Now(), Kind: "slot.seen", Pane: "other-pane", Session: "other-session"},
+		{Seq: 2, At: time.Now(), Kind: "run.start", Pane: "other-pane", Session: "other-session", Run: "other-run"},
+		{Seq: 3, At: time.Now(), Kind: "artifact", Pane: "other-pane", Session: "other-session", Run: "other-run", Artifact: &Artifact{Key: "shared-commit", Kind: "commit", Ref: strings.Repeat("c", 40), MediaHash: second}},
+	}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	d, e := s.RunSnapshot("other-run")
+	if e != nil || len(d.Artifacts) != 1 || !d.Artifacts[0].Available || d.Artifacts[0].MediaHash != first {
+		t.Fatal(d, e)
+	}
+	// An unrelated artifact cannot claim a blob merely by guessing its hash.
+	_, e = s.Ingest("other", Batch{Generation: "generation", Events: []Event{{Seq: 4, At: time.Now(), Kind: "artifact", Pane: "other-pane", Session: "other-session", Run: "other-run", Artifact: &Artifact{Key: "unowned", Kind: "commit", Ref: "other", MediaHash: first}}}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	d, e = s.RunSnapshot("other-run")
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, artifact := range d.Artifacts {
+		if artifact.Key == "unowned" && artifact.Available {
+			t.Fatal("unowned blob became available")
+		}
 	}
 }

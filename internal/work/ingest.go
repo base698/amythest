@@ -287,12 +287,14 @@ func (s *Store) apply(tx *sql.Tx, collector string, ev Event) error {
 		if a.MediaHash != "" && !validHash(a.MediaHash) {
 			return invalid("invalid media hash")
 		}
+		// A commit diff is a captured rendering of the same immutable object.
+		// Keep the first rendering when another collector/Git version formats it differently.
 		var artifactID, ref, kind, mediaHash string
 		e = tx.QueryRow(`SELECT id,ref,kind,media_hash FROM artifacts WHERE identity_key=?`, a.Key).Scan(&artifactID, &ref, &kind, &mediaHash)
 		if e == sql.ErrNoRows {
 			artifactID = id()
 			_, e = tx.Exec(`INSERT INTO artifacts VALUES(?,?,?,?,?,?,?,?,?)`, artifactID, a.Key, a.Kind, a.Ref, a.Title, a.Repo, a.MediaHash, a.RemotePath, nowText(ev.At))
-		} else if e == nil && (ref != a.Ref || kind != a.Kind || mediaHash != "" && a.MediaHash != "" && mediaHash != a.MediaHash) {
+		} else if e == nil && (ref != a.Ref || kind != a.Kind || mediaHash != "" && a.MediaHash != "" && mediaHash != a.MediaHash && kind != "commit") {
 			return invalid("artifact identity has conflicting content")
 		}
 		if e != nil {

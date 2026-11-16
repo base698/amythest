@@ -44,7 +44,7 @@ func (s *Store) snapshot(card, project, run string, details bool) (CardData, err
 		return out, e
 	}
 	if details {
-		rows, e = tx.Query(`SELECT a.id,a.identity_key,a.kind,a.ref,a.title,a.repo,a.media_hash,a.remote_path,l.id,l.run_id,l.card_id,l.attribution,l.featured,COALESCE(m.available,0),a.created FROM links l JOIN artifacts a ON a.id=l.artifact_id JOIN effective_runs r ON r.id=l.run_id LEFT JOIN media_owners mo ON mo.hash=a.media_hash AND mo.collector=r.collector LEFT JOIN media m ON m.hash=mo.hash WHERE (?='' OR l.card_id=? OR r.card_id=?) AND (?='' OR r.project=?) AND (?='' OR r.id=?) ORDER BY a.created DESC,a.id,l.id LIMIT 500`, card, card, card, project, project, run, run)
+		rows, e = tx.Query(`SELECT a.id,a.identity_key,a.kind,a.ref,a.title,a.repo,a.media_hash,a.remote_path,l.id,l.run_id,l.card_id,l.attribution,l.featured,COALESCE(m.available,0),a.created FROM links l JOIN artifacts a ON a.id=l.artifact_id JOIN effective_runs r ON r.id=l.run_id LEFT JOIN media_owners mo ON mo.hash=a.media_hash AND mo.collector=r.collector LEFT JOIN media m ON m.hash=a.media_hash AND (mo.hash IS NOT NULL OR (a.kind='commit' AND EXISTS(SELECT 1 FROM links owner_link JOIN runs owner_run ON owner_run.id=owner_link.run_id JOIN media_owners owner_media ON owner_media.collector=owner_run.collector AND owner_media.hash=a.media_hash WHERE owner_link.artifact_id=a.id))) WHERE (?='' OR l.card_id=? OR r.card_id=?) AND (?='' OR r.project=?) AND (?='' OR r.id=?) ORDER BY a.created DESC,a.id,l.id LIMIT 500`, card, card, card, project, project, run, run)
 		if e != nil {
 			return out, e
 		}

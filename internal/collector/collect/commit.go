@@ -37,7 +37,7 @@ func CommitPatch(dir, sha string) ([]byte, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", dir, "show", "--format=medium", "--stat", "--patch", "--no-color", "--no-ext-diff", "--no-textconv", "--diff-merges=first-parent", sha, "--")
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "show", "--format=medium", "--stat", "--patch", "--no-color", "--no-ext-diff", "--no-textconv", "--no-notes", "--no-renames", "--full-index", "--diff-algorithm=myers", "--unified=3", "--src-prefix=a/", "--dst-prefix=b/", "--diff-merges=first-parent", sha, "--")
 	var output patchBuffer
 	cmd.Stdout = &output
 	if e := cmd.Run(); e != nil {
