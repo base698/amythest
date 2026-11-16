@@ -1,6 +1,6 @@
-.PHONY: all assets build build-amy install-amy run test compat clean
+.PHONY: all assets build build-amy build-collector install-amy run test compat clean
 
-all: build build-amy
+all: build build-amy build-collector
 
 node_modules: package.json
 	npm install
@@ -11,6 +11,10 @@ assets: node_modules
 
 build: assets
 	go build -o bin/amythest ./cmd/amythest
+
+# The local Work collector is pure Go and needs no web assets.
+build-collector:
+	go build -o bin/amythest-collector ./cmd/amythest-collector
 
 # amy is the terminal client; pure Go, no web assets needed.
 build-amy:

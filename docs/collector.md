@@ -6,9 +6,9 @@ local herdr TUI; remote SSH and herdr-core remain available through the older wa
 but are not yet hub-delivery adapters.
 
 ```sh
-go build -o amythest-collector ./cmd/amythest-collector
-./amythest-collector register --server https://notes.example.com/notes --name laptop
-./amythest-collector sync
+make build-collector
+./bin/amythest-collector register --server https://notes.example.com/notes --name laptop
+./bin/amythest-collector sync
 ```
 
 Work must be enabled on Amythest. Registration opens a browser approval link and saves
