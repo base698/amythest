@@ -54,7 +54,7 @@ func (s *Server) mountWork() error {
 		return e
 	}
 	s.ready.register("work", s.work.Ping)
-	for _, pattern := range []string{"POST /api/work/streams", "POST /api/work/events", "POST /api/work/heartbeat", "GET /api/work/bindings", "POST /api/work/bindings/ack", "POST /api/work/bindings", "GET /api/work/snapshot", "GET /api/work/inbox", "GET /api/work/search", "POST /api/work/project", "POST /api/work/file", "POST /api/work/review", "POST /api/work/snooze", "POST /api/work/reset", "POST /api/work/quarantine", "PUT /api/work/media/{hash}", "GET /api/work/media/{hash}"} {
+	for _, pattern := range []string{"POST /api/work/streams", "POST /api/work/events", "POST /api/work/heartbeat", "GET /api/work/bindings", "POST /api/work/bindings/ack", "POST /api/work/bindings", "GET /api/work/snapshot", "GET /api/work/inbox", "GET /api/work/search", "POST /api/work/project", "POST /api/work/file", "POST /api/work/review", "POST /api/work/snooze", "POST /api/work/dismiss", "POST /api/work/reset", "POST /api/work/quarantine", "PUT /api/work/media/{hash}", "GET /api/work/media/{hash}"} {
 		s.mux.HandleFunc(pattern, s.handleWork)
 	}
 	return nil
@@ -139,7 +139,9 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 		}
 		result, e = s.work.Bind("owner", in.Request, in.Collector, in.Session, in.Card, in.Expected)
 	case "GET /api/work/snapshot":
-		if r.URL.Query().Get("summary") == "1" {
+		if run := r.URL.Query().Get("run_id"); run != "" {
+			result, e = s.work.RunSnapshot(run)
+		} else if r.URL.Query().Get("summary") == "1" {
 			result, e = s.work.Overview()
 		} else {
 			result, e = s.work.Snapshot(r.URL.Query().Get("card_id"), r.URL.Query().Get("project"))
@@ -185,6 +187,14 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		e = s.work.Review(in.Run, in.Version)
+	case "POST /api/work/dismiss":
+		var in struct {
+			Items []work.AttentionVersion `json:"items"`
+		}
+		if !decode(&in) {
+			return
+		}
+		e = s.work.Dismiss(in.Items)
 	case "POST /api/work/snooze":
 		var in struct {
 			Subject string    `json:"subject"`

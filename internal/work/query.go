@@ -1,6 +1,7 @@
 package work
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -9,17 +10,23 @@ import (
 // Snapshot is bounded and uses one read transaction so review watermarks describe
 // precisely the output displayed, even while a collector is delivering a batch.
 func (s *Store) Snapshot(card, project string) (CardData, error) {
-	return s.snapshot(card, project, true)
+	return s.snapshot(card, project, "", true)
 }
-func (s *Store) Overview() (CardData, error) { return s.snapshot("", "", false) }
-func (s *Store) snapshot(card, project string, details bool) (CardData, error) {
+func (s *Store) Overview() (CardData, error) { return s.snapshot("", "", "", false) }
+func (s *Store) RunSnapshot(run string) (CardData, error) {
+	if !validID(run) {
+		return CardData{}, invalid("run_id required")
+	}
+	return s.snapshot("", "", run, true)
+}
+func (s *Store) snapshot(card, project, run string, details bool) (CardData, error) {
 	out := CardData{Runs: []Run{}, Artifacts: []Artifact{}, Documents: []Document{}, Slots: []Slot{}, Machines: []Machine{}, Projects: []string{}, Sessions: []SessionProject{}}
 	tx, e := s.db.Begin()
 	if e != nil {
 		return out, e
 	}
 	defer tx.Rollback()
-	rows, e := tx.Query(`SELECT `+runColumns+` FROM effective_runs WHERE (?='' OR card_id=?) AND (?='' OR project=?) ORDER BY started DESC,id LIMIT 200`, card, card, project, project)
+	rows, e := tx.Query(`SELECT `+runColumns+` FROM effective_runs WHERE (?='' OR card_id=?) AND (?='' OR project=?) AND (?='' OR id=?) ORDER BY started DESC,id LIMIT 200`, card, card, project, project, run, run)
 	if e != nil {
 		return out, e
 	}
@@ -37,7 +44,7 @@ func (s *Store) snapshot(card, project string, details bool) (CardData, error) {
 		return out, e
 	}
 	if details {
-		rows, e = tx.Query(`SELECT a.id,a.identity_key,a.kind,a.ref,a.title,a.repo,a.media_hash,a.remote_path,l.id,l.run_id,l.card_id,l.attribution,l.featured,COALESCE(m.available,0),a.created FROM links l JOIN artifacts a ON a.id=l.artifact_id JOIN effective_runs r ON r.id=l.run_id LEFT JOIN media_owners mo ON mo.hash=a.media_hash AND mo.collector=r.collector LEFT JOIN media m ON m.hash=mo.hash WHERE (?='' OR l.card_id=? OR r.card_id=?) AND (?='' OR r.project=?) ORDER BY a.created DESC,a.id,l.id LIMIT 500`, card, card, card, project, project)
+		rows, e = tx.Query(`SELECT a.id,a.identity_key,a.kind,a.ref,a.title,a.repo,a.media_hash,a.remote_path,l.id,l.run_id,l.card_id,l.attribution,l.featured,COALESCE(m.available,0),a.created FROM links l JOIN artifacts a ON a.id=l.artifact_id JOIN effective_runs r ON r.id=l.run_id LEFT JOIN media_owners mo ON mo.hash=a.media_hash AND mo.collector=r.collector LEFT JOIN media m ON m.hash=mo.hash WHERE (?='' OR l.card_id=? OR r.card_id=?) AND (?='' OR r.project=?) AND (?='' OR r.id=?) ORDER BY a.created DESC,a.id,l.id LIMIT 500`, card, card, card, project, project, run, run)
 		if e != nil {
 			return out, e
 		}
@@ -54,7 +61,7 @@ func (s *Store) snapshot(card, project string, details bool) (CardData, error) {
 		if e != nil {
 			return out, e
 		}
-		rows, e = tx.Query(`SELECT d.key,d.kind,d.title,d.body,d.run_id,d.created,d.version FROM documents d JOIN effective_runs r ON r.id=d.run_id WHERE (?='' OR r.card_id=?) AND (?='' OR r.project=?) AND d.kind IN('chat','observation') ORDER BY d.created DESC,d.key LIMIT 200`, card, card, project, project)
+		rows, e = tx.Query(`SELECT d.key,d.kind,d.title,d.body,d.run_id,d.created,d.version FROM documents d JOIN effective_runs r ON r.id=d.run_id WHERE (?='' OR r.card_id=?) AND (?='' OR r.project=?) AND d.kind IN('chat','observation') AND (?='' OR r.id=?) ORDER BY d.created DESC,d.key LIMIT 200`, card, card, project, project, run, run)
 		if e != nil {
 			return out, e
 		}
@@ -157,14 +164,21 @@ func (s *Store) Review(run string, version int64) error {
 }
 
 type Attention struct {
-	Subject   string `json:"subject"`
-	Reason    string `json:"reason"`
-	Version   string `json:"version"`
-	Card      string `json:"card_id"`
-	Run       string `json:"run_id"`
-	Collector string `json:"collector"`
-	Pane      string `json:"pane"`
-	Title     string `json:"title"`
+	Session     string `json:"session_id"`
+	Project     string `json:"project"`
+	Agent       string `json:"agent"`
+	Finished    string `json:"finished_at"`
+	Outcome     string `json:"outcome"`
+	Preview     string `json:"preview"`
+	OutputCount int    `json:"output_count"`
+	Subject     string `json:"subject"`
+	Reason      string `json:"reason"`
+	Version     string `json:"version"`
+	Card        string `json:"card_id"`
+	Run         string `json:"run_id"`
+	Collector   string `json:"collector"`
+	Pane        string `json:"pane"`
+	Title       string `json:"title"`
 }
 
 func (s *Store) Inbox() ([]Attention, error) {
@@ -181,17 +195,29 @@ func (s *Store) Inbox() ([]Attention, error) {
 		}
 	}
 
-	pending, e := s.db.Query(`SELECT ` + runColumns + ` FROM effective_runs WHERE historical=0 AND version>reviewed AND finished!='' ORDER BY started,id LIMIT 1000`)
+	pending, e := s.db.Query(`SELECT r.id,r.collector,r.session_id,r.card_id,r.project,r.finished,r.outcome,r.version,
+ COALESCE(NULLIF(sl.tab,''),NULLIF(se.provider_ref,''),se.agent || ' session'),se.agent,
+ COALESCE((SELECT substr(body,1,480) FROM documents WHERE run_id=r.id AND (kind='observation' OR (kind='chat' AND title='assistant')) ORDER BY created DESC,key DESC LIMIT 1),
+ (SELECT a.title FROM links l JOIN artifacts a ON a.id=l.artifact_id WHERE l.run_id=r.id ORDER BY a.created DESC,a.id LIMIT 1),''),
+ (SELECT count(*) FROM documents WHERE run_id=r.id AND kind IN('chat','observation'))+(SELECT count(*) FROM links WHERE run_id=r.id)
+ FROM effective_runs r JOIN sessions se ON se.id=r.session_id LEFT JOIN slots sl ON sl.session_id=r.session_id
+ WHERE r.historical=0 AND r.version>r.reviewed AND r.finished!=''
+ AND NOT EXISTS(SELECT 1 FROM snoozes z WHERE z.subject='run:'||r.id AND z.version=CAST(r.version AS TEXT) AND z.until_at>?)
+ ORDER BY r.finished DESC,r.id LIMIT 1000`, nowText(s.now()))
 	if e != nil {
 		return nil, e
 	}
 	for pending.Next() {
-		r, err := scanRun(pending)
-		if err != nil {
+		var a Attention
+		var version int64
+		if e = pending.Scan(&a.Run, &a.Collector, &a.Session, &a.Card, &a.Project, &a.Finished, &a.Outcome, &version, &a.Title, &a.Agent, &a.Preview, &a.OutputCount); e != nil {
 			pending.Close()
-			return nil, err
+			return nil, e
 		}
-		out = append(out, Attention{Subject: "run:" + r.ID, Reason: "needs-review", Version: fmt.Sprint(r.Version), Card: r.Card, Run: r.ID, Collector: r.Collector, Title: r.Outcome})
+		a.Subject = "run:" + a.Run
+		a.Reason = "needs-review"
+		a.Version = fmt.Sprint(version)
+		out = append(out, a)
 	}
 	e = pending.Err()
 	pending.Close()
@@ -215,7 +241,7 @@ func (s *Store) Inbox() ([]Attention, error) {
 			if p.Binding != nil {
 				card = p.Binding.Card
 			}
-			out = append(out, Attention{Subject: "slot:" + p.Collector + ":" + p.Pane, Reason: reason, Version: p.Session + ":" + p.LastOutput + ":" + p.Status, Card: card, Collector: p.Collector, Pane: p.Pane, Title: p.Tab})
+			out = append(out, Attention{Subject: "slot:" + p.Collector + ":" + p.Pane, Reason: reason, Version: p.Session + ":" + p.LastOutput + ":" + p.Status, Card: card, Collector: p.Collector, Pane: p.Pane, Title: p.Tab, Session: p.Session, Project: p.Project})
 		}
 	}
 	rows, e := s.db.Query(`SELECT subject,version FROM snoozes WHERE until_at>?`, nowText(s.now()))
@@ -248,6 +274,53 @@ func (s *Store) Snooze(subject, version string, until time.Time) error {
 	}
 	_, e := s.db.Exec(`INSERT INTO snoozes VALUES(?,?,?) ON CONFLICT(subject) DO UPDATE SET version=excluded.version,until_at=excluded.until_at`, subject, version, nowText(until))
 	return e
+}
+
+// Dismiss hides only the versions the owner saw. It does not mark output as
+// reviewed or delete it; later output and changed states need attention again.
+type AttentionVersion struct {
+	Subject string `json:"subject"`
+	Version string `json:"version"`
+}
+
+func (s *Store) Dismiss(items []AttentionVersion) error {
+	if len(items) == 0 || len(items) > 1000 {
+		return invalid("select between 1 and 1000 notifications")
+	}
+	tx, e := s.db.Begin()
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	for _, item := range items {
+		if len(item.Subject) > 400 || item.Version == "" || len(item.Version) > 400 {
+			return invalid("invalid notification")
+		}
+		var current string
+		switch {
+		case strings.HasPrefix(item.Subject, "run:"):
+			e = tx.QueryRow(`SELECT CAST(version AS TEXT) FROM runs WHERE id=? AND finished!=''`, strings.TrimPrefix(item.Subject, "run:")).Scan(&current)
+		case strings.HasPrefix(item.Subject, "machine:"):
+			e = tx.QueryRow(`SELECT last_contact FROM machines WHERE collector=?`, strings.TrimPrefix(item.Subject, "machine:")).Scan(&current)
+		case strings.HasPrefix(item.Subject, "slot:"):
+			e = tx.QueryRow(`SELECT session_id||':'||last_output||':'||status FROM slots WHERE collector||':'||pane=?`, strings.TrimPrefix(item.Subject, "slot:")).Scan(&current)
+		default:
+			return invalid("unknown notification")
+		}
+		if e == sql.ErrNoRows || e == nil && current != item.Version {
+			return conflict("notification changed; refresh before dismissing")
+		}
+		if e != nil {
+			return e
+		}
+		if _, e = tx.Exec(`INSERT INTO snoozes VALUES(?,?,'9999-12-31T23:59:59.000000000Z') ON CONFLICT(subject) DO UPDATE SET version=excluded.version,until_at=excluded.until_at`, item.Subject, item.Version); e != nil {
+			return e
+		}
+		if _, e = tx.Exec(`INSERT INTO audit(actor,action,subject,at) VALUES('owner','dismiss',?,?)`, item.Subject, nowText(s.now())); e != nil {
+			return e
+		}
+	}
+	return tx.Commit()
 }
 
 type SearchOptions struct {

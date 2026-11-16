@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import { NOTES_BASE } from './mount'
 import type { Card } from './BoardView'
 import './work.css'
+import { groupAttention, attentionStatus, type Attention, type AttentionGroup } from './work-inbox'
 const API = `${NOTES_BASE}api/work`
 type Run = { id: string; collector: string; session_id: string; card_id: string; project: string; started_at: string; finished_at: string; outcome: string; output_version: number; reviewed_through_version: number; historical: boolean; reviewable: boolean }
 type Binding = { id: string; version: number; card_id: string; acknowledged: boolean }
@@ -11,7 +12,6 @@ type Artifact = { id: string; link_id: string; run_id: string; card_id: string; 
 type Document = { key: string; run_id: string; title: string; body: string }
 type SessionProject = { session_id: string; collector: string; agent: string; provider_ref: string; title: string; status: string; project: string; source_project: string; assigned: boolean; project_version: number }
 type Snapshot = { projects: string[]; sessions: SessionProject[]; runs: Run[]; slots: Slot[]; machines: Machine[]; artifacts: Artifact[]; documents: Document[] }
-type Attention = { subject: string; reason: string; version: string; card_id: string; run_id: string; collector: string; title: string }
 async function read<T>(path: string): Promise<T | null> {
  const response = await fetch(`${API}${path}`, { credentials: 'same-origin' })
  if (response.status === 404) return null
@@ -67,9 +67,78 @@ function ArtifactView({ artifact: a, file }: { artifact: Artifact; file?: () => 
  return <li><span className="work-kind">{a.kind}</span>{!a.card_id && <small>Suggested · unfiled</small>}{file && <button type="button" className="quiet" onClick={file}>File on this card</button>} {safe ? <a href={a.ref} target="_blank" rel="noreferrer">{a.title || a.ref}</a> : <span>{a.title || a.ref}</span>}{a.media_hash && a.available ? <a href={`${API}/media/${a.media_hash}`} target="_blank" rel="noreferrer">Open file</a> : a.remote_path ? <small>On collector</small> : null}</li>
 }
 export function WorkInbox({ boards, onOpen }: { boards: { name: string; cards: Card[] }[]; onOpen: (board: string, card: Card) => void }) {
- const { data, inbox, refresh } = useContext(WorkContext), [error, setError] = useState('')
+ const { data, inbox, refresh } = useContext(WorkContext)
+ const [error, setError] = useState(''), [busy, setBusy] = useState(false), [notice, setNotice] = useState(''), [limit, setLimit] = useState(8)
  if (!data) return null
- return <section className="work-panel"><h2>Needs you</h2>{error && <p role="alert">{error}</p>}{!inbox.length && <p className="muted">No agent activity needs attention.</p>}<ul className="work-attention">{inbox.map(i => { const board = boards.find(b => b.cards.some(c => c.id === i.card_id)), card = board?.cards.find(c => c.id === i.card_id); return <li key={i.subject}><div><strong>{card?.title || i.title || 'Unfiled run'}</strong><p>{i.reason.replaceAll('-', ' ')}</p></div>{card && board && <button className="quiet" type="button" onClick={() => onOpen(board.name, card)}>Open card</button>}<button className="quiet" type="button" onClick={async () => { try { await change('/snooze', { subject: i.subject, version: i.version, until: new Date(Date.now() + 3600000).toISOString() }); await refresh() } catch (e) { setError(String(e)) } }}>Snooze 1h</button></li> })}</ul><WorkGallery boards={boards} /></section>
+ const groups = groupAttention(inbox), finished = inbox.filter(i => i.reason === 'needs-review')
+ async function act(items: Attention[], dismiss: boolean) {
+  setBusy(true); setError(''); setNotice('')
+  try {
+   if (dismiss) await change('/dismiss', { items: items.map(({ subject, version }) => ({ subject, version })) })
+   else for (const { subject, version } of items) await change('/snooze', { subject, version, until: new Date(Date.now() + 3600000).toISOString() })
+   await refresh(); setNotice(dismiss ? 'Dismissed. History is kept; new activity will appear again.' : 'Snoozed for one hour.')
+  } catch (e) { setError(String(e)); await refresh().catch(() => {}) } finally { setBusy(false) }
+ }
+ return <section className="work-panel work-inbox" aria-label="Agent activity">
+  <header className="work-inbox-heading"><div><h2>Needs you {groups.length > 0 && <span className="work-inbox-count">{groups.length}</span>}</h2><p>Finished turns are grouped by session. A finished turn does not mean the task is complete.</p></div>
+   {finished.length > 1 && <button className="quiet" type="button" disabled={busy} onClick={() => void act(finished, true)}>Dismiss {finished.length} finished turns</button>}
+  </header>
+  {error && <p role="alert" className="form-error">{error}</p>}{notice && <p role="status">{notice}</p>}
+  {!inbox.length && <p className="muted">You’re caught up. New activity that needs attention will appear here.</p>}
+  <ul className="work-attention">{groups.slice(0, limit).map(group => {
+   const i = group.latest, board = boards.find(b => b.cards.some(c => c.id === i.card_id)), card = board?.cards.find(c => c.id === i.card_id)
+   return <li className="work-attention-group" key={group.key}>
+    <div className="work-attention-content">
+     <h3>{card?.title || i.title || (i.agent ? `${i.agent} session` : 'Agent session')}</h3>
+     <div className="work-context"><span>{i.project || 'No project assigned'}</span><span>{i.agent || 'Collector'} on {data.machines.find(m => m.collector === i.collector)?.name || 'collector'}</span>{i.finished_at && <time dateTime={i.finished_at}>{new Date(i.finished_at).toLocaleString()}</time>}</div>
+     <p className="work-attention-status">{attentionStatus(i, group.items.length)}</p>
+     {i.reason === 'needs-review' && <p className="work-preview">{i.preview || (i.output_count ? 'Output was captured. Open the details to inspect it.' : 'No result text was captured. The collector only reported that the turn ended.')}</p>}
+     {i.reason === 'needs-review' && <InboxTurns group={group} />}
+    </div>
+    <div className="work-attention-actions">
+     {card && board && <button className="quiet" type="button" onClick={() => onOpen(board.name, card)}>Open card</button>}
+     <button className="quiet" type="button" disabled={busy} onClick={() => void act(group.items, true)}>{group.items.length > 1 ? `Dismiss ${group.items.length} turns` : 'Dismiss'}</button>
+     <button className="work-snooze" type="button" disabled={busy} onClick={() => void act(group.items, false)}>Snooze 1h</button>
+    </div>
+   </li>
+  })}</ul>
+  {groups.length > limit && <button type="button" className="quiet" onClick={() => setLimit(limit + 8)}>Show more ({groups.length - limit} remaining)</button>}
+  <WorkGallery boards={boards} />
+ </section>
+}
+
+function InboxTurns({ group }: { group: AttentionGroup }) {
+ const [open, setOpen] = useState(false), [limit, setLimit] = useState(5)
+ return <details className="work-turns" onToggle={e => setOpen(e.currentTarget.open)}><summary>View {group.items.length === 1 ? 'turn details' : `${group.items.length} turns`}</summary>
+  {open && <div>{group.items.slice(0, limit).map(item => <InboxTurn key={item.subject} item={item} />)}
+   {group.items.length > limit && <button className="quiet" type="button" onClick={() => setLimit(limit + 5)}>Show earlier turns</button>}
+  </div>}
+ </details>
+}
+
+function InboxTurn({ item }: { item: Attention }) {
+ const { refresh } = useContext(WorkContext)
+ const [data, setData] = useState<Snapshot | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false)
+ useEffect(() => {
+  let active = true
+  void read<Snapshot>(`/snapshot?run_id=${encodeURIComponent(item.run_id)}`).then(d => { if (active) setData(d) }).catch(e => { if (active) setError(String(e)) })
+  return () => { active = false }
+ }, [item.run_id, item.version])
+ const run = data?.runs.find(r => r.id === item.run_id)
+ return <article className="work-turn">
+  <h4>{attentionStatus(item)} <time dateTime={item.finished_at}>{new Date(item.finished_at).toLocaleString()}</time></h4>
+  {error && <p role="alert">{error}</p>}
+  {!data && !error && <p>Loading output…</p>}
+  {data && <>
+   {!data.documents.length && !data.artifacts.length && <p>No output was captured for this turn. Its completion status does not verify the task’s result.</p>}
+   <ul className="work-artifacts">{data.artifacts.map(a => <ArtifactView key={a.link_id} artifact={a} />)}</ul>
+   {data.documents.map(d => <div className="work-turn-output" key={d.key}><strong>{d.title || 'Observation'}</strong><pre>{d.body}</pre></div>)}
+   {run && !run.reviewable && <p>Some output is outside this view’s limit. Review is unavailable while output is omitted.</p>}
+   {run?.reviewable && (data.documents.length > 0 || data.artifacts.length > 0) && <button className="quiet" type="button" disabled={busy} onClick={async () => {
+    setBusy(true); setError(''); try { await change('/review', { run_id: run.id, version: run.output_version }); await refresh() } catch (e) { setError(String(e)) } finally { setBusy(false) }
+   }}>Mark shown output reviewed</button>}
+  </>}
+ </article>
 }
 
 function WorkGallery({ boards }: { boards: { name: string; cards: Card[] }[] }) {
@@ -78,7 +147,7 @@ function WorkGallery({ boards }: { boards: { name: string; cards: Card[] }[] }) 
  useEffect(() => { if (!open) return; let active = true; void read<Snapshot>(`/snapshot?project=${encodeURIComponent(project)}`).then(d => { if (active) setData(d) }).catch(e => { if (active) setError(String(e)) }); return () => { active = false } }, [open, project])
  if (!overview) return null
  const projects = overview.projects || []
- return <details onToggle={e => setOpen(e.currentTarget.open)}><summary>Projects, unfiled output and Work search</summary>{open && <div className="work-panel">
+ return <details onToggle={e => setOpen(e.currentTarget.open)}><summary>Sessions, projects and Work search</summary>{open && <div className="work-panel">
   {error && <p role="alert">{error}</p>}
   <label>Project <select value={project} onChange={e => { setProject(e.target.value); setHits(null) }}><option value="">All projects</option>{projects.map(p => <option key={p}>{p}</option>)}</select></label>
   <h3>Sessions</h3><p className="muted">Move a session and all its runs to a project. New activity keeps your assignment.</p>

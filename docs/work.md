@@ -37,14 +37,24 @@ Restore drills and reconciliation remain a cutover gate.
 5. Use **Review shown output** to acknowledge the displayed version. A later artifact
    or message makes the finished run need review again. This never moves the card.
 
-The board displays Work badges. Focus has **Needs you**, one-hour snooze, project
-filtering, an Unfiled tray and Work search. Machine connectivity is separate from run
+The board displays Work badges. Focus has **Needs you**, with completed turns grouped
+by session, card and outcome. Each entry identifies the session, project, collector
+and completion time, and previews captured output. A successful turn only means the
+agent finished that turn; it does not certify the task result. When no output was
+captured, the UI says so. Expand **View turn details** to inspect output and mark it
+reviewed, including output from runs outside the recent card window.
+
+**Dismiss** hides the displayed notification versions permanently without reviewing
+or deleting output. New output or changed state can bring the notification back.
+The bulk action dismisses the loaded finished turns; blocked and offline alerts
+remain. **Snooze 1h** hides the same versions temporarily. **Sessions, projects and
+Work search** contains project assignment, an Unfiled tray and Work search. Machine connectivity is separate from run
 outcome. Historical imports do not create review alerts. Collectors without a reliable
 output clock do not claim inactivity or produce synthetic stall alerts.
 
 Card views are bounded to 200 recent runs, 500 artifact associations and 200 reduced
 messages. Review is disabled for a run whose retained output does not all fit in the
-view. Attention includes up to 1,000 oldest pending reviews; it is not limited to the
+view. Attention includes up to 1,000 newest unmuted pending reviews; it is not limited to the
 recent-run overview. Larger-history navigation is a remaining task.
 
 ## HTTP and MCP
@@ -67,14 +77,16 @@ batch applies no new projections or acknowledgement. Replay ignores committed pr
 retained event content must match. Generation reset is owner-only. Never delete a queue
 and silently restart numbering against the same generation.
 
-Owner actions are CSRF-protected: `POST /api/work/bindings`, `/review`, `/snooze`,
+Owner actions are CSRF-protected: `POST /api/work/bindings`, `/review`, `/snooze`, `/dismiss`,
 `/file`, `/reset` and `/quarantine`. Binding and filing use `request_id` receipts;
 binding also requires `expected_version`. Quarantine advances only the next sequence
 and records the rejected position/reason. It does not repair dependent missing IDs.
 
 Readers and owners can use `GET /api/work/snapshot?card_id=&project=`, `/inbox`,
 `/search?q=&card_id=&project=&kind=&after=&before=&limit=` and `/media/{sha256}`.
-Use `snapshot?summary=1` for the smaller overview. Search applies filters before ranking,
+Use `snapshot?summary=1` for the smaller overview and `snapshot?run_id=` to inspect
+a specific run. `POST /api/work/dismiss` accepts `{items: [{subject, version}]}`
+(up to 1,000); a stale version rejects the entire batch with 409. Search applies filters before ranking,
 returns at most 100 hits and indexes a shared artifact once across associations.
 Dates are inclusive YYYY-MM-DD. Refiling changes artifact search scope immediately.
 The MCP reader exposes `work_card`, `work_inbox` and `work_search`. Readers cannot
