@@ -2,6 +2,7 @@ package work
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -137,5 +138,33 @@ func TestDismissStateChangesReappear(t *testing.T) {
 	}
 	if items, e = s.Inbox(); e != nil || len(items) != 0 {
 		t.Fatal(items, e)
+	}
+}
+
+func TestAddingMediaToExistingArtifactReopensReviewOnce(t *testing.T) {
+	s := testStore(t)
+	seed(t, s)
+	ingest(t, s, event(2, "run.start"))
+	a := event(3, "artifact")
+	a.Artifact = &Artifact{Key: "image", Kind: "image", Ref: "result.png"}
+	ingest(t, s, a)
+	finish := event(4, "run.finish")
+	finish.Outcome = "success"
+	ingest(t, s, finish)
+	if e := s.Review("run", 2); e != nil {
+		t.Fatal(e)
+	}
+	a.Seq = 5
+	a.Artifact.MediaHash = strings.Repeat("a", 64)
+	ingest(t, s, a)
+	items, e := s.Inbox()
+	if e != nil || len(items) != 1 || items[0].Version != "3" {
+		t.Fatal(items, e)
+	}
+	a.Seq = 6
+	ingest(t, s, a)
+	d, e := s.RunSnapshot("run")
+	if e != nil || len(d.Artifacts) != 1 || d.Runs[0].Version != 3 {
+		t.Fatal(d, e)
 	}
 }

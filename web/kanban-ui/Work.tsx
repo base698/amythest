@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { NOTES_BASE } from './mount'
 import type { Card } from './BoardView'
 import './work.css'
@@ -63,9 +63,33 @@ export function WorkPanel({ card, readOnly = false }: { card: string; readOnly?:
  </section>
 }
 function ArtifactView({ artifact: a, file }: { artifact: Artifact; file?: () => void }) {
- const safe = /^https?:\/\//i.test(a.ref)
- return <li><span className="work-kind">{a.kind}</span>{!a.card_id && <small>Suggested · unfiled</small>}{file && <button type="button" className="quiet" onClick={file}>File on this card</button>} {safe ? <a href={a.ref} target="_blank" rel="noreferrer">{a.title || a.ref}</a> : <span>{a.title || a.ref}</span>}{a.media_hash && a.available ? <a href={`${API}/media/${a.media_hash}`} target="_blank" rel="noreferrer">Open file</a> : a.remote_path ? <small>On collector</small> : null}</li>
+ const [expanded, setExpanded] = useState(false), [failed, setFailed] = useState(false)
+ const dialog = useRef<HTMLDialogElement>(null)
+ const safe = /^https?:\/\//i.test(a.ref), available = !!a.media_hash && a.available
+ const media = `${API}/media/${a.media_hash}`, title = a.title || a.ref || 'Artifact'
+ const download = `${media}?download=1&filename=${encodeURIComponent(title)}`
+ useEffect(() => { setFailed(false) }, [a.media_hash, a.available])
+ useEffect(() => { if (expanded) dialog.current?.showModal(); else dialog.current?.close() }, [expanded])
+ return <li className={`work-artifact ${available && a.kind === 'image' ? 'work-artifact-image' : ''}`}>
+  <div className="work-artifact-info"><span className="work-kind">{a.kind}</span>{!a.card_id && <small>Suggested · unfiled</small>}
+   {safe ? <a href={a.ref} target="_blank" rel="noreferrer">{title}</a> : <strong>{title}</strong>}
+  </div>
+  {available && a.kind === 'image' && !failed && <button className="work-image-preview" type="button" aria-label={`Enlarge ${title}`} onClick={() => setExpanded(true)}><img src={media} alt={title} loading="lazy" onError={() => setFailed(true)} /></button>}
+  {available && a.kind === 'video' && <video className="work-video-preview" src={media} controls preload="metadata" />}
+  <div className="work-artifact-actions">
+   {available && <>{a.kind === 'image' && !failed && <button className="quiet" type="button" onClick={() => setExpanded(true)}>Enlarge</button>}<a href={media} target="_blank" rel="noreferrer">Open in new tab</a><a href={download} download={title}>Download</a></>}
+   {!available && a.remote_path && <small>Not uploaded — file is on the collector.</small>}
+   {failed && <small>Preview unavailable. Try opening or downloading the file.</small>}
+   {file && <button type="button" className="quiet" onClick={file}>File on this card</button>}
+  </div>
+  {available && a.kind === 'image' && <dialog ref={dialog} className="work-image-dialog" aria-label={title} onClose={() => setExpanded(false)} onClick={e => { if (e.target === e.currentTarget) setExpanded(false) }}>
+   <header><strong>{title}</strong><button className="quiet" type="button" autoFocus onClick={() => setExpanded(false)}>Close</button></header>
+   {expanded && <img src={media} alt={title} />}
+   <footer><a href={media} target="_blank" rel="noreferrer">Open in new tab</a><a href={download} download={title}>Download</a></footer>
+  </dialog>}
+ </li>
 }
+
 export function WorkInbox({ boards, onOpen }: { boards: { name: string; cards: Card[] }[]; onOpen: (board: string, card: Card) => void }) {
  const { data, inbox, refresh } = useContext(WorkContext)
  const [error, setError] = useState(''), [busy, setBusy] = useState(false), [notice, setNotice] = useState(''), [limit, setLimit] = useState(8)

@@ -126,3 +126,18 @@ A compatibility symlink allows already-running old lifecycle plugins to finish t
 turns. Enable the bundled `amythest-lifecycle` Hermes plugin and disable the old
 `corral-lifecycle` plugin. Restart interactive agents at a convenient boundary.
 The old binary and service files are retained only in the migration backup.
+
+## Artifact media uploads
+
+Repository discovery now uploads supported image and video artifacts to the private
+Work server. Lifecycle hooks still send metadata only; discovery runs only for an
+observed repository or an explicitly configured work directory. Captured media is
+shown inline in Work, with enlarge, new-tab and download controls.
+
+The collector snapshots regular JPEG, PNG, GIF, WebP, MP4 and WebM files before
+queuing their content hash. It rejects symlinks, mismatched content and files over
+50 MiB. The private `media-outbox` holds up to 512 MiB of pending copies. Uploads
+retry independently of acknowledged events and survive restarts; successful uploads
+remove the local copy. Each sync attempts one file, with a one-minute timeout, so
+lifecycle delivery continues during media failures. Missing, unsupported or oversized
+files remain listed as being on the collector. Server media quotas still apply.

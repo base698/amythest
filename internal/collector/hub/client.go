@@ -159,7 +159,8 @@ func (c *Client) Sync(q *Queue) error {
 			return e
 		}
 	}
+	mediaError := c.syncMedia(q)
 	// Inactivity is intentionally omitted until the adapter has an actual output
 	// clock. Time since a status transition is not evidence of a stalled agent.
-	return c.Do("POST", "/api/work/heartbeat", map[string]any{"name": c.Credential.Credential.Label, "syncing": len(q.Snapshot().Events) > 0 || time.Since(q.Snapshot().InventoryAt) > time.Minute}, nil)
+	return errors.Join(mediaError, c.Do("POST", "/api/work/heartbeat", map[string]any{"name": c.Credential.Credential.Label, "syncing": len(q.Snapshot().Events) > 0 || len(q.Snapshot().MediaPending) > 0 || time.Since(q.Snapshot().InventoryAt) > time.Minute}, nil))
 }

@@ -321,6 +321,10 @@ func (s *Store) apply(tx *sql.Tx, collector string, ev Event) error {
 			}
 		}
 		if n > 0 {
+			if mediaHash == "" && a.MediaHash != "" {
+				_, e = tx.Exec(`UPDATE runs SET version=version+1 WHERE id=?`, ev.Run)
+				return e
+			}
 			return nil
 		}
 		_, e = tx.Exec(`INSERT INTO links(id,artifact_id,run_id,card_id,attribution,featured) VALUES(?,?,?,?,?,?)`, id(), artifactID, ev.Run, card, attribution, false)

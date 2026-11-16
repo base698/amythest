@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"mime"
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/base698/amythest/internal/work"
@@ -237,8 +239,12 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 			defer f.Close()
 			w.Header().Set("Content-Type", m.Type)
 			w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
-			if m.Type == "application/octet-stream" {
-				w.Header().Set("Content-Disposition", `attachment; filename="work-file"`)
+			if r.URL.Query().Get("download") == "1" || m.Type == "application/octet-stream" {
+				name := filepath.Base(strings.ReplaceAll(r.URL.Query().Get("filename"), "\\", "/"))
+				if name == "." || name == "/" || len(name) > 240 || strings.ContainsAny(name, "\r\n\x00") {
+					name = "work-file"
+				}
+				w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 			}
 			http.ServeContent(w, r, digest, time.Time{}, f)
 			return

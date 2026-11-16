@@ -68,6 +68,7 @@ type Job struct {
 	At      time.Time
 }
 type State struct {
+	MediaPending map[string]bool `json:",omitempty"`
 	CodexOffsets map[string]int64
 	HookEvents   map[string]bool
 	HookFinished map[string]bool
@@ -81,10 +82,11 @@ type State struct {
 	Server       string
 }
 type Queue struct {
-	mu    sync.Mutex
-	path  string
-	lock  *os.File
-	state State
+	mediaMu sync.Mutex
+	mu      sync.Mutex
+	path    string
+	lock    *os.File
+	state   State
 }
 
 func ID() string {
@@ -307,6 +309,33 @@ func (q *Queue) Inventory(panes []Pane, at time.Time) error {
 	})
 }
 func (q *Queue) Complete(job Job, artifacts []Artifact) error {
+	q.mediaMu.Lock()
+	defer q.mediaMu.Unlock()
+	exists := false
+	for _, pending := range q.Snapshot().Jobs {
+		if pending.Session.Run == job.Session.Run {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		return nil
+	}
+	uploads := map[string]bool{}
+	for i, a := range artifacts {
+		if a.MediaHash != "" {
+			continue
+		}
+		digest, e := q.stageMedia(a)
+		if e != nil {
+			fmt.Fprintln(os.Stderr, "artifact remains on collector:", e)
+			continue
+		}
+		artifacts[i].MediaHash = digest
+		if digest != "" {
+			uploads[digest] = true
+		}
+	}
 	return q.Update(func(s *State) error {
 		index := -1
 		for i, j := range s.Jobs {
@@ -319,6 +348,12 @@ func (q *Queue) Complete(job Job, artifacts []Artifact) error {
 			return nil
 		}
 		for _, a := range artifacts {
+			if uploads[a.MediaHash] {
+				if s.MediaPending == nil {
+					s.MediaPending = map[string]bool{}
+				}
+				s.MediaPending[a.MediaHash] = true
+			}
 			ev := s.event(job.Session, "artifact", job.At)
 			ev.Artifact = &a
 			s.append(ev)

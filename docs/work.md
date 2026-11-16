@@ -37,6 +37,12 @@ Restore drills and reconciliation remain a cutover gate.
 5. Use **Review shown output** to acknowledge the displayed version. A later artifact
    or message makes the finished run need review again. This never moves the card.
 
+Uploaded images appear inline anywhere artifacts are listed. Click an image or
+**Enlarge** for a modal preview; **Open in new tab** and **Download** are available
+under each image and inside its preview. Supported videos have playback controls.
+Unavailable files remain labeled as being on the collector. Media requires the same
+private authentication as Work.
+
 The board displays Work badges. Focus has **Needs you**, with completed turns grouped
 by session, card and outcome. Each entry identifies the session, project, collector
 and completion time, and previews captured output. A successful turn only means the
