@@ -5,15 +5,16 @@ import './work.css'
 import { githubCommitURL, diffLineClass } from './work-artifacts'
 import { groupAttention, attentionStatus, type Attention, type AttentionGroup } from './work-inbox'
 const API = `${NOTES_BASE}api/work`
-type Run = { id: string; collector: string; session_id: string; card_id: string; project: string; started_at: string; finished_at: string; outcome: string; output_version: number; reviewed_through_version: number; historical: boolean; reviewable: boolean }
+export function mediaURL(hash: string): string { return `${API}/media/${hash}` }
+export type Run = { id: string; collector: string; session_id: string; card_id: string; project: string; started_at: string; finished_at: string; outcome: string; output_version: number; reviewed_through_version: number; historical: boolean; reviewable: boolean }
 type Binding = { id: string; version: number; card_id: string; acknowledged: boolean }
-type Slot = { collector: string; pane: string; session_id: string; status: string; project: string; tab: string; binding?: Binding; binding_version: number }
-type Machine = { collector: string; name: string; online: boolean; syncing: boolean }
-type Artifact = { identity_key: string; id: string; link_id: string; run_id: string; card_id: string; kind: string; ref: string; title: string; media_hash: string; available: boolean; remote_path: string; attribution: string; featured: boolean }
+export type Slot = { collector: string; pane: string; session_id: string; status: string; project: string; tab: string; binding?: Binding; binding_version: number }
+export type Machine = { collector: string; name: string; online: boolean; syncing: boolean }
+export type Artifact = { identity_key: string; id: string; link_id: string; run_id: string; card_id: string; kind: string; ref: string; title: string; media_hash: string; available: boolean; remote_path: string; attribution: string; featured: boolean; created_at?: string }
 type Document = { key: string; run_id: string; title: string; body: string }
-type SessionProject = { session_id: string; collector: string; agent: string; provider_ref: string; title: string; status: string; project: string; source_project: string; assigned: boolean; project_version: number }
-type Snapshot = { projects: string[]; sessions: SessionProject[]; runs: Run[]; slots: Slot[]; machines: Machine[]; artifacts: Artifact[]; documents: Document[] }
-async function read<T>(path: string): Promise<T | null> {
+export type SessionProject = { session_id: string; collector: string; agent: string; provider_ref: string; title: string; status: string; project: string; source_project: string; assigned: boolean; project_version: number }
+export type Snapshot = { projects: string[]; sessions: SessionProject[]; runs: Run[]; slots: Slot[]; machines: Machine[]; artifacts: Artifact[]; documents: Document[] }
+export async function read<T>(path: string): Promise<T | null> {
  const response = await fetch(`${API}${path}`, { credentials: 'same-origin' })
  if (response.status === 404) return null
  if (!response.ok) throw new Error('Work is temporarily unavailable.')
@@ -24,7 +25,7 @@ async function change(path: string, body: unknown) {
  const response = await fetch(`${API}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrf }, body: JSON.stringify(body) })
  if (!response.ok) throw new Error(response.status === 409 ? 'This changed while you were viewing it. Refresh and try again.' : 'Could not save the Work change.')
 }
-const WorkContext = createContext<{ data: Snapshot | null; inbox: Attention[]; refresh: () => Promise<void> }>({ data: null, inbox: [], refresh: async () => {} })
+export const WorkContext = createContext<{ data: Snapshot | null; inbox: Attention[]; refresh: () => Promise<void> }>({ data: null, inbox: [], refresh: async () => {} })
 export function WorkProvider({ children }: { children: ReactNode }) {
  const [data, setData] = useState<Snapshot | null>(null), [inbox, setInbox] = useState<Attention[]>([])
  async function refresh() { const [d, i] = await Promise.all([read<Snapshot>('/snapshot?summary=1'), read<Attention[]>('/inbox')]); setData(d); setInbox(i || []) }
@@ -63,7 +64,7 @@ export function WorkPanel({ card, readOnly = false }: { card: string; readOnly?:
   </article>)}
  </section>
 }
-function ArtifactView({ artifact, file }: { artifact: Artifact; file?: () => void }) {
+export function ArtifactView({ artifact, file }: { artifact: Artifact; file?: () => void }) {
  return artifact.kind === 'commit' ? <CommitArtifact artifact={artifact} file={file} /> : <FileArtifact artifact={artifact} file={file} />
 }
 function FileArtifact({ artifact: a, file }: { artifact: Artifact; file?: () => void }) {

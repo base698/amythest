@@ -1,4 +1,5 @@
 import { WorkPanel, WorkInbox, useWorkEnabled } from './Work'
+import { WorkProjects } from './WorkProject'
 import { FormEvent, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { BoardView, type Attachment, type Card, type Priority, type Status } from './BoardView'
 import { BoardSelector, MAX_FAVORITE_BOARDS } from './BoardSelector.ts'
@@ -782,6 +783,7 @@ function FocusView({ boards, tasks, taskError, busy, onOpen, onOpenTask, onCompl
     <FocusSearch query={query} onChange={setQuery} notesBase={NOTES_BASE} boards={boards} tasks={tasks} busy={busy} taskError={taskError} onOpen={onOpen} onOpenTask={onOpenTask} onCompleteTask={onCompleteTask} />
     {!query.trim() && <>
     <WorkInbox boards={boards} onOpen={onOpen} />
+    <WorkProjects boards={boards} onOpen={onOpen} />
     <FocusReviewSection boards={boards} busy={busy} onOpen={onOpen} />
     {busy && boards.length === 0 ? <div className="center-screen"><div className="spinner" aria-label="Loading focus" /></div> : <>
       {overall ? <article className="overall-focus" style={overall.board.color ? { '--board-color': overall.board.color } as CSSProperties : undefined}>
