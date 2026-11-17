@@ -4,6 +4,8 @@ import test from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
+  completeFocusTask,
+  TaskCompletionError,
   FocusReviewSection,
   FocusTaskDialog,
   FocusTasksSection,
@@ -71,23 +73,23 @@ test('review DOM exposes every card as an in-focus open action and escapes text'
 
 test('task list and detail DOM are safe and link to the encoded source note', () => {
   const open = flattenOpenTasks([{ name: '', tasks }])
-  const list = renderToStaticMarkup(createElement(FocusTasksSection, { tasks: open, busy: false, error: '', onOpen: () => {} }))
+  const list = renderToStaticMarkup(createElement(FocusTasksSection, { tasks: open, busy: false, error: '', onOpen: () => {}, onComplete: () => {} }))
   assert.match(list, /Open vault tasks/)
   assert.match(list, /Ship &lt;script&gt;alert\(1\)&lt;\/script&gt;/)
   assert.doesNotMatch(list, /<script>/)
 
-  const detail = renderToStaticMarkup(createElement(FocusTaskDialog, { task: open[0], notesBase: '/notes/', onClose: () => {} }))
+  const detail = renderToStaticMarkup(createElement(FocusTaskDialog, { task: open[0], notesBase: '/notes/', onClose: () => {}, onComplete: () => {} }))
   assert.match(detail, /role="dialog"/)
-  assert.match(detail, /href="\/notes\/Projects\/Launch"/)
+  assert.match(detail, /href="\/notes\/Projects\/Launch#task-line-7"/)
   assert.match(detail, /Open source note/)
 })
 
 test('Focus card and task open actions fail closed while data refreshes', () => {
   const review = renderToStaticMarkup(createElement(FocusReviewSection, { boards, busy: true, onOpen: () => assert.fail('disabled action opened') }))
-  const taskList = renderToStaticMarkup(createElement(FocusTasksSection, { tasks: [tasks[0]], busy: true, error: '', onOpen: () => assert.fail('disabled action opened') }))
+  const taskList = renderToStaticMarkup(createElement(FocusTasksSection, { tasks: [tasks[0]], busy: true, error: '', onOpen: () => assert.fail('disabled action opened'), onComplete: () => assert.fail('disabled completion') }))
 
   assert.match(review, /data-focus-card="alpha:a1"[^>]*disabled=""/)
-  assert.match(taskList, /data-focus-task="Projects\/Launch:7"[^>]*disabled=""/)
+  assert.match(taskList, /class="focus-task-check"[^>]*disabled=""/)
 })
 
 test('a stale Focus editor closed by refresh cannot later PUT', async () => {
@@ -106,7 +108,7 @@ test('a stale Focus editor closed by refresh cannot later PUT', async () => {
 })
 
 test('source-note routes preserve a mount and encode each slug segment', () => {
-  assert.equal(taskSourcePath('/notes/', 'Projects/R&D plan'), '/notes/Projects/R%26D%20plan')
+  assert.equal(taskSourcePath('/notes/', 'Projects/R&D plan', 17), '/notes/Projects/R%26D%20plan#task-line-17')
 })
 
 test('Escape is the only dialog-close keyboard shortcut', () => {
@@ -399,4 +401,41 @@ test('Card editor disables every competing mutation control during attachment wo
 
 test('an empty server task group does not prevent Focus from opening', () => {
   assert.deepEqual(flattenOpenTasks([{ name: '', tasks: null as unknown as VaultTask[] }]), [])
+})
+
+
+test('Focus completion posts the exact file version and authenticated task coordinates', async () => {
+  let calls = 0
+  await completeFocusTask('/notes', tasks[0], 'csrf-test', async (url, options) => {
+    calls++
+    assert.equal(url, '/notes/api/tasks/toggle')
+    assert.equal(options?.method, 'POST')
+    assert.equal(options?.credentials, 'same-origin')
+    assert.equal(new Headers(options?.headers).get('X-CSRF-Token'), 'csrf-test')
+    assert.deepEqual(JSON.parse(String(options?.body)), {
+      slug: tasks[0].slug, line: 7, expectedVersion: tasks[0].version, done: true,
+    })
+    return new Response('{"ok":true,"recurred":true}')
+  })
+  assert.equal(calls, 1)
+})
+
+test('Focus rejects missing versions before writing and identifies stale completions for reload', async () => {
+  await assert.rejects(completeFocusTask('/', { ...tasks[0], version: '' }, '', async () => {
+    assert.fail('must not write without a version')
+  }), /version missing/)
+  await assert.rejects(completeFocusTask('/', tasks[0], '', async () => new Response('changed', { status: 409 })),
+    (error: unknown) => error instanceof TaskCompletionError && error.stale && /note changed/.test(error.message))
+  await assert.rejects(completeFocusTask('/', tasks[0], '', async () => new Response('', { status: 401 })), /Sign in again/)
+})
+
+test('task details offer completion and disable all actions while saving', () => {
+  const props = { task: tasks[0], notesBase: '/notes/', onClose: () => {}, onComplete: () => {} }
+  const ready = renderToStaticMarkup(createElement(FocusTaskDialog, props))
+  assert.match(ready, />Mark complete<\/button>/)
+  const saving = renderToStaticMarkup(createElement(FocusTaskDialog, { ...props, busy: true }))
+  assert.match(saving, /disabled=""[^>]*>Completing…<\/button>/)
+  assert.doesNotMatch(saving, /href=/)
+  const failed = renderToStaticMarkup(createElement(FocusTaskDialog, { ...props, error: 'Could not complete the task' }))
+  assert.match(failed, /role="alert">Could not complete the task/)
 })

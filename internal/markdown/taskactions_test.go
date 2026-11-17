@@ -116,3 +116,36 @@ func TestTranscludedTasksStayToggleOnly(t *testing.T) {
 		t.Fatalf("transcluded tasks must not grow inline actions:\n%s", html)
 	}
 }
+
+func TestTaskAnchorsUseIndexedBodyLinesAndExcludeTransclusions(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"Inner.md": "- [ ] Embedded task\n",
+		"Outer.md": "---\ntitle: Tasks\n---\n![[Inner]]\n\n- [ ] First task\n- [ ] Same text\n- [ ] Same text\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v, err := vault.Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	note, ok := v.BySlug("Outer")
+	if !ok {
+		t.Fatal("missing outer note")
+	}
+	res, err := markdown.New("/notes/").Render(v, note)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(res.HTML)
+	for _, id := range []string{`id="task-line-3"`, `id="task-line-4"`, `id="task-line-5"`} {
+		if strings.Count(html, id) != 1 {
+			t.Fatalf("expected exactly one %s in %s", id, html)
+		}
+	}
+	if strings.Count(html, `id="task-line-`) != 3 {
+		t.Fatalf("embedded task must not claim a source anchor: %s", html)
+	}
+}

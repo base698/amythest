@@ -85,6 +85,7 @@ func (e *Engine) resolve(v *vault.Vault, n *vault.Note, doc ast.Node, source []b
 					// The note's own tasks get the same inline actions as
 					// /tasks rows; transcluded tasks keep just the toggle.
 					if depth == 0 {
+						t.SetAttributeString("task-anchor", fmt.Sprintf("task-line-%d", line))
 						if task, tok := tasks.ParseLine(sourceLine(source, line), n.Slug, n.Path, line, n.Hash); tok {
 							if parent := t.Parent(); parent != nil {
 								actions := ast.NewString([]byte(" " + tasks.RenderInlineActions(task, e.boardNames())))
@@ -281,8 +282,12 @@ func (r *nodeRenderer) renderTaskCheckbox(w util.BufWriter, source []byte, node 
 	line, lok := cb.AttributeString("line")
 	version, vok := cb.AttributeString("version")
 	if sok && lok && vok {
-		fmt.Fprintf(w, `<input type="checkbox" class="task-toggle" data-slug="%s" data-line="%d" data-version="%s"%s> `,
-			template.HTMLEscapeString(fmt.Sprint(slug)), line, template.HTMLEscapeString(fmt.Sprint(version)), checked)
+		anchor := ""
+		if id, ok := cb.AttributeString("task-anchor"); ok {
+			anchor = ` id="` + template.HTMLEscapeString(fmt.Sprint(id)) + `"`
+		}
+		fmt.Fprintf(w, `<input type="checkbox" class="task-toggle" data-slug="%s" data-line="%d" data-version="%s"%s%s> `,
+			template.HTMLEscapeString(fmt.Sprint(slug)), line, template.HTMLEscapeString(fmt.Sprint(version)), anchor, checked)
 	} else {
 		fmt.Fprintf(w, `<input type="checkbox" disabled%s> `, checked)
 	}

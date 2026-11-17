@@ -431,7 +431,9 @@
 .focus-review-description { color: var(--text-soft); display: -webkit-box; font-size: 11px; line-height: 1.45; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .focus-task-list { display: flex; flex-direction: column; gap: 7px; }
 .focus-task-row { align-items: center; display: flex; gap: 10px; padding: 10px 11px; width: 100%; }
-.focus-task-check { color: var(--accent-text); font-size: 17px; }
+.focus-task-check { accent-color: var(--accent); cursor: pointer; flex: 0 0 auto; height: 20px; width: 20px; }
+.focus-task-open { align-items: center; background: transparent; border: 0; color: inherit; display: flex; flex: 1; gap: 10px; min-width: 0; padding: 0; text-align: left; }
+.focus-task-open:hover { background: transparent; }
 .focus-task-main { display: flex; flex: 1 1 auto; flex-direction: column; gap: 3px; min-width: 0; }
 .focus-task-main strong { font-size: 12px; line-height: 1.4; }
 .focus-task-main small { color: var(--muted); font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

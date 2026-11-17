@@ -95,6 +95,13 @@ func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, os.ErrNotExist) {
 			status = http.StatusNotFound
 		}
+		// A rejected edit may be newer than the periodic index snapshot.
+		// Refresh before replying so the caller can reload current coordinates
+		// and versions without retrying the same stale task for minutes.
+		if scanErr := s.Rescan(); scanErr != nil {
+			http.Error(w, "task could not be completed; refresh failed", http.StatusInternalServerError)
+			return
+		}
 		http.Error(w, err.Error(), status)
 		return
 	}

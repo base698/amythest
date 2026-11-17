@@ -17,6 +17,8 @@ import { KANBAN_MOUNT, NOTES_BASE, cardIdFromHash } from './mount.ts'
 import { boardFocusCandidate, boardLabel, organizeBoards, selectedFocusCard } from './boardOrganization.ts'
 import { applyFavoriteMutation, boardSummaryFromData, shouldLeaveAfterSettingsSave } from './boardUpdates.ts'
 import {
+  completeFocusTask,
+  TaskCompletionError,
   FocusReviewSection,
   FocusTaskDialog,
   FocusTasksSection,
@@ -99,6 +101,9 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
   const [focusBoards, setFocusBoards] = useState<BoardData[]>([])
   const [focusTasks, setFocusTasks] = useState<VaultTask[]>([])
   const [focusTaskError, setFocusTaskError] = useState('')
+  const [taskCompleting, setTaskCompleting] = useState(false)
+  const taskCompletingRef = useRef(false)
+  const [taskCompletionError, setTaskCompletionError] = useState('')
   const [focusBusy, setFocusBusy] = useState(false)
   const [focusEditor, setFocusEditor] = useState<{ board: string; card: Card } | null>(null)
   const focusEditorRef = useRef(focusEditor)
@@ -251,6 +256,32 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
       return false
     } finally {
       if (request === focusDataRequest.current) setFocusBusy(false)
+    }
+  }
+
+  async function completeTask(task: VaultTask) {
+    if (!session || focusBusy || busy || taskCompletingRef.current || !focusModeRef.current) return
+    const navigation = navigationRequest.current
+    taskCompletingRef.current = true
+    setTaskCompleting(true)
+    setTaskCompletionError('')
+    try {
+      await completeFocusTask(NOTES_BASE, task, session.csrf)
+      if (navigation !== navigationRequest.current || !focusModeRef.current) return
+      // Completing a recurring task can insert a line. Reload every version
+      // before allowing another completion, including tasks from this note.
+      setFocusTasks([])
+      await refreshFocusData()
+    } catch (caught) {
+      if (navigation !== navigationRequest.current || !focusModeRef.current) return
+      if (caught instanceof TaskCompletionError && caught.stale) {
+        setFocusTasks([])
+        await refreshFocusData()
+      }
+      if (navigation === navigationRequest.current && focusModeRef.current) setTaskCompletionError(message(caught))
+    } finally {
+      taskCompletingRef.current = false
+      setTaskCompleting(false)
     }
   }
 
@@ -445,12 +476,13 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
       <main data-dialog-restore tabIndex={-1}>
         {focusMode ? <FocusView
           boards={focusBoards}
-          busy={focusBusy}
+          busy={focusBusy || taskCompleting}
           tasks={focusTasks}
-          taskError={focusTaskError}
+          taskError={[focusTaskError, taskCompletionError].filter(Boolean).join(' ')}
           onOpen={(name, card) => { if (!focusBusy && !busy) setFocusEditor({ board: name, card }) }}
-          onOpenTask={(task) => { if (!focusBusy && !busy) setFocusTask(task) }}
-          onRefresh={() => void refreshFocusData()}
+          onOpenTask={(task) => { if (!focusBusy && !busy && !taskCompletingRef.current) { setTaskCompletionError(''); setFocusTask(task) } }}
+          onCompleteTask={(task) => void completeTask(task)}
+          onRefresh={() => { setTaskCompletionError(''); void refreshFocusData() }}
         /> : <>
         <div className="board-toolbar" style={board?.color ? { '--board-color': board.color } as CSSProperties : undefined}>
           <div className="board-heading">
@@ -558,7 +590,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
         window.history.pushState({}, '', boardPath(created.name))
         setNewBoardOpen(false)
       }} />}
-      {focusTask && <FocusTaskDialog task={focusTask} notesBase={NOTES_BASE} onClose={() => setFocusTask(null)} />}
+      {focusTask && <FocusTaskDialog task={focusTask} notesBase={NOTES_BASE} busy={taskCompleting} error={taskCompletionError} onComplete={(task) => void completeTask(task)} onClose={() => setFocusTask(null)} />}
       {focusEditor && (
         <CardEditor
           key={`${focusEditor.board}:${focusEditor.card.id}`}
@@ -723,13 +755,14 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
   )
 }
 
-function FocusView({ boards, tasks, taskError, busy, onOpen, onOpenTask, onRefresh }: {
+function FocusView({ boards, tasks, taskError, busy, onOpen, onOpenTask, onCompleteTask, onRefresh }: {
   boards: BoardData[]
   tasks: VaultTask[]
   taskError: string
   busy: boolean
   onOpen: (board: string, card: Card) => void
   onOpenTask: (task: VaultTask) => void
+  onCompleteTask: (task: VaultTask) => void
   onRefresh: () => void
 }) {
   const candidates = boards.map((board) => ({
@@ -758,7 +791,7 @@ function FocusView({ boards, tasks, taskError, busy, onOpen, onOpenTask, onRefre
         </article>)}
       </div>
     </>}
-    <FocusTasksSection tasks={tasks} busy={busy} error={taskError} onOpen={onOpenTask} />
+    <FocusTasksSection tasks={tasks} busy={busy} error={taskError} onOpen={onOpenTask} onComplete={onCompleteTask} />
   </section>
 }
 

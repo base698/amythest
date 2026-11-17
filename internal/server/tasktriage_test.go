@@ -79,17 +79,16 @@ func TestHandleTaskToggleRejectsStaleVersionAfterLineShift(t *testing.T) {
 	if err := os.WriteFile(path, original, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	v, err := vault.Scan(root)
+	s, err := New(config.Config{Vault: root, DataDir: t.TempDir(), BaseURL: "/", SiteName: "Test"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer s.Close()
 	shifted := []byte("- [ ] Inserted\n- [ ] Recurring 🔁 every week\n- [ ] Other\n")
 	if err := os.WriteFile(path, shifted, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{cfg: config.Config{Vault: root}}
 	auth := withSession(t, s)
-	s.vault.Store(v)
 	body := fmt.Sprintf(`{"slug":"Project","line":1,"expectedVersion":%q,"done":true}`, tasks.FileVersion(original))
 	rec := httptest.NewRecorder()
 	s.handleTaskToggle(rec, auth(httptest.NewRequest(http.MethodPost, "/api/tasks/toggle", bytes.NewBufferString(body))))
@@ -98,6 +97,28 @@ func TestHandleTaskToggleRejectsStaleVersionAfterLineShift(t *testing.T) {
 	}
 	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != string(shifted) {
 		t.Fatalf("stale request mutated shifted task: %q err=%v", got, readErr)
+	}
+
+	page, err := s.db.Page("Project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page.HTML), `data-version="`+tasks.FileVersion(shifted)+`"`) {
+		t.Fatal("stale completion did not refresh the note index")
+	}
+	// Retrying with the refreshed coordinates completes the intended task.
+	body = fmt.Sprintf(`{"slug":"Project","line":2,"expectedVersion":%q,"done":true}`, tasks.FileVersion(shifted))
+	rec = httptest.NewRecorder()
+	s.handleTaskToggle(rec, auth(httptest.NewRequest(http.MethodPost, "/api/tasks/toggle", bytes.NewBufferString(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("retry status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "- [x] Recurring") || !strings.Contains(string(got), "- [ ] Inserted") || !strings.Contains(string(got), "- [ ] Other") {
+		t.Fatalf("refreshed completion changed the wrong task: %s", got)
 	}
 }
 

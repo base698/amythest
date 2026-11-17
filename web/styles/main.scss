@@ -1314,3 +1314,12 @@ input.task-toggle:disabled { cursor: wait; opacity: 0.6; }
     font-size: 0.85rem;
   }
 }
+
+// Focus links target only this note's own task, never a transcluded copy.
+input.task-toggle[id] { scroll-margin-top: 120px; }
+li:has(> input.task-toggle:target), li:has(> p > input.task-toggle:target) {
+  background: var(--highlight);
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 4px;
+}

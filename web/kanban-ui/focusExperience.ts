@@ -1,4 +1,5 @@
 import { createElement, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { buildTaskTogglePayload } from '../src/taskToggle.ts'
 import type { Card } from './BoardView.tsx'
 import { boardLabel } from './boardOrganization.ts'
 
@@ -91,9 +92,9 @@ export function flattenOpenTasks(groups: readonly TaskGroup[]): VaultTask[] {
   return groups.flatMap((group) => group.tasks || []).filter((task) => task.status === 'open')
 }
 
-export function taskSourcePath(notesBase: string, slug: string): string {
+export function taskSourcePath(notesBase: string, slug: string, line: number): string {
   const base = notesBase.endsWith('/') ? notesBase : `${notesBase}/`
-  return base + slug.split('/').map(encodeURIComponent).join('/')
+  return base + slug.split('/').map(encodeURIComponent).join('/') + `#task-line-${line}`
 }
 
 export function isDialogCloseKey(event: Pick<KeyboardEvent, 'key'> | Pick<ReactKeyboardEvent, 'key'>): boolean {
@@ -289,7 +290,27 @@ export function FocusReviewSection({ boards, busy = false, onOpen }: { boards: F
   )
 }
 
-export function FocusTasksSection({ tasks, busy, error, onOpen }: { tasks: VaultTask[]; busy: boolean; error: string; onOpen: (task: VaultTask) => void }) {
+export class TaskCompletionError extends Error {
+  stale: boolean
+  constructor(status: number) {
+    super(status === 409 ? 'This note changed. Tasks have been refreshed; check the task and try again.'
+      : status === 401 ? 'Your session expired. Sign in again to complete this task.'
+        : `Could not complete the task (${status}). Please try again.`)
+    this.stale = status === 409
+  }
+}
+
+export async function completeFocusTask(notesBase: string, task: VaultTask, csrf: string, request: typeof fetch = fetch): Promise<void> {
+  const base = notesBase.endsWith('/') ? notesBase : `${notesBase}/`
+  const response = await request(`${base}api/tasks/toggle`, {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+    body: JSON.stringify(buildTaskTogglePayload(task.slug, task.line, task.version, true)),
+  })
+  if (!response.ok) throw new TaskCompletionError(response.status)
+}
+
+export function FocusTasksSection({ tasks, busy, error, onOpen, onComplete }: { tasks: VaultTask[]; busy: boolean; error: string; onOpen: (task: VaultTask) => void; onComplete: (task: VaultTask) => void }) {
   return createElement('section', { className: 'focus-section tasks-section', 'aria-labelledby': 'focus-tasks-title' },
     createElement('div', { className: 'focus-section-heading' },
       createElement('div', null,
@@ -304,36 +325,35 @@ export function FocusTasksSection({ tasks, busy, error, onOpen }: { tasks: Vault
       : tasks.length === 0
         ? createElement('p', { className: 'muted' }, error ? 'Open tasks are unavailable.' : 'No open vault tasks.')
         : createElement('div', { className: 'focus-task-list' }, tasks.map((task) =>
-            createElement('button', {
+            createElement('div', {
               className: 'focus-task-row',
               'data-focus-task': `${task.slug}:${task.line}`,
-              disabled: busy,
               key: `${task.slug}:${task.line}`,
-              onClick: () => onOpen(task),
-              type: 'button',
             },
-            createElement('span', { className: 'focus-task-check', 'aria-hidden': 'true' }, '☐'),
+            createElement('input', { className: 'focus-task-check', type: 'checkbox', checked: false, disabled: busy, 'aria-label': `Complete task: ${task.text}`, onChange: () => onComplete(task) }),
+            createElement('button', { className: 'focus-task-open', type: 'button', disabled: busy, onClick: () => onOpen(task) },
             createElement('span', { className: 'focus-task-main' },
               createElement('strong', null, task.text),
               createElement('small', null, `${task.path} · line ${task.line}`),
             ),
             task.due ? createElement('span', { className: 'focus-task-due' }, `Due ${task.due}`) : null,
             ),
+            ),
           )),
   )
 }
 
-export function FocusTaskDialog({ task, notesBase, onClose }: { task: VaultTask; notesBase: string; onClose: () => void }) {
-  const dialogRef = useDialogFocus(onClose)
+export function FocusTaskDialog({ task, notesBase, busy = false, error = '', onClose, onComplete }: { task: VaultTask; notesBase: string; busy?: boolean; error?: string; onClose: () => void; onComplete: (task: VaultTask) => void }) {
+  const dialogRef = useDialogFocus(onClose, busy)
 
-  return createElement('div', { className: 'modal-backdrop', onMouseDown: (event: { target: EventTarget; currentTarget: EventTarget }) => { if (event.target === event.currentTarget) onClose() } },
+  return createElement('div', { className: 'modal-backdrop', onMouseDown: (event: { target: EventTarget; currentTarget: EventTarget }) => { if (!busy && event.target === event.currentTarget) onClose() } },
     createElement('section', { className: 'modal focus-task-dialog', ref: dialogRef, role: 'dialog', tabIndex: -1, 'aria-modal': 'true', 'aria-labelledby': 'focus-task-dialog-title' },
       createElement('header', null,
         createElement('div', null,
           createElement('p', { className: 'eyebrow' }, `${task.path} · line ${task.line}`),
           createElement('h2', { id: 'focus-task-dialog-title' }, 'Task detail'),
         ),
-        createElement('button', { 'aria-label': 'Close', className: 'icon-button', onClick: onClose, type: 'button' }, '×'),
+        createElement('button', { 'aria-label': 'Close', className: 'icon-button', disabled: busy, onClick: onClose, type: 'button' }, '×'),
       ),
       createElement('p', { className: 'focus-task-detail-text' }, task.text),
       createElement('dl', { className: 'focus-task-detail-meta' },
@@ -342,9 +362,11 @@ export function FocusTaskDialog({ task, notesBase, onClose }: { task: VaultTask;
         task.due ? createElement('div', null, createElement('dt', null, 'Due'), createElement('dd', null, task.due)) : null,
         task.recurrence ? createElement('div', null, createElement('dt', null, 'Repeats'), createElement('dd', null, task.recurrence)) : null,
       ),
+      error ? createElement('div', { className: 'focus-inline-error', role: 'alert' }, error) : null,
       createElement('div', { className: 'modal-actions' },
-        createElement('button', { className: 'quiet', onClick: onClose, type: 'button' }, 'Close'),
-        createElement('a', { className: 'primary button-link', href: taskSourcePath(notesBase, task.slug) }, 'Open source note'),
+        createElement('button', { className: 'quiet', disabled: busy, onClick: onClose, type: 'button' }, 'Close'),
+        createElement('a', { className: 'quiet button-link', href: busy ? undefined : taskSourcePath(notesBase, task.slug, task.line), 'aria-disabled': busy || undefined }, 'Open source note'),
+        createElement('button', { className: 'primary', disabled: busy, onClick: () => onComplete(task), type: 'button' }, busy ? 'Completing…' : 'Mark complete'),
       ),
     ),
   )
