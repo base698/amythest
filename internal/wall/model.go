@@ -33,6 +33,26 @@ type Options struct {
 	Locate     func() Place
 	Open       func(url string) error
 	Now        func() time.Time
+	// Show opens the wall on one item, enlarged (an image) or as its diff (a
+	// commit), for callers that already know what the person wants to see.
+	Show *Want
+}
+
+// Want names an item of the feed by what a search result knows about it.
+type Want struct {
+	Kind  string
+	Title string
+	Ref   string // a commit's id, when known
+}
+
+func (w Want) matches(it Item) bool {
+	if w.Kind != "" && w.Kind != it.Art.Kind && w.Kind != it.Kind {
+		return false
+	}
+	if w.Ref != "" && it.Art.Ref != "" && (w.Ref == it.Art.Ref || strings.HasPrefix(it.Art.Ref, w.Ref)) {
+		return true
+	}
+	return w.Title != "" && (w.Title == it.Title || w.Title == it.Art.Title || w.Title == refName(it.Art))
 }
 
 const (
@@ -86,6 +106,7 @@ type model struct {
 	diffTop  int
 	loading  bool
 	synced   time.Time
+	showing  string // media hash of an image to enlarge once it has loaded
 	flash    string
 	err      error
 	fetching int
@@ -232,6 +253,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.all = buildFeed(msg.snap)
 		m.applyFilter(keep)
+		if want := m.o.Show; want != nil {
+			m.o.Show = nil // only on the first load
+			return m, m.show(*want)
+		}
 		return m, m.relayout()
 	case picMsg:
 		m.fetching--
@@ -243,6 +268,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			p.state, p.err = picFailed, msg.err.Error()
 		} else {
 			p.state, p.src = picReady, msg.img
+		}
+		if m.showing == msg.hash {
+			m.showing = ""
+			if p.state == picReady && m.view == "feed" && m.cursor < len(m.items) && m.items[m.cursor].Art.MediaHash == msg.hash {
+				m.view = "zoom"
+			}
 		}
 		return m, m.relayout()
 	case diffMsg:
@@ -392,6 +423,38 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.open()
 	}
 	return m, nil
+}
+
+// show selects the wanted item and opens it: a commit's diff, an image
+// enlarged as soon as it has loaded. Anything else is just selected.
+func (m *model) show(want Want) tea.Cmd {
+	found := -1
+	for i, it := range m.items {
+		if want.matches(it) {
+			found = i
+			break
+		}
+	}
+	if found < 0 {
+		return tea.Batch(m.relayout(), m.say("that item is older than this feed shows"))
+	}
+	m.cursor = found
+	it := m.items[found]
+	cmds := []tea.Cmd{m.reveal()}
+	switch {
+	case it.Kind == "commit" && it.Art.MediaHash != "" && it.Art.Available:
+		cmds = append(cmds, m.diffCmd(it))
+	case it.Kind == "image":
+		if p := m.picOf(it); p != nil {
+			if p.state == picReady {
+				m.view = "zoom"
+				cmds = append(cmds, m.relayout())
+			} else {
+				m.showing = it.Art.MediaHash
+			}
+		}
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *model) open() tea.Cmd {

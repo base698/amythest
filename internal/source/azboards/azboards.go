@@ -451,6 +451,34 @@ func (s *Source) Health(ctx context.Context) source.Health {
 	}
 }
 
+// List returns the work items of every configured board, for search and
+// other views that span boards. A board that fails to load is skipped when
+// another loaded; the error is returned only when nothing did.
+func (s *Source) List(ctx context.Context) ([]source.Item, error) {
+	var items []source.Item
+	var failed error
+	for _, b := range s.cfg.Boards {
+		rows, err := s.BoardItems(ctx, b, false, false)
+		if err != nil {
+			if failed == nil {
+				failed = err
+			}
+			continue
+		}
+		for _, w := range rows {
+			id := fmt.Sprintf("AB#%d", w.ID)
+			items = append(items, source.Item{
+				Source: s.Name(), ID: id, Kind: "issue", Title: w.Title,
+				Meta: id + " · " + w.State + " · " + b.Name, URL: s.WebURL(w.ID), Payload: w,
+			})
+		}
+	}
+	if len(items) == 0 && failed != nil {
+		return nil, failed
+	}
+	return items, nil
+}
+
 // DueItems: Azure work items don't merge into Today in v1.
 func (s *Source) DueItems(ctx context.Context, day string, includeDone bool) ([]source.Item, error) {
 	return nil, nil

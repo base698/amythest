@@ -551,3 +551,29 @@ func TestWallOutsideHerdrAsksWhichProject(t *testing.T) {
 		t.Fatalf("picked %q asked %v view %s", m.project, api.asked, m.view)
 	}
 }
+
+func TestWallOpensStraightToAWantedItem(t *testing.T) {
+	diff := "commit 0123\n+new\n"
+	api := &fakeAPI{overview: snapshot(), project: snapshot(), media: map[string][]byte{strings.Repeat("d", 64): []byte(diff), strings.Repeat("a", 64): picture(t)}}
+	// A commit named by its id opens as its diff.
+	m, _ := newWall(t, api, Options{Project: "Robot", Graphics: "kitty", Show: &Want{Kind: "commit", Ref: "0123456789abcdef"}})
+	if m.view != "diff" || m.cursor != 0 || !strings.Contains(m.View(), "+new") {
+		t.Fatalf("commit: view %s cursor %d", m.view, m.cursor)
+	}
+	// An image named by its title is enlarged once it has loaded.
+	m, _ = newWall(t, api, Options{Project: "Robot", Graphics: "kitty", Show: &Want{Kind: "image", Title: "walk.png"}})
+	if m.view != "zoom" || m.cursor != 1 || len(m.zoom) == 0 {
+		t.Fatalf("image: view %s cursor %d rows %d", m.view, m.cursor, len(m.zoom))
+	}
+	// Escape returns to the feed with that item selected; a later refresh does not reopen it.
+	drive(t, m, keys("esc")[0])
+	drive(t, m, feedMsg{project: "Robot", snap: snapshot()})
+	if m.view != "feed" || m.cursor != 1 {
+		t.Fatalf("after esc and refresh: view %s cursor %d", m.view, m.cursor)
+	}
+	// Something the feed does not hold says so.
+	m, _ = newWall(t, api, Options{Project: "Robot", Graphics: "off", Show: &Want{Kind: "image", Title: "gone.png"}})
+	if m.view != "feed" || !strings.Contains(m.View(), "older than this feed shows") {
+		t.Fatalf("missing item: view %s\n%s", m.view, m.View())
+	}
+}

@@ -250,7 +250,7 @@ func TestSearchMergesSourcesAndGoesToTheOpenPane(t *testing.T) {
 		t.Fatalf("first row: %+v cursor %d", m.rows[0], m.cursor)
 	}
 	view := m.View()
-	for _, want := range []string{"Agents and what they made", "Notes, cards and tasks", "On screen in open terminals", "● open pane", "opens in the browser", "robot / gait", "gait check passed", "4 results"} {
+	for _, want := range []string{"Agents and what they made", "Notes, cards and tasks", "On screen in open terminals", "● enter: go to pane", "enter: view", "enter: browser", "robot / gait", "gait check passed", "4 results"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view lacks %q\n%s", want, view)
 		}
@@ -261,16 +261,29 @@ func TestSearchMergesSourcesAndGoesToTheOpenPane(t *testing.T) {
 	}
 }
 
-func TestSearchOpensTheBrowserWhenThePaneIsGone(t *testing.T) {
-	api := &fakeAPI{work: []apiclient.WorkHit{{Kind: "commit", Title: "Fix gait", Run: "r-gone", Project: "robot"}},
+func TestSearchShowsWhatAnAgentMadeAndOpensNotesInTheBrowser(t *testing.T) {
+	api := &fakeAPI{work: []apiclient.WorkHit{{Kind: "commit", Title: "Fix gait", Body: "0123456789abcdef", Run: "r-gone", Project: "robot"}},
 		vault: []apiclient.VaultHit{{Slug: "Projects/Robot", Title: "Robot notes", Kind: "note", URL: "Projects/Robot"}}}
 	m := open(t, api, Options{Query: "gait"})
 	if len(m.rows) != 2 {
 		t.Fatalf("a starting query searches at once: %d rows", len(m.rows))
 	}
+	// Enter on a commit shows the commit, wherever its pane went.
 	settleAll(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if c := Chosen(m); c == nil || c.Pane != "" || c.URL != "https://h/notes/kanban/focus" {
-		t.Fatalf("closed pane: %+v", c)
+	c := Chosen(m)
+	if c == nil || c.View == nil || *c.View != (View{Project: "robot", Kind: "commit", Title: "Fix gait", Ref: "0123456789abcdef"}) || c.URL != "" || c.Pane != "" {
+		t.Fatalf("commit: %+v", c)
+	}
+	// Tab asks for its pane, which is closed: say so and stay.
+	m = open(t, api, Options{Query: "gait"})
+	settleAll(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if Chosen(m) != nil || !strings.Contains(m.View(), "no longer open") {
+		t.Fatalf("tab on a closed pane: %+v", Chosen(m))
+	}
+	// Ctrl+O is the browser, for anything with a page.
+	settleAll(t, m, tea.KeyMsg{Type: tea.KeyCtrlO})
+	if c := Chosen(m); c == nil || c.URL != "https://h/notes/kanban/focus" {
+		t.Fatalf("ctrl+o: %+v", c)
 	}
 	// The note opens at its own page.
 	m = open(t, api, Options{Query: "gait"})
@@ -282,12 +295,21 @@ func TestSearchOpensTheBrowserWhenThePaneIsGone(t *testing.T) {
 
 func TestSearchLooksUpAnOlderRunBeforeDeciding(t *testing.T) {
 	// The run is older than the overview covers; its session turns out to be
-	// in a pane that is still open here.
+	// in a pane that is still open here. Tab on a commit asks the same.
 	api := &fakeAPI{
-		work: []apiclient.WorkHit{{Kind: "chat", Title: "assistant", Body: "old gait talk", Run: "r-old", Project: "robot"}},
+		work: []apiclient.WorkHit{{Kind: "commit", Title: "Old gait fix", Run: "r-old", Project: "robot"}},
 		runs: map[string]*apiclient.WorkSnapshot{"r-old": {Runs: []apiclient.WorkRun{{ID: "r-old", Session: "s-open"}}}},
 	}
 	m := open(t, api, Options{Query: "gait"})
+	settleAll(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if c := Chosen(m); c == nil || c.Pane != "t7" || len(api.looked) != 1 {
+		t.Fatalf("tab after lookup: %+v looked %v", c, api.looked)
+	}
+	api = &fakeAPI{
+		work: []apiclient.WorkHit{{Kind: "chat", Title: "assistant", Body: "old gait talk", Run: "r-old", Project: "robot"}},
+		runs: map[string]*apiclient.WorkSnapshot{"r-old": {Runs: []apiclient.WorkRun{{ID: "r-old", Session: "s-open"}}}},
+	}
+	m = open(t, api, Options{Query: "gait"})
 	if m.rows[0].Pane != "" {
 		t.Fatalf("not located yet: %+v", m.rows[0])
 	}
@@ -332,5 +354,32 @@ func TestSearchKeepsTheSelectionTheUserMade(t *testing.T) {
 	typeText(t, m, "g")
 	if len(api.asked) != n || len(m.agents) != 0 {
 		t.Fatalf("single character searched the server: %v", api.asked[n:])
+	}
+}
+
+func TestSearchIncludesTicketsFromExternalTrackers(t *testing.T) {
+	tickets := []Ticket{
+		{Source: "azboards", ID: "AB#101", Title: "Fix gait drift", Meta: "AB#101 · Active · Robot", URL: "https://dev.example/_workitems/edit/101"},
+		{Source: "jira", ID: "ROB-7", Title: "Unrelated", Meta: "ROB-7 · To Do", URL: "https://jira.example/browse/ROB-7"},
+	}
+	api := &fakeAPI{vault: []apiclient.VaultHit{{Slug: "a", Title: "gait note", Kind: "note", URL: "a"}}}
+	m := open(t, api, Options{Tickets: func() []Ticket { return tickets }})
+	typeText(t, m, "gait")
+	if len(m.rows) != 2 || m.rows[1].Group != "tickets" || m.rows[1].Kind != "azboards" || m.rows[1].Where != "AB#101 · Active · Robot" {
+		t.Fatalf("rows: %+v", m.rows)
+	}
+	if view := m.View(); !strings.Contains(view, "Tickets") || !strings.Contains(view, "Fix gait drift") {
+		t.Errorf("view:\n%s", view)
+	}
+	// A ticket is found by its id too, and opens at its own page.
+	settleAll(t, m, tea.KeyMsg{Type: tea.KeyCtrlU})
+	typeText(t, m, "rob-7")
+	// (The stand-in server returns its note for any query.)
+	if len(m.rows) != 2 || m.rows[1].Title != "Unrelated" {
+		t.Fatalf("by id: %+v", m.rows)
+	}
+	settleAll(t, m, tea.KeyMsg{Type: tea.KeyDown}, tea.KeyMsg{Type: tea.KeyEnter})
+	if c := Chosen(m); c == nil || c.URL != "https://jira.example/browse/ROB-7" {
+		t.Fatalf("ticket choice: %+v", c)
 	}
 }

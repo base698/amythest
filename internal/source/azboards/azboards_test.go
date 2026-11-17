@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/base698/amythest/internal/source"
 )
 
 // fakeAZ writes an executable script standing in for the az CLI (via AMY_AZ)
@@ -377,5 +379,20 @@ func TestCommentInvalidatesCommentsCache(t *testing.T) {
 	}
 	if _, err := src.Comments(context.Background(), 55, false); err != nil || *hits != 2 {
 		t.Fatalf("posting a comment should drop the comments cache: hits=%d err=%v", *hits, err)
+	}
+}
+
+func TestListSpansBoardsForSearch(t *testing.T) {
+	fakeAZ(t, `[{"id": 101, "title": "Fix login", "state": "Active", "assigned": null}]`, "", 0)
+	src := New(testConfig())
+	var lister source.Lister = src // search finds ticket sources through this
+	items, err := lister.List(context.Background())
+	if err != nil || len(items) == 0 {
+		t.Fatalf("list: %v %v", items, err)
+	}
+	it := items[0]
+	if it.Source != "azboards" || it.ID != "AB#101" || it.Kind != "issue" || it.Title != "Fix login" ||
+		!strings.Contains(it.Meta, "AB#101 · Active") || it.URL != src.WebURL(101) {
+		t.Fatalf("item: %+v", it)
 	}
 }

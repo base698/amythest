@@ -37,15 +37,23 @@ func execRunner(ctx context.Context, name string, args ...string) ([]byte, error
 
 // Result is one line of the result list.
 type Result struct {
-	Group   string // "agents", "vault" or "screen"
+	Group   string // "agents", "vault", "tickets" or "screen"
 	Kind    string // chat, commit, image, note, card, task, screen, …
 	Title   string
 	Snippet string
 	Where   string // project / tab, or what the note is
 	When    time.Time
 	Run     string // agents: the run it belongs to
+	Project string // agents: the Work project it is filed under
+	Ref     string // agents: a commit's id
 	Pane    string // screen, or agents once located: the pane to go to
 	URL     string // where it opens in a browser, if anywhere
+}
+
+// Viewable reports whether the result is a thing an agent made (a commit, an
+// image, a file) rather than something said: it can be shown itself.
+func (r Result) Viewable() bool {
+	return r.Group == "agents" && r.Kind != "chat" && r.Kind != "observation" && r.Project != ""
 }
 
 // Pane ids tell the two herdr runtimes apart: terminal herdr's are
@@ -145,10 +153,15 @@ func LocalCollector() string {
 func fromWork(hits []apiclient.WorkHit, p *Places, endpoint string) []Result {
 	out := make([]Result, 0, len(hits))
 	for _, h := range hits {
-		r := Result{Group: "agents", Kind: h.Kind, Title: oneLine(h.Title), Run: h.Run, URL: strings.TrimRight(endpoint, "/") + "/kanban/focus"}
+		r := Result{Group: "agents", Kind: h.Kind, Title: oneLine(h.Title), Run: h.Run, Project: h.Project, URL: strings.TrimRight(endpoint, "/") + "/kanban/focus"}
 		// What was said is worth quoting; an artifact's body is its path or id.
-		if h.Kind == "chat" || h.Kind == "observation" {
+		switch h.Kind {
+		case "chat", "observation":
 			r.Snippet = oneLine(h.Body)
+		case "commit":
+			if id := oneLine(h.Body); len(id) >= 7 && strings.Trim(id, "0123456789abcdef") == "" {
+				r.Ref = id
+			}
 		}
 		r.When, _ = time.Parse(time.RFC3339Nano, h.Created)
 		tab := ""
@@ -209,6 +222,49 @@ func fromVault(hits []apiclient.VaultHit, endpoint string) []Result {
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// --- tickets from external trackers ----------------------------------------
+
+// Ticket is an item from an external tracker (Jira, Azure Boards, …), as the
+// terminal client's ticket sources list them.
+type Ticket struct {
+	Source string
+	ID     string
+	Title  string
+	Meta   string // id, state and the like
+	URL    string
+}
+
+// searchTickets finds tickets whose id, title or details contain every word.
+func searchTickets(tickets []Ticket, query string, limit int) []Result {
+	words := strings.Fields(strings.ToLower(query))
+	if len(words) == 0 {
+		return nil
+	}
+	var out []Result
+	for _, t := range tickets {
+		text := strings.ToLower(t.ID + " " + t.Title + " " + t.Meta)
+		match := true
+		for _, w := range words {
+			if !strings.Contains(text, w) {
+				match = false
+				break
+			}
+		}
+		if !match {
+			continue
+		}
+		where := t.Meta
+		if where == "" {
+			where = t.ID
+		}
+		out = append(out, Result{Group: "tickets", Kind: t.Source, Title: oneLine(t.Title), Where: where, URL: t.URL})
+		if len(out) == limit {
+			break
+		}
+	}
+	return out
+}
 
 // --- text on screen in open terminals --------------------------------------
 

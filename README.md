@@ -174,20 +174,26 @@ amy wall -list            # print the feed as text and exit
 ```
 
 `amy find` is one search across the vault (notes, cards, tasks), what agents
-made, and, in the Herdr App, the text on screen in open terminals. Enter on a
-result goes to the pane where it happened when that pane is still open on
-this machine; otherwise it opens the result in the browser. Ctrl+O always
-opens the browser.
+made, tickets from the configured trackers (Jira, Azure Boards), and, in the
+Herdr App, the text on screen in open terminals.
 
 ```sh
 amy find                  # open the search
 amy find gait timing      # open it with a query
 ```
 
+- **Enter** opens the result: a commit's diff or an image right there in the
+  wall, the pane for text on screen, the browser for notes, cards, tasks and
+  tickets.
+- **Tab** goes to the pane a result came from, when that pane is still open
+  on this machine. **Ctrl+O** opens the browser for anything with a page.
+
 Going to a pane needs the collector registered on this machine, which is how
-`amy find` tells this machine's panes from another's. In terminal herdr the
-plugin's `find` action opens it as a popup; in the Herdr App bind a key to
-`terminal.open` with `argv` `["/path/to/amy", "find", "-pane"]`.
+`amy find` tells this machine's panes from another's. Tickets come from the
+same `sources:` config as the main screen; any source that can list its items
+is searched. In terminal herdr the plugin's `find` action opens the search as
+a popup; in the Herdr App bind a key to `terminal.open` with `argv`
+`["/path/to/amy", "find", "-pane"]`.
 
 - **Terminal herdr:** the plugin in `herdr/` has a `toggle-wall` action that
   opens the wall in a split on the right and closes it again. Bind it with

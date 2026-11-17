@@ -16,14 +16,25 @@ import (
 type Options struct {
 	Query   string          // start with this query
 	Screens func() []Screen // reads open terminals; nil: that source is off
+	Tickets func() []Ticket // lists external trackers' tickets; nil: none configured
 	Local   string          // this machine's collector id
 	Now     func() time.Time
 }
 
-// Choice is what the person picked: a pane to go to, or a web address.
+// Choice is what the person picked: a pane to go to, a thing an agent made
+// to show, or a web address.
 type Choice struct {
 	Pane string
+	View *View
 	URL  string
+}
+
+// View names something an agent made, for the wall to show.
+type View struct {
+	Project string
+	Kind    string
+	Title   string
+	Ref     string
 }
 
 // settle is the typing pause before the server is asked.
@@ -41,16 +52,17 @@ type model struct {
 	asked   string // the query the shown server results answer
 	places  *Places
 	screens []Screen
+	tickets []Ticket
 
-	agents, vault, screen []Result
-	rows                  []Result // what is listed, in order
-	heads                 map[int]string
-	cursor, top           int
-	moved                 bool // the person moved the selection for this query
-	pending               int  // server searches in flight
-	errs                  map[string]string
-	note                  string
-	choice                *Choice
+	agents, vault, ticket, screen []Result
+	rows                          []Result // what is listed, in order
+	heads                         map[int]string
+	cursor, top                   int
+	moved                         bool // the person moved the selection for this query
+	pending                       int  // server searches in flight
+	errs                          map[string]string
+	note                          string
+	choice                        *Choice
 }
 
 type (
@@ -59,6 +71,7 @@ type (
 		err    error
 	}
 	screensMsg struct{ screens []Screen }
+	ticketsMsg struct{ tickets []Ticket }
 	settledMsg struct{ seq int }
 	agentsMsg  struct {
 		seq  int
@@ -71,8 +84,9 @@ type (
 		err  error
 	}
 	locatedMsg struct {
-		run string
-		err error
+		run  string
+		pane bool // the person asked for the pane, not the result itself
+		err  error
 	}
 )
 
@@ -108,6 +122,9 @@ func (m *model) Init() tea.Cmd {
 	if m.o.Screens != nil {
 		cmds = append(cmds, func() tea.Msg { return screensMsg{m.o.Screens()} })
 	}
+	if m.o.Tickets != nil {
+		cmds = append(cmds, func() tea.Msg { return ticketsMsg{m.o.Tickets()} })
+	}
 	if strings.TrimSpace(m.o.Query) != "" {
 		m.seq++
 		seq := m.seq
@@ -136,6 +153,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case screensMsg:
 		m.screens = msg.screens
 		m.screen = searchScreens(m.screens, m.query(), 2, 20)
+		m.arrange()
+		return m, nil
+	case ticketsMsg:
+		m.tickets = msg.tickets
+		m.ticket = searchTickets(m.tickets, m.query(), 15)
 		m.arrange()
 		return m, nil
 	case settledMsg:
@@ -192,6 +214,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.arrange()
 		for _, r := range m.rows {
 			if r.Run == msg.run {
+				if msg.pane {
+					return m.toPane(r, true)
+				}
 				return m.choose(r, true)
 			}
 		}
@@ -217,6 +242,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.choose(m.rows[m.cursor], false)
 			}
 			return m, nil
+		case "tab":
+			if m.cursor < len(m.rows) {
+				return m.toPane(m.rows[m.cursor], false)
+			}
+			return m, nil
 		case "ctrl+o":
 			if m.cursor < len(m.rows) && m.rows[m.cursor].URL != "" {
 				m.choice = &Choice{URL: m.rows[m.cursor].URL}
@@ -231,9 +261,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.input.Value() == before {
 			return m, cmd
 		}
-		// The open terminals are searched at once; the server after a pause.
+		// What is already here is searched at once; the server after a pause.
 		m.note = ""
 		m.screen = searchScreens(m.screens, m.query(), 2, 20)
+		m.ticket = searchTickets(m.tickets, m.query(), 15)
 		m.cursor, m.top, m.moved = 0, 0, false
 		m.arrange()
 		m.seq++
@@ -245,31 +276,54 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// choose acts on a result: its open pane if it has one, else its web page.
-// A result whose session is not known yet is looked up first.
+// choose acts on a result. A thing an agent made is shown itself; anything
+// else goes to its open pane if it has one, else to its web page. A result
+// whose session is not known yet is looked up first.
 func (m *model) choose(r Result, looked bool) (tea.Model, tea.Cmd) {
 	switch {
+	case r.Viewable():
+		m.choice = &Choice{View: &View{Project: r.Project, Kind: r.Kind, Title: r.Title, Ref: r.Ref}}
+		return m, tea.Quit
 	case r.Pane != "":
 		m.choice = &Choice{Pane: r.Pane}
 		return m, tea.Quit
 	case r.Group == "agents" && !looked && m.places != nil && !m.places.Known(r.Run):
-		m.note = "finding where that ran…"
-		run := r.Run
-		return m, func() tea.Msg {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			defer cancel()
-			s, err := m.api.WorkRun(ctx, run)
-			if err == nil {
-				m.places.add(s)
-			}
-			return locatedMsg{run: run, err: err}
-		}
+		return m, m.lookUp(r.Run, false)
 	case r.URL != "":
 		m.choice = &Choice{URL: r.URL}
 		return m, tea.Quit
 	}
 	m.note = "nowhere to go for this result"
 	return m, nil
+}
+
+// toPane goes to the pane a result came from, if it is still open here.
+func (m *model) toPane(r Result, looked bool) (tea.Model, tea.Cmd) {
+	switch {
+	case r.Pane != "":
+		m.choice = &Choice{Pane: r.Pane}
+		return m, tea.Quit
+	case r.Group == "agents" && !looked && m.places != nil && !m.places.Known(r.Run):
+		return m, m.lookUp(r.Run, true)
+	case r.Group == "agents":
+		m.note = "its pane is no longer open on this machine"
+	default:
+		m.note = "this result did not come from a pane"
+	}
+	return m, nil
+}
+
+func (m *model) lookUp(run string, pane bool) tea.Cmd {
+	m.note = "finding where that ran…"
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		s, err := m.api.WorkRun(ctx, run)
+		if err == nil {
+			m.places.add(s)
+		}
+		return locatedMsg{run: run, pane: pane, err: err}
+	}
 }
 
 // relocate fills in panes and tabs for the agent results once the overview
@@ -312,7 +366,7 @@ func (m *model) arrange() {
 	for _, g := range []struct {
 		name string
 		rows []Result
-	}{{"Agents and what they made", m.agents}, {"Notes, cards and tasks", m.vault}, {"On screen in open terminals", m.screen}} {
+	}{{"Agents and what they made", m.agents}, {"Notes, cards and tasks", m.vault}, {"Tickets", m.ticket}, {"On screen in open terminals", m.screen}} {
 		if len(g.rows) == 0 {
 			continue
 		}
@@ -447,21 +501,26 @@ func (m *model) View() string {
 				meta = append(meta, s)
 			}
 		}
-		goes := dim.Render("opens in the browser")
+		// Say what Enter does for this result.
+		goes := ""
 		switch {
+		case r.Viewable() && r.Pane != "":
+			goes = dim.Render("enter: view · tab: ") + here.Render("● its pane")
+		case r.Viewable():
+			goes = dim.Render("enter: view")
 		case r.Pane != "":
-			goes = here.Render("● open pane")
-		case r.URL == "":
-			goes = ""
+			goes = here.Render("● enter: go to pane")
+		case r.URL != "":
+			goes = dim.Render("enter: browser")
 		}
-		text := clip(strings.Join(meta, " · "), m.w-34)
+		text := clip(strings.Join(meta, " · "), m.w-44)
 		if text != "" && goes != "" {
 			text += " · "
 		}
 		lines = append(lines, "          "+dim.Render(text)+goes)
 	}
 	if len(m.rows) == 0 {
-		msg := "Type to search. Enter goes to the pane where it happened."
+		msg := "Type to search notes, cards, tasks, what agents made and open terminals."
 		if m.query() != "" && m.pending == 0 && m.asked == m.query() {
 			msg = "Nothing found."
 		}
@@ -474,7 +533,7 @@ func (m *model) View() string {
 		b.WriteString("\n")
 	}
 	b.WriteString(dim.Render(strings.Repeat("─", m.w)) + "\n")
-	foot := "↑/↓ move · enter go · ctrl+o browser · esc close"
+	foot := "↑/↓ move · enter open · tab its pane · ctrl+o browser · esc close"
 	switch {
 	case m.note != "":
 		foot = m.note

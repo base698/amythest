@@ -78,16 +78,24 @@ func runWall(args []string) {
 		}
 	}
 
-	graphics := *images
-	if graphics == "auto" {
+	if err := showWall(client, *images, wall.Options{Project: *project, Refresh: *refresh, Locate: locate}, pane); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// showWall runs the wall on this terminal until the person quits it, then
+// closes pane, the Herdr App pane it owns, if any.
+func showWall(client *apiclient.Client, images string, opts wall.Options, pane string) error {
+	graphics := images
+	if graphics == "" || graphics == "auto" {
 		graphics = wall.DetectGraphics(os.Getenv, terminalAnswersGraphicsQuery)
 	}
 	if graphics != "kitty" && graphics != "blocks" && graphics != "off" {
-		fmt.Fprintln(os.Stderr, "wall: -images must be auto, kitty, blocks or off")
-		os.Exit(2)
+		return fmt.Errorf("wall: -images must be auto, kitty, blocks or off")
 	}
 	out := &serialOut{File: os.Stdout}
-	opts := wall.Options{Project: *project, Graphics: graphics, Refresh: *refresh, Out: out, Locate: locate, Open: openURL}
+	opts.Graphics, opts.Out, opts.Open = graphics, out, openURL
 	// The terminal reports its size in cells and in pixels; together they give
 	// the shape of a cell, which decides how many rows an image needs.
 	if ws, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 && ws.Row > 0 && ws.Xpixel > 0 && ws.Ypixel > 0 {
@@ -96,12 +104,12 @@ func runWall(args []string) {
 	}
 	program := tea.NewProgram(wall.New(client, opts), tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithOutput(out))
 	if _, err := program.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return err
 	}
 	if pane != "" {
 		wall.ClosePane(pane, nil)
 	}
+	return nil
 }
 
 // serialOut is the terminal as one writer. The screen and image uploads both
@@ -162,5 +170,18 @@ func openURL(url string) error {
 	if runtime.GOOS == "darwin" {
 		name = "open"
 	}
-	return exec.Command(name, url).Start()
+	cmd := exec.Command(name, url)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// Give the opener a moment to hand the address over: the caller may be
+	// about to close the pane this program runs in, which would end it too.
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(3 * time.Second):
+		return nil
+	}
 }

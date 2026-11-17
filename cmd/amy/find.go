@@ -1,22 +1,28 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/find"
+	"github.com/base698/amythest/internal/source"
+	"github.com/base698/amythest/internal/source/azboards"
+	"github.com/base698/amythest/internal/source/jira"
 	"github.com/base698/amythest/internal/wall"
 )
 
 // `amy find` is one search across the vault (notes, cards, tasks), what
-// agents said and produced, and the text on screen in open terminals. Enter
-// on a result goes to the pane where it happened when that pane is still
-// open on this machine; otherwise it opens the result in the browser.
+// agents made, tickets from the configured trackers, and the text on screen
+// in open terminals. Enter shows a commit or image right there, goes to the
+// pane for text on screen, and opens notes, cards, tasks and tickets in the
+// browser; Tab goes to the pane a result came from when it is still open.
 //
 //	amy find                 open the search
 //	amy find gait timing     open it with a query
@@ -57,6 +63,28 @@ func runFind(args []string) {
 			return out
 		}
 	}
+	// Tickets come from the same tracker sources the main screen lists.
+	var trackers []source.Lister
+	if jcfg, ok, err := jira.LoadConfig(cfg.File); err == nil && ok {
+		trackers = append(trackers, jira.New(jcfg, cfg.EnvFile))
+	}
+	if acfg, ok, err := azboards.LoadConfig(cfg.File); err == nil && ok {
+		trackers = append(trackers, azboards.New(acfg))
+	}
+	if len(trackers) > 0 {
+		opts.Tickets = func() []find.Ticket {
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+			var out []find.Ticket
+			for _, t := range trackers {
+				items, _ := t.List(ctx) // a tracker that is down just has no tickets to show
+				for _, it := range items {
+					out = append(out, find.Ticket{Source: it.Source, ID: it.ID, Title: it.Title, Meta: it.Meta, URL: it.URL})
+				}
+			}
+			return out
+		}
+	}
 	pane := ""
 	if *ownPane {
 		pane, _ = wall.AppPane(os.Getenv("HC_TERMINAL_ID"), nil)
@@ -67,22 +95,36 @@ func runFind(args []string) {
 		os.Exit(1)
 	}
 	choice := find.Chosen(final)
-	// Close the search's pane before going anywhere, so the focus that
-	// follows is not handed back to a neighbour of the closing pane.
-	if pane != "" {
-		wall.ClosePane(pane, nil)
-	}
-	if choice == nil {
-		return
-	}
-	if choice.Pane != "" {
-		if err := find.Focus(choice.Pane, nil); err != nil {
-			fmt.Fprintln(os.Stderr, "find: could not go to", choice.Pane+":", err)
+	// Act on the choice first and close the search's own pane last: closing
+	// the pane ends this program, so anything after it may never run.
+	failed := false
+	switch {
+	case choice == nil:
+	case choice.View != nil:
+		// Show the commit or image right here: the wall takes over this
+		// terminal, opened on that item, and closes the pane when quit.
+		v := choice.View
+		err := showWall(client, "auto", wall.Options{Project: v.Project, Show: &wall.Want{Kind: v.Kind, Title: v.Title, Ref: v.Ref}}, pane)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		return
+	case choice.Pane != "":
+		if err := find.Focus(choice.Pane, nil); err != nil {
+			fmt.Fprintln(os.Stderr, "find: could not go to", choice.Pane+":", err)
+			failed = true
+		}
+	default:
+		if err := openURL(choice.URL); err != nil {
+			fmt.Println(choice.URL)
+			failed = true
+		}
 	}
-	if err := openURL(choice.URL); err != nil {
-		fmt.Println(choice.URL)
+	if pane != "" && !failed {
+		wall.ClosePane(pane, nil)
+	}
+	if failed {
+		os.Exit(1)
 	}
 }
