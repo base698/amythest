@@ -68,9 +68,18 @@ func messageCommand(args []string) error {
 	allowFiles := fs.Bool("files", false, "grant permission to use attachments")
 	ircClient := fs.String("irc-client", "", "IRC nickname to focus")
 	pane := fs.String("irc-pane", os.Getenv("AMYTHEST_MESSAGES_IRC_PANE"), "herdr pane containing the IRC client")
-	ownPane := fs.Bool("pane", false, "close this Herdr App pane when focus exits")
+	ownPane := fs.Bool("pane", false, "toggle Messages in this Herdr App tab; close its pane on exit")
 	if e := fs.Parse(args); e != nil {
 		return e
+	}
+	owned := ""
+	if *ownPane && op == "focus" {
+		var closed bool
+		var e error
+		owned, closed, e = wall.ToggleAppPane(os.Getenv("HC_TERMINAL_ID"), "messages", nil)
+		if closed || e != nil {
+			return e
+		}
 	}
 	cfg, e := messageconfig.Load(*configFile)
 	if e != nil {
@@ -208,10 +217,6 @@ func messageCommand(args []string) error {
 		if *pane != "" {
 			target := *pane
 			opts.FocusPane = func() error { return find.Focus(target, nil) }
-		}
-		owned := ""
-		if *ownPane {
-			owned, _ = wall.AppPane(os.Getenv("HC_TERMINAL_ID"), nil)
 		}
 		return showMessages(client, opts, owned)
 	case "list":

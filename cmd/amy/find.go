@@ -30,11 +30,24 @@ import (
 //	                         closes when the search ends
 func runFind(args []string) {
 	fs := flag.NewFlagSet("find", flag.ExitOnError)
-	ownPane := fs.Bool("pane", false, "the search owns its Herdr App pane and closes it when done")
+	ownPane := fs.Bool("pane", false, "toggle Find in this Herdr App tab; close its pane on exit")
 	noScreens := fs.Bool("no-screens", false, "do not search the text of open terminals")
 	endpoint := fs.String("endpoint", "", "amythest server base URL")
 	config := fs.String("config", "", "path to cli.yaml")
 	fs.Parse(args)
+	pane := ""
+	if *ownPane {
+		var closed bool
+		var err error
+		pane, closed, err = wall.ToggleAppPane(os.Getenv("HC_TERMINAL_ID"), "find", nil)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "find:", err)
+			os.Exit(1)
+		}
+		if closed {
+			return
+		}
+	}
 
 	var pass []string
 	if *endpoint != "" {
@@ -84,10 +97,6 @@ func runFind(args []string) {
 			}
 			return out
 		}
-	}
-	pane := ""
-	if *ownPane {
-		pane, _ = wall.AppPane(os.Getenv("HC_TERMINAL_ID"), nil)
 	}
 	final, err := tea.NewProgram(find.New(client, opts), tea.WithAltScreen()).Run()
 	if err != nil {

@@ -39,6 +39,19 @@ func runWall(args []string) {
 	endpoint := fs.String("endpoint", "", "amythest server base URL")
 	config := fs.String("config", "", "path to cli.yaml")
 	fs.Parse(args)
+	pane := ""
+	if *ownPane && !*list {
+		var closed bool
+		var err error
+		pane, closed, err = wall.ToggleAppPane(os.Getenv("HC_TERMINAL_ID"), "wall", nil)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "wall:", err)
+			os.Exit(1)
+		}
+		if closed {
+			return
+		}
+	}
 
 	var pass []string
 	if *endpoint != "" {
@@ -61,21 +74,6 @@ func runWall(args []string) {
 			os.Exit(1)
 		}
 		return
-	}
-
-	// Opened by a key: if this tab already shows a wall, the key means "close
-	// it", so close that one and this new pane.
-	pane := ""
-	if *ownPane {
-		var others []string
-		pane, others = wall.AppPane(os.Getenv("HC_TERMINAL_ID"), nil)
-		if len(others) > 0 && pane != "" {
-			for _, o := range others {
-				wall.ClosePane(o, nil)
-			}
-			wall.ClosePane(pane, nil)
-			return
-		}
 	}
 
 	if err := showWall(client, *images, wall.Options{Project: *project, Refresh: *refresh, Locate: locate}, pane); err != nil {

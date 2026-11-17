@@ -107,7 +107,9 @@ The herdr plugin provides a **Message focus** action and popup. Install the upda
 binary with `make install-amy`, then bind your preferred terminal herdr key with
 `type = "plugin_action"`, `command = "amythest.messages"`. For Herdr App, use a
 `terminal.open` binding with `argv: ["/absolute/path/to/amy", "messages", "-pane"]`;
-`-pane` closes that pane on exit. Existing key bindings are not modified.
+Press the same key again to close Messages in the current tab. `-pane` also
+closes its pane on exit. Find and Wall toggle independently. Existing key
+bindings are not modified.
 
 ## Contacts, service filtering and trash
 

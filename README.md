@@ -202,7 +202,8 @@ Going to a pane needs the collector registered on this machine, which is how
 same `sources:` config as the main screen; any source that can list its items
 is searched. In terminal herdr the plugin's `find` action opens the search as
 a popup; in the Herdr App bind a key to `terminal.open` with `argv`
-`["/path/to/amy", "find", "-pane"]`.
+`["/path/to/amy", "find", "-pane"]`. Pressing that key again closes Find
+in the current tab; quitting the search also closes its pane.
 
 - **Terminal herdr:** the plugin in `herdr/` has a `toggle-wall` action that
   opens the wall in a split on the right and closes it again. Bind it with

@@ -334,8 +334,8 @@ func TestAppPaneFindsOtherWallsInTheSameTab(t *testing.T) {
 	if own, others := AppPane("t404", run); own != "" || others != nil {
 		t.Fatalf("unknown terminal: %q %v", own, others)
 	}
-	if isWall([]string{"amy"}) || isWall([]string{"vim", "wall"}) || !isWall([]string{"zsh", "-c", "amy", "wall"}) {
-		t.Error("isWall")
+	if isPaneCommand([]string{"amy"}, "wall") || isPaneCommand([]string{"vim", "wall"}, "wall") || !isPaneCommand([]string{"/opt/bin/amy", "wall", "-pane"}, "wall") {
+		t.Error("isPaneCommand")
 	}
 }
 
