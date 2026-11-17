@@ -10,16 +10,28 @@ import (
 // Snapshot is bounded and uses one read transaction so review watermarks describe
 // precisely the output displayed, even while a collector is delivering a batch.
 func (s *Store) Snapshot(card, project string) (CardData, error) {
-	return s.snapshot(card, project, "", true)
+	return s.snapshot(card, project, "", true, "", "")
 }
-func (s *Store) Overview() (CardData, error) { return s.snapshot("", "", "", false) }
+
+// SnapshotRange keeps live agent state while selecting output by its creation
+// time. Boundaries are inclusive/exclusive UTC instants, supplied by the
+// browser from its local calendar so daylight-saving days remain intact.
+func (s *Store) SnapshotRange(card, project, after, before string) (CardData, error) {
+	start, startErr := time.Parse(time.RFC3339Nano, after)
+	end, endErr := time.Parse(time.RFC3339Nano, before)
+	if startErr != nil || endErr != nil || !start.Before(end) {
+		return CardData{}, invalid("after and before must be RFC3339 timestamps in increasing order")
+	}
+	return s.snapshot(card, project, "", true, nowText(start), nowText(end))
+}
+func (s *Store) Overview() (CardData, error) { return s.snapshot("", "", "", false, "", "") }
 func (s *Store) RunSnapshot(run string) (CardData, error) {
 	if !validID(run) {
 		return CardData{}, invalid("run_id required")
 	}
-	return s.snapshot("", "", run, true)
+	return s.snapshot("", "", run, true, "", "")
 }
-func (s *Store) snapshot(card, project, run string, details bool) (CardData, error) {
+func (s *Store) snapshot(card, project, run string, details bool, after, before string) (CardData, error) {
 	out := CardData{Runs: []Run{}, Artifacts: []Artifact{}, Documents: []Document{}, Slots: []Slot{}, Machines: []Machine{}, Projects: []string{}, Sessions: []SessionProject{}}
 	tx, e := s.db.Begin()
 	if e != nil {
@@ -44,7 +56,7 @@ func (s *Store) snapshot(card, project, run string, details bool) (CardData, err
 		return out, e
 	}
 	if details {
-		rows, e = tx.Query(`SELECT a.id,a.identity_key,a.kind,a.ref,a.title,a.repo,a.media_hash,a.remote_path,l.id,l.run_id,l.card_id,l.attribution,l.featured,COALESCE(m.available,0),a.created FROM links l JOIN artifacts a ON a.id=l.artifact_id JOIN effective_runs r ON r.id=l.run_id LEFT JOIN media_owners mo ON mo.hash=a.media_hash AND mo.collector=r.collector LEFT JOIN media m ON m.hash=a.media_hash AND (mo.hash IS NOT NULL OR (a.kind='commit' AND EXISTS(SELECT 1 FROM links owner_link JOIN runs owner_run ON owner_run.id=owner_link.run_id JOIN media_owners owner_media ON owner_media.collector=owner_run.collector AND owner_media.hash=a.media_hash WHERE owner_link.artifact_id=a.id))) WHERE (?='' OR l.card_id=? OR r.card_id=?) AND (?='' OR r.project=?) AND (?='' OR r.id=?) ORDER BY a.created DESC,a.id,l.id LIMIT 500`, card, card, card, project, project, run, run)
+		rows, e = tx.Query(`SELECT a.id,a.identity_key,a.kind,a.ref,a.title,a.repo,a.media_hash,a.remote_path,l.id,l.run_id,l.card_id,l.attribution,l.featured,COALESCE(m.available,0),a.created FROM links l JOIN artifacts a ON a.id=l.artifact_id JOIN effective_runs r ON r.id=l.run_id LEFT JOIN media_owners mo ON mo.hash=a.media_hash AND mo.collector=r.collector LEFT JOIN media m ON m.hash=a.media_hash AND (mo.hash IS NOT NULL OR (a.kind='commit' AND EXISTS(SELECT 1 FROM links owner_link JOIN runs owner_run ON owner_run.id=owner_link.run_id JOIN media_owners owner_media ON owner_media.collector=owner_run.collector AND owner_media.hash=a.media_hash WHERE owner_link.artifact_id=a.id))) WHERE (?='' OR l.card_id=? OR r.card_id=?) AND (?='' OR r.project=?) AND (?='' OR r.id=?) AND (?='' OR a.created>=?) AND (?='' OR a.created<?) ORDER BY a.created DESC,a.id,l.id LIMIT 500`, card, card, card, project, project, run, run, after, after, before, before)
 		if e != nil {
 			return out, e
 		}
@@ -54,6 +66,7 @@ func (s *Store) snapshot(card, project, run string, details bool) (CardData, err
 				rows.Close()
 				return out, e
 			}
+			a.Input = strings.HasPrefix(a.Key, "input:")
 			out.Artifacts = append(out.Artifacts, a)
 		}
 		e = rows.Err()
@@ -61,7 +74,7 @@ func (s *Store) snapshot(card, project, run string, details bool) (CardData, err
 		if e != nil {
 			return out, e
 		}
-		rows, e = tx.Query(`SELECT d.key,d.kind,d.title,d.body,d.run_id,d.created,d.version FROM documents d JOIN effective_runs r ON r.id=d.run_id WHERE (?='' OR r.card_id=?) AND (?='' OR r.project=?) AND d.kind IN('chat','observation') AND (?='' OR r.id=?) ORDER BY d.created DESC,d.key LIMIT 200`, card, card, project, project, run, run)
+		rows, e = tx.Query(`SELECT d.key,d.kind,d.title,d.body,d.run_id,d.created,d.version FROM documents d JOIN effective_runs r ON r.id=d.run_id WHERE (?='' OR r.card_id=?) AND (?='' OR r.project=?) AND d.kind IN('chat','observation') AND (?='' OR r.id=?) AND (?='' OR d.created>=?) AND (?='' OR d.created<?) ORDER BY d.created DESC,d.key LIMIT 200`, card, card, project, project, run, run, after, after, before, before)
 		if e != nil {
 			return out, e
 		}

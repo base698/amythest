@@ -1,17 +1,18 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { NOTES_BASE } from './mount'
 import type { Card } from './BoardView'
 import './work.css'
 import { githubCommitURL, diffLineClass } from './work-artifacts'
 import { groupAttention, attentionStatus, type Attention, type AttentionGroup } from './work-inbox'
+import { AgentPicker } from './AgentPicker'
 const API = `${NOTES_BASE}api/work`
 export function mediaURL(hash: string): string { return `${API}/media/${hash}` }
 export type Run = { id: string; collector: string; session_id: string; card_id: string; project: string; started_at: string; finished_at: string; outcome: string; output_version: number; reviewed_through_version: number; historical: boolean; reviewable: boolean }
 type Binding = { id: string; version: number; card_id: string; acknowledged: boolean }
 export type Slot = { collector: string; pane: string; session_id: string; status: string; project: string; tab: string; binding?: Binding; binding_version: number }
 export type Machine = { collector: string; name: string; online: boolean; syncing: boolean }
-export type Artifact = { identity_key: string; id: string; link_id: string; run_id: string; card_id: string; kind: string; ref: string; title: string; media_hash: string; available: boolean; remote_path: string; attribution: string; featured: boolean; created_at?: string }
-type Document = { key: string; run_id: string; title: string; body: string }
+export type Artifact = { identity_key: string; id: string; link_id: string; run_id: string; card_id: string; kind: string; ref: string; title: string; media_hash: string; available: boolean; remote_path: string; attribution: string; featured: boolean; created_at?: string; input?: boolean }
+export type Document = { key: string; run_id: string; kind: string; title: string; body: string; created_at: string }
 export type SessionProject = { session_id: string; collector: string; agent: string; provider_ref: string; title: string; status: string; project: string; source_project: string; assigned: boolean; project_version: number }
 export type Snapshot = { projects: string[]; sessions: SessionProject[]; runs: Run[]; slots: Slot[]; machines: Machine[]; artifacts: Artifact[]; documents: Document[] }
 export async function read<T>(path: string): Promise<T | null> {
@@ -19,6 +20,33 @@ export async function read<T>(path: string): Promise<T | null> {
  if (response.status === 404) return null
  if (!response.ok) throw new Error('Work is temporarily unavailable.')
  return response.json()
+}
+
+export type WorkspaceSnapshot = { project: string; data: Snapshot | null; error: string; refresh: () => Promise<void> }
+export function useProjectSnapshot(project = '', after = '', before = ''): WorkspaceSnapshot {
+ const key = JSON.stringify([project, after, before])
+ const [loaded, setLoaded] = useState<{ key: string; data: Snapshot | null; error: string } | null>(null)
+ const current = useRef(key), sequence = useRef(0), mounted = useRef(false)
+ current.current = key
+ const refresh = useCallback(async () => {
+  if (!project) return
+  const request = ++sequence.current
+  try {
+   const range = after && before ? `&after=${encodeURIComponent(after)}&before=${encodeURIComponent(before)}` : ''
+   const data = await read<Snapshot>(`/snapshot?project=${encodeURIComponent(project)}${range}`)
+   if (mounted.current && current.current === key && request === sequence.current) setLoaded({ key, data, error: data ? '' : 'Workspace data is unavailable.' })
+  } catch (e) {
+   if (mounted.current && current.current === key && request === sequence.current) setLoaded(previous => ({ key, data: previous?.key === key ? previous.data : null, error: String(e) }))
+   throw e
+  }
+ }, [project, after, before, key])
+ useEffect(() => {
+  mounted.current = true
+  void refresh().catch(() => {})
+  const timer = project ? setInterval(() => { void refresh().catch(() => {}) }, 15000) : undefined
+  return () => { mounted.current = false; ++sequence.current; clearInterval(timer) }
+ }, [refresh, project])
+ return { project, data: loaded?.key === key ? loaded.data : null, error: loaded?.key === key ? loaded.error : '', refresh }
 }
 async function change(path: string, body: unknown) {
  const session = await fetch(`${NOTES_BASE}api/auth/session`).then(r => { if (!r.ok) throw new Error('Sign in again to continue.'); return r.json() })
@@ -41,18 +69,17 @@ export function WorkPill({ card }: { card: string }) {
  const reason = ['blocked', 'stalled', 'needs-review'].find(v => pending.some(i => i.reason === v))
  return <span className="work-pill">{reason === 'needs-review' ? `${pending.length} to review` : reason || 'Working'}</span>
 }
-export function WorkPanel({ card, readOnly = false }: { card: string; readOnly?: boolean }) {
+export function WorkPanel({ card, workspace = '', readOnly = false }: { card: string; workspace?: string; readOnly?: boolean }) {
  const { data: overview, refresh } = useContext(WorkContext)
- const [data, setData] = useState<Snapshot | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false), [slot, setSlot] = useState('')
+ const [data, setData] = useState<Snapshot | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false)
  async function reload() { setData(await read<Snapshot>(`/snapshot?card_id=${encodeURIComponent(card)}`)) }
  useEffect(() => { let active = true; async function poll() { try { const d = await read<Snapshot>(`/snapshot?card_id=${encodeURIComponent(card)}`); if (active) { setData(d); setError('') } } catch (e) { if (active) setError(String(e)) } }; void poll(); const t = setInterval(poll, 10000); return () => { active = false; clearInterval(t) } }, [card])
  async function act(path: string, value: unknown) { setBusy(true); setError(''); try { await change(path, value); await reload(); await refresh() } catch (e) { setError(String(e)) } finally { setBusy(false) } }
  if (!overview) return null
- const slots = overview.slots.filter(s => s.status !== 'gone')
  return <section className="work-panel" aria-label="Card Work">
   <header><div><h3>Work</h3><p>Activity stays with the card where its run began.</p></div></header>
   {error && <p role="alert" className="form-error">{error}</p>}
-  {!readOnly && <div className="work-binding"><label>Assign an agent to future runs<select value={slot} onChange={e => setSlot(e.target.value)}><option value="">Choose an agent…</option>{slots.map(s => <option key={s.session_id} value={s.session_id}>{overview.machines.find(m => m.collector === s.collector)?.name || 'Collector'} · {s.tab || s.pane} · {s.status}</option>)}</select></label><button className="quiet" type="button" disabled={busy || !slot} onClick={() => { const s = slots.find(s => s.session_id === slot)!; void act('/bindings', { request_id: crypto.randomUUID(), collector: s.collector, session_id: s.session_id, card_id: card, expected_version: s.binding_version }) }}>Assign</button></div>}
+  {!readOnly && <AgentPicker key={`${card}:${workspace}`} workspace={workspace} card={card} slots={overview.slots} sessions={overview.sessions || []} machines={overview.machines} busy={busy} onAssign={s => act('/bindings', { request_id: crypto.randomUUID(), collector: s.collector, session_id: s.session_id, card_id: card, expected_version: s.binding_version })} />}
   {data?.slots.map(s => <p className="work-slot" key={s.session_id}>{s.tab || s.pane} · {s.status} · {s.binding?.acknowledged ? 'Assignment received' : 'Assignment pending'} <span>{data.machines.find(m => m.collector === s.collector)?.online ? (data.machines.find(m => m.collector === s.collector)?.syncing ? 'Syncing' : 'Online') : 'Asleep / unreachable'}</span></p>)}
   {data && !data.runs.length && <p className="muted">No runs on this card yet. Assign an agent before its next run.</p>}
   <ul className="work-artifacts">{data?.artifacts.filter(a => !data.runs.some(r => r.id === a.run_id)).map(a => <ArtifactView key={a.link_id} artifact={a} />)}</ul>
@@ -132,8 +159,9 @@ function CommitArtifact({ artifact: a, file }: { artifact: Artifact; file?: () =
  </li>
 }
 
-export function WorkInbox({ boards, onOpen }: { boards: { name: string; cards: Card[] }[]; onOpen: (board: string, card: Card) => void }) {
- const { data, inbox, refresh } = useContext(WorkContext)
+export function WorkInbox({ boards, onOpen, items, showGallery = true }: { boards: { name: string; cards: Card[] }[]; onOpen: (board: string, card: Card) => void; items?: Attention[]; showGallery?: boolean }) {
+ const { data, inbox: allItems, refresh } = useContext(WorkContext)
+ const inbox = items ?? allItems
  const [error, setError] = useState(''), [busy, setBusy] = useState(false), [notice, setNotice] = useState(''), [limit, setLimit] = useState(8)
  if (!data) return null
  const groups = groupAttention(inbox), finished = inbox.filter(i => i.reason === 'needs-review')
@@ -169,7 +197,29 @@ export function WorkInbox({ boards, onOpen }: { boards: { name: string; cards: C
    </li>
   })}</ul>
   {groups.length > limit && <button type="button" className="quiet" onClick={() => setLimit(limit + 8)}>Show more ({groups.length - limit} remaining)</button>}
-  <WorkGallery boards={boards} />
+  {showGallery && <WorkGallery boards={boards} />}
+ </section>
+}
+
+export function WorkUnfiled({ boards, artifacts, loading, loadError, readOnly = false, onRefresh }: {
+ boards: { name: string; cards: Card[] }[]; artifacts: Artifact[]; loading: boolean; loadError: string; readOnly?: boolean; onRefresh: () => Promise<void>
+}) {
+ const [card, setCard] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('')
+ const filing = useRef(false)
+ const selected = boards.some(b => b.cards.some(c => c.id === card))
+ async function file(a: Artifact) {
+  if (!selected || readOnly || filing.current) return
+  filing.current = true; setBusy(true); setError('')
+  try { await change('/file', { request_id: crypto.randomUUID(), link_id: a.link_id, card_id: card, featured: a.featured }); await onRefresh() }
+  catch (e) { setError(String(e)) } finally { filing.current = false; setBusy(false) }
+ }
+ return <section className="work-panel work-unfiled" aria-label="Unassigned output">
+  <header><h2>Unassigned output</h2><p>This output belongs to the board’s workspace, but isn’t attached to a card yet.</p></header>
+  {(loadError || error) && <p role="alert" className="form-error">{loadError || error}</p>}
+  {!readOnly && <label>File under<select value={selected ? card : ''} disabled={busy} onChange={e => setCard(e.target.value)}><option value="">Choose a card…</option>{boards.flatMap(b => b.cards.map(c => <option key={c.id} value={c.id}>{c.title}</option>))}</select></label>}
+  {readOnly && <p className="muted">Restore this board before filing output.</p>}
+  {loading && !loadError ? <p className="muted">Loading output…</p> : !loading && !artifacts.length && <p className="muted">No unassigned output in this view.</p>}
+  <ul className="work-artifacts">{artifacts.map(a => <ArtifactView key={a.link_id} artifact={a} file={selected && !readOnly && !busy ? () => void file(a) : undefined} />)}</ul>
  </section>
 }
 

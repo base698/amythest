@@ -2,6 +2,7 @@ export interface BoardSummaryShape {
   name: string
   displayName: string
   description?: string
+  workspace?: string
   icon?: string
   color?: string
   sortOrder: number
@@ -22,6 +23,7 @@ export function boardSummaryFromData<T extends BoardSummaryShape>(updated: Board
     name: updated.name,
     displayName: updated.displayName,
     description: updated.description,
+    workspace: updated.workspace,
     icon: updated.icon,
     color: updated.color,
     sortOrder: updated.sortOrder,

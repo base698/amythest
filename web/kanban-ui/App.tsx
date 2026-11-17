@@ -1,6 +1,7 @@
-import { WorkPanel, WorkInbox, useWorkEnabled } from './Work'
+import { WorkPanel, WorkInbox, WorkContext, useWorkEnabled } from './Work'
 import { WorkProjects } from './WorkProject'
-import { FormEvent, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { BoardWorkspace } from './BoardWorkspace'
+import { FormEvent, useContext, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { BoardView, type Attachment, type Card, type Priority, type Status } from './BoardView'
 import { BoardSelector, MAX_FAVORITE_BOARDS } from './BoardSelector.ts'
 import {
@@ -41,6 +42,7 @@ export interface BoardSummary {
   name: string
   displayName: string
   description?: string
+  workspace?: string
   icon?: string
   color?: string
   sortOrder: number
@@ -502,6 +504,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
             {!board?.archived && <button className="primary new-card-button" onClick={() => setEditor('new')} type="button"><span aria-hidden="true">＋</span> New card</button>}
           </div>
         </div>
+        {board ? <BoardWorkspace key={board.name} board={board} onSettings={() => setBoardSettingsOpen(true)} onOpen={(_name, card) => setEditor(card)}>
         {focusCard && <section className="focus-card" aria-labelledby="focus-card-title">
           <div className="focus-card-kicker"><span aria-hidden="true">◎</span> Current focus</div>
           <div className="focus-card-content">
@@ -530,11 +533,12 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
           onModeChange={(next) => applyLabelFilter(activeLabels, next, excludedLabels)}
           onClear={() => applyLabelFilter([], 'or', [])}
         />}
-        {board ? <BoardView cards={visibleCards} focusCardId={board.focusCardId} readOnly={board.archived} onFocus={(card) => void setFocusCard(board.focusCardId === card.id ? '' : card.id)} onMove={moveCard} onOpen={setEditor} onBlockedChange={setCardBlocked} /> : <div className="center-screen"><div className="spinner" /></div>}
+        <BoardView cards={visibleCards} focusCardId={board.focusCardId} readOnly={board.archived} onFocus={(card) => void setFocusCard(board.focusCardId === card.id ? '' : card.id)} onMove={moveCard} onOpen={setEditor} onBlockedChange={setCardBlocked} />
+        {!board.archived && <button aria-label="New card" className="fab-new-card" onClick={() => setEditor('new')} type="button">＋</button>}
+        </BoardWorkspace> : <div className="center-screen"><div className="spinner" /></div>}
         </>}
         {error && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} type="button">Dismiss</button></div>}
       </main>
-      {!focusMode && !board?.archived && <button aria-label="New card" className="fab-new-card" onClick={() => setEditor('new')} type="button">＋</button>}
       {boardDirectoryOpen && <BoardDirectory
         boards={boards}
         activeBoard={focusMode ? '' : activeBoard}
@@ -597,6 +601,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
         <CardEditor
           key={`${focusEditor.board}:${focusEditor.card.id}`}
           board={focusEditor.board}
+          workspace={focusBoards.find(b => b.name === focusEditor.board)?.workspace}
           card={focusEditor.card}
           busy={busy || focusBusy}
           agents={agents}
@@ -694,6 +699,7 @@ export function App({ navigate = (path) => window.location.assign(path) }: { nav
       {editor && (
         <CardEditor
           board={activeBoard}
+          workspace={board?.workspace}
           card={editor === 'new' ? undefined : editor}
           busy={busy}
           agents={agents}
@@ -910,6 +916,7 @@ interface BoardFormInput {
   name: string
   displayName: string
   description: string
+  workspace: string
   icon: string
   color: string
   sortOrder: number
@@ -922,6 +929,7 @@ function NewBoardDialog({ canPin, onClose, onCreate }: { canPin: boolean; onClos
   const [name, setName] = useState('')
   const [displayNameValue, setDisplayNameValue] = useState('')
   const [description, setDescription] = useState('')
+  const [workspace, setWorkspace] = useState('')
   const [icon, setIcon] = useState('')
   const [color, setColor] = useState('')
   const [pinned, setPinned] = useState(canPin)
@@ -934,7 +942,7 @@ function NewBoardDialog({ canPin, onClose, onCreate }: { canPin: boolean; onClos
         event.preventDefault()
         if (name.trim() === 'focus') { setError('“focus” is reserved for the global Focus view.'); return }
         setBusy(true); setError('')
-        try { await onCreate({ name, displayName: displayNameValue, description, icon, color, sortOrder: 0, pinned }) } catch (caught) { setError(message(caught)) } finally { setBusy(false) }
+        try { await onCreate({ name, displayName: displayNameValue, description, workspace, icon, color, sortOrder: 0, pinned }) } catch (caught) { setError(message(caught)) } finally { setBusy(false) }
       }}>
         {error && <div className="form-error" role="alert">{error}</div>}
         <div className="form-grid board-identity-grid">
@@ -942,6 +950,7 @@ function NewBoardDialog({ canPin, onClose, onCreate }: { canPin: boolean; onClos
           <label>Display name<input maxLength={80} placeholder="New project" value={displayNameValue} onChange={(event) => setDisplayNameValue(event.target.value)} /></label>
         </div>
         <p className="hint">The slug is permanent. The display name can change later.</p>
+        <WorkspaceSetting value={workspace} onChange={setWorkspace} />
         <label>Description<textarea maxLength={500} placeholder="What belongs on this board?" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
         <div className="form-grid board-appearance-grid">
           <label>Icon<input maxLength={32} placeholder="🚀 or short text" value={icon} onChange={(event) => setIcon(event.target.value)} /></label>
@@ -958,6 +967,7 @@ function NewBoardDialog({ canPin, onClose, onCreate }: { canPin: boolean; onClos
 function BoardSettingsDialog({ board, canPin, onClose, onSave, onDelete }: { board: BoardData; canPin: boolean; onClose: () => void; onSave: (input: BoardSettingsInput) => Promise<void>; onDelete: () => Promise<boolean> }) {
   const [displayNameValue, setDisplayNameValue] = useState(board.displayName)
   const [description, setDescription] = useState(board.description || '')
+  const [workspace, setWorkspace] = useState(board.workspace || '')
   const [icon, setIcon] = useState(board.icon || '')
   const [color, setColor] = useState(board.color || '')
   const [sortOrder, setSortOrder] = useState(board.sortOrder)
@@ -972,10 +982,11 @@ function BoardSettingsDialog({ board, canPin, onClose, onSave, onDelete }: { boa
         event.preventDefault()
         if (!board.archived && archived && !window.confirm(`Archive the “${boardLabel(board)}” board? Its cards remain intact and the board can be restored later.`)) return
         setBusy(true); setError('')
-        try { await onSave({ displayName: displayNameValue, description, icon, color, sortOrder, pinned, archived }) } catch (caught) { setError(message(caught)); setBusy(false) }
+        try { await onSave({ displayName: displayNameValue, description, workspace, icon, color, sortOrder, pinned, archived }) } catch (caught) { setError(message(caught)); setBusy(false) }
       }}>
         {error && <div className="form-error" role="alert">{error}</div>}
         <label>Display name<input autoFocus maxLength={80} required value={displayNameValue} onChange={(event) => setDisplayNameValue(event.target.value)} /></label>
+        <WorkspaceSetting value={workspace} onChange={setWorkspace} />
         <label>Description<textarea maxLength={500} rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
         <div className="form-grid board-appearance-grid">
           <label>Icon<input maxLength={32} placeholder="🚀 or short text" value={icon} onChange={(event) => setIcon(event.target.value)} /></label>
@@ -990,6 +1001,13 @@ function BoardSettingsDialog({ board, canPin, onClose, onSave, onDelete }: { boa
       </form>
     </section>
   </div>
+}
+
+function WorkspaceSetting({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const { data } = useContext(WorkContext)
+  const projects = [...new Set([...(data?.projects || []), ...(value ? [value] : [])])]
+  return <><label>Herdr workspace<select value={value} onChange={e => onChange(e.target.value)}><option value="">No linked workspace</option>{projects.map(p => <option key={p} value={p}>{p}</option>)}</select></label>
+    <p className="hint">Selecting this board also selects this workspace for Project and Unassigned output. This link is shared across browsers.</p></>
 }
 
 function BoardDirectory({ boards, activeBoard, onClose, onCreate, onSelect }: { boards: BoardSummary[]; activeBoard: string; onClose: () => void; onCreate: () => void; onSelect: (name: string) => Promise<void> }) {
@@ -1105,8 +1123,8 @@ function Login({ onLogin }: { onLogin: (session: Session) => Promise<void> }) {
 }
 
 interface EditorInput { title: string; description: string; dueDate: string; milestone: string; priority: Priority; status: Status; assignee: string; agent: string; blocked: boolean; labels: string[] }
-function CardEditor({ card, board, busy, agents, readOnly = false, openOnBoardHref, onClose, onSave, onDelete, onComment, onUpload, onDeleteAttachment, onSaveDescription, moveBoards, onMoveBoard }: {
-  card?: Card; board: string; busy: boolean; agents: AgentCatalog; readOnly?: boolean; openOnBoardHref?: string; onClose: () => void; onSave: (input: EditorInput) => Promise<void>; onDelete?: () => Promise<void>; onComment?: (body: string) => Promise<void>; onUpload?: (file: File) => Promise<Attachment>; onDeleteAttachment?: (attachment: Attachment) => Promise<void>; onSaveDescription?: (description: string) => Promise<void>; moveBoards: BoardSummary[]; onMoveBoard?: (destinationBoard: string) => Promise<void>
+function CardEditor({ card, board, workspace, busy, agents, readOnly = false, openOnBoardHref, onClose, onSave, onDelete, onComment, onUpload, onDeleteAttachment, onSaveDescription, moveBoards, onMoveBoard }: {
+  card?: Card; board: string; workspace?: string; busy: boolean; agents: AgentCatalog; readOnly?: boolean; openOnBoardHref?: string; onClose: () => void; onSave: (input: EditorInput) => Promise<void>; onDelete?: () => Promise<void>; onComment?: (body: string) => Promise<void>; onUpload?: (file: File) => Promise<Attachment>; onDeleteAttachment?: (attachment: Attachment) => Promise<void>; onSaveDescription?: (description: string) => Promise<void>; moveBoards: BoardSummary[]; onMoveBoard?: (destinationBoard: string) => Promise<void>
 }) {
   const workEnabled = useWorkEnabled()
   const [editorTab, setEditorTab] = useState<'details' | 'work'>('details')
@@ -1157,7 +1175,7 @@ function CardEditor({ card, board, busy, agents, readOnly = false, openOnBoardHr
           </div>
         </header>
         {card && workEnabled && <nav className="work-tabs" aria-label="Card sections"><button type="button" className="quiet" aria-pressed={editorTab === 'details'} onClick={() => setEditorTab('details')}>Details</button><button type="button" className="quiet" aria-pressed={editorTab === 'work'} onClick={() => setEditorTab('work')}>Work</button></nav>}
-        {card && editorTab === 'work' && <WorkPanel card={card.id} readOnly={readOnly} />}
+        {card && editorTab === 'work' && <WorkPanel card={card.id} workspace={workspace} readOnly={readOnly} />}
         <div hidden={editorTab !== 'details'}>
         <form onSubmit={(event) => { event.preventDefault(); if (!readOnly && !operationBusy) void onSave({ title, description, dueDate, milestone, priority, status, assignee, agent, blocked, labels: labels.split(',').map((value) => value.trim()).filter(Boolean) }) }}>
           <fieldset className="editor-fields" disabled={readOnly || operationBusy}>

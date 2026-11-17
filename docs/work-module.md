@@ -625,5 +625,19 @@ pre-upgrade Work database backup as well.
 
 Amythest Collector can now opt individual Codex desktop chats into metadata-only lifecycle
 reporting from their local saved lifecycle records. This also covers an already
-running chat. See Amythest Collector's `deploy/watch-codex.py`; no conversation or tool content
-is forwarded by that adapter. Herdr and Hermes collection remain enabled.
+running chat. See Amythest Collector's `deploy/watch-codex.py`. Adding `--capture-inputs`
+opts that chat into user messages and embedded image attachments; assistant and tool
+bodies remain excluded. Herdr and Hermes collection remain enabled.
+
+Boards persist an optional `workspace` link in their Markdown frontmatter. The existing
+board picker selects that workspace for Project, Unassigned output, and the default
+scope of the card's searchable tab assignment list. Board settings edits the link
+for all browsers. Project shows live tab state; herdr handles agent notifications.
+Unassigned output is workspace output with neither a link nor a run assigned to a card.
+
+Project's four-day date selector sends inclusive `after` and exclusive `before` RFC3339
+boundaries derived from the browser's local calendar. Snapshot queries filter artifacts
+and chat documents before applying the existing limits (500 links and 200 documents).
+Live tabs remain current. User chat documents and artifacts in the reserved `input:`
+identity namespace appear as Inputs, including daily counts and enlargeable screenshots.
+The namespace is exposed as `input: true` in snapshots and requires no schema migration.

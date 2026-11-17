@@ -145,6 +145,8 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 			result, e = s.work.RunSnapshot(run)
 		} else if r.URL.Query().Get("summary") == "1" {
 			result, e = s.work.Overview()
+		} else if q := r.URL.Query(); q.Has("after") || q.Has("before") {
+			result, e = s.work.SnapshotRange(q.Get("card_id"), q.Get("project"), q.Get("after"), q.Get("before"))
 		} else {
 			result, e = s.work.Snapshot(r.URL.Query().Get("card_id"), r.URL.Query().Get("project"))
 		}

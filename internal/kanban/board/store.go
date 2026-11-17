@@ -229,7 +229,7 @@ func (s *Store) ListBoards() ([]BoardSummary, error) {
 			counts[card.Status]++
 		}
 		out = append(out, BoardSummary{
-			Name: board.Name, DisplayName: board.DisplayName, Description: board.Description,
+			Name: board.Name, DisplayName: board.DisplayName, Description: board.Description, Workspace: board.Workspace,
 			Icon: board.Icon, Color: board.Color, SortOrder: board.SortOrder, Pinned: board.Pinned,
 			Archived: board.Archived, FocusCardID: board.FocusCardID,
 			DispatchEnabled: board.DispatchEnabled, Counts: counts,
@@ -350,11 +350,16 @@ func (s *Store) PatchBoardSettings(name string, patch BoardSettingsPatch) (Board
 		if err != nil {
 			return err
 		}
+		wasActiveFavorite := updated.Pinned && !updated.Archived
 		if err := applyBoardSettingsPatch(&updated, patch); err != nil {
 			return err
 		}
-		if err := s.validateFavoriteLimit(updated, name); err != nil {
-			return err
+		// Legacy/imported boards may already exceed the favorite limit. Enforce
+		// it when adding a favorite, without blocking unrelated settings edits.
+		if !wasActiveFavorite {
+			if err := s.validateFavoriteLimit(updated, name); err != nil {
+				return err
+			}
 		}
 		if updated.FocusCardID != "" && cardIndex(updated.Cards, updated.FocusCardID) < 0 {
 			return errors.New("focus card must be active on this board")
@@ -2075,7 +2080,7 @@ func boardFromInput(input BoardInput) (Board, error) {
 	}
 	value := Board{
 		Version: 4, Name: name, DisplayName: strings.TrimSpace(input.DisplayName),
-		Description: strings.TrimSpace(input.Description), Icon: strings.TrimSpace(input.Icon),
+		Description: strings.TrimSpace(input.Description), Workspace: strings.TrimSpace(input.Workspace), Icon: strings.TrimSpace(input.Icon),
 		Color: strings.TrimSpace(input.Color), SortOrder: input.SortOrder, Pinned: pinned,
 		Cards: []Card{},
 	}
@@ -2094,6 +2099,9 @@ func applyBoardSettingsPatch(value *Board, patch BoardSettingsPatch) error {
 	}
 	if patch.Description != nil {
 		value.Description = strings.TrimSpace(*patch.Description)
+	}
+	if patch.Workspace != nil {
+		value.Workspace = strings.TrimSpace(*patch.Workspace)
 	}
 	if patch.Icon != nil {
 		value.Icon = strings.TrimSpace(*patch.Icon)
@@ -2134,6 +2142,9 @@ func validateBoardMetadata(value Board) error {
 	if len(value.Description) > 500 {
 		return errors.New("board description exceeds 500 characters")
 	}
+	if len(value.Workspace) > 200 || strings.ContainsFunc(value.Workspace, func(r rune) bool { return r < 32 || r == 127 }) {
+		return errors.New("workspace must be at most 200 characters without control characters")
+	}
 	if len(value.Icon) > 32 || strings.ContainsAny(value.Icon, "\r\n") {
 		return errors.New("board icon must be at most 32 characters on one line")
 	}
@@ -2154,6 +2165,7 @@ func copyBoardMetadata(destination *Board, source Board) {
 	destination.Name = source.Name
 	destination.DisplayName = source.DisplayName
 	destination.Description = source.Description
+	destination.Workspace = source.Workspace
 	destination.Icon = source.Icon
 	destination.Color = source.Color
 	destination.SortOrder = source.SortOrder

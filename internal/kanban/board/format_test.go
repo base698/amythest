@@ -20,8 +20,8 @@ func richBoard() Board {
 	done := at.Add(48 * time.Hour)
 	return Board{
 		Version: 4, Name: "rich", DisplayName: "Rich Board",
-		Description: "Line one.\nLine two.",
-		Icon:        "🚀", Color: "#8b5cf6", SortOrder: 4, Pinned: true,
+		Description: "Line one.\nLine two.", Workspace: "robot-workspace",
+		Icon: "🚀", Color: "#8b5cf6", SortOrder: 4, Pinned: true,
 		Archived: false, FocusCardID: "card0001", DispatchEnabled: true,
 		Cards: []Card{
 			{

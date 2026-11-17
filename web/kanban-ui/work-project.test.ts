@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { dayKey, galleryMedia, lastDays, pickProject, projectCounts, tabRows, uniqueArtifacts, type ProjectArtifact } from './work-project.ts'
+import { artifactsInRange, dayKey, fourDayRange, galleryMedia, inputsInRange, lastDays, localDay, pickProject, projectCounts, shiftDay, tabRows, uniqueArtifacts, type ProjectArtifact } from './work-project.ts'
 
 // Local times, so the tests hold in any time zone.
 const at = (day: number, hour: number) => new Date(2026, 10, day, hour, 0, 0).toISOString()
@@ -20,6 +20,32 @@ const artifacts: ProjectArtifact[] = [
  art('f1', 'file', 'notes.txt', at(16, 10)),
  art('x1', 'image', 'undated.png'),
 ]
+
+test('calendar selector spans four local days including month and daylight-saving boundaries', () => {
+ const range = fourDayRange('2026-11-16')
+ assert.deepEqual([range.start, range.ending], ['2026-11-13', '2026-11-16'])
+ assert.equal(range.after, at(13, 0))
+ assert.equal(range.before, at(17, 0))
+ assert.equal(shiftDay('2026-03-02', -4), '2026-02-26')
+ assert.equal(localDay('2026-02-30'), null)
+ assert.equal(localDay('invalid'), null)
+ const priorTZ = process.env.TZ
+ try {
+  process.env.TZ = 'America/New_York'
+  const spring = fourDayRange('2026-03-09'), autumn = fourDayRange('2026-11-02')
+  assert.equal((Date.parse(spring.before) - Date.parse(spring.after)) / 3600000, 95)
+  assert.equal((Date.parse(autumn.before) - Date.parse(autumn.after)) / 3600000, 97)
+ } finally { if (priorTZ === undefined) delete process.env.TZ; else process.env.TZ = priorTZ }
+})
+
+test('historical galleries include only the selected range, with an exclusive next-day boundary', () => {
+ const values = [...artifacts, art('start', 'image', 'first', at(13, 0)), art('end', 'image', 'next day', at(17, 0))]
+ const selected = artifactsInRange(values, fourDayRange('2026-11-16'))
+ assert.ok(selected.some(a => a.id === 'start'))
+ for (const id of ['end', 'c1', 'x1']) assert.ok(!selected.some(a => a.id === id))
+ assert.equal(selected.filter(a => a.id === 'v1').length, 1)
+ assert.deepEqual(artifactsInRange(values, fourDayRange('2020-01-01')), [])
+})
 
 test('lastDays counts commits and media per local day, oldest first', () => {
  const days = lastDays(artifacts, now)
@@ -72,9 +98,25 @@ test('projectCounts and pickProject', () => {
   { collector: 'm', pane: 'a', session_id: '1', status: 'working', project: 'robot', tab: '' },
   { collector: 'm', pane: 'b', session_id: '2', status: 'blocked', project: 'robot', tab: '' },
   { collector: 'm', pane: 'c', session_id: '3', status: 'gone', project: 'robot', tab: '' },
- ], runs), { working: 1, blocked: 1, unreviewed: 1 })
+  { collector: 'm', pane: 'd', session_id: '4', status: 'idle', project: 'robot', tab: '' },
+ ]), { working: 1, blocked: 1, idle: 1 })
  assert.equal(pickProject(['notes', 'robot'], runs, 'robot'), 'robot')
  assert.equal(pickProject(['notes', 'robot'], runs, 'deleted'), 'notes') // most recent run
  assert.equal(pickProject(['a', 'b'], [], ''), 'a')
  assert.equal(pickProject([], runs, 'robot'), '')
+})
+
+test('dated inputs count user messages and attachments without mixing them into output', () => {
+ const message = { key: 'prompt', kind: 'chat', title: 'user', created_at: at(16, 10) }
+ const documents = [message, message, { ...message, key: 'assistant', title: 'assistant' },
+  { ...message, key: 'tool', title: 'tool_call' }, { ...message, key: 'environment', kind: 'observation' },
+  { ...message, key: 'old', created_at: at(12, 10) }, { ...message, key: 'future', created_at: at(17, 0) }]
+ const inputs = inputsInRange(documents, fourDayRange('2026-11-16'))
+ assert.deepEqual(inputs.map(d => d.key), ['prompt'])
+ const attachment = { ...art('shared', 'image', 'screenshot.png', at(16, 10)), input: true }
+ const days = lastDays([...artifacts, attachment, attachment], now, 4, documents)
+ assert.equal(days[3].inputs, 2)
+ assert.equal(days[3].media, 2)
+ assert.equal(days[3].commits, 3)
+ assert.equal(days[3].share, 1)
 })

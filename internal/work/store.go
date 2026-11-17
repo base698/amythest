@@ -164,6 +164,9 @@ type Run struct {
 	Historical bool   `json:"historical"`
 }
 type Artifact struct {
+	// Input attachments use the reserved input: identity namespace. The flag is
+	// derived on read so existing stored artifacts and collectors stay compatible.
+	Input       bool   `json:"input,omitempty"`
 	ID          string `json:"id"`
 	Key         string `json:"identity_key"`
 	Kind        string `json:"kind"`

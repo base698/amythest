@@ -13,21 +13,25 @@ import (
 
 // CodexWatch is explicitly opted in per chat; it never scans other transcripts.
 // The rollout format is a local Codex implementation detail, tested with 0.166.
-// Only lifecycle records are projected; prompts, tools and response bodies are
-// discarded. Native hooks can feed the same Lifecycle contract in future.
+// Lifecycle-only capture remains the default. CaptureInputs additionally opts
+// this one chat into user messages and attached images; tools and assistant
+// bodies are never collected here.
 type CodexWatch struct {
-	Session string `json:"session_id"`
-	Path    string `json:"path"`
-	Project string `json:"project"`
-	Title   string `json:"title"`
+	Session       string `json:"session_id"`
+	Path          string `json:"path"`
+	Project       string `json:"project"`
+	Title         string `json:"title"`
+	CaptureInputs bool   `json:"capture_inputs,omitempty"`
 }
 type codexRecord struct {
 	Timestamp time.Time `json:"timestamp"`
 	Type      string    `json:"type"`
 	Payload   struct {
-		Type string `json:"type"`
-		ID   string `json:"id"`
-		Turn string `json:"turn_id"`
+		Type    string          `json:"type"`
+		ID      string          `json:"id"`
+		Turn    string          `json:"turn_id"`
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
 	} `json:"payload"`
 }
 
@@ -141,6 +145,11 @@ func (q *Queue) pollCodex(w CodexWatch) error {
 				if e = q.Lifecycle(h); e != nil {
 					return e
 				}
+			}
+		}
+		if w.CaptureInputs && record.Type == "response_item" && record.Payload.Role == "user" && !record.Timestamp.IsZero() {
+			if e = q.codexInput(w, record, line); e != nil {
+				return e
 			}
 		}
 		offset += int64(len(line))

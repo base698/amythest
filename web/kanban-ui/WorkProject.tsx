@@ -1,53 +1,53 @@
 import { useContext, useEffect, useRef, useState } from 'react'
 import type { Card } from './BoardView'
-import { ArtifactView, WorkContext, mediaURL, read, type Artifact, type Snapshot } from './Work'
-import { galleryMedia, lastDays, pickProject, projectCounts, tabRows, uniqueArtifacts } from './work-project'
+import { ArtifactView, WorkContext, mediaURL, useProjectSnapshot, type Artifact, type Document, type Snapshot, type WorkspaceSnapshot } from './Work'
+import { artifactsInRange, dayKey, fourDayRange, inputsInRange, isMedia, lastDays, localDay, pickProject, projectCounts, shiftDay, tabRows } from './work-project'
 
+type ProjectProps = { boards: { name: string; cards: Card[] }[]; workspace?: WorkspaceSnapshot; onOpen: (board: string, card: Card) => void }
 const SAVED = 'amythest.work.project'
 function saved(): string { try { return localStorage.getItem(SAVED) || '' } catch { return '' } }
+const ENDING = 'amythest.work.project.ending'
+function savedEnding(): string {
+ const today = dayKey(new Date())
+ try { const value = localStorage.getItem(ENDING) || ''; return localDay(value) && value <= today ? value : today } catch { return today }
+}
 
 // WorkProjects is the Project view: for one herdr workspace, its open agent
-// tabs and the cards they are assigned to, the last days' activity, and the
-// media made today. It reads; assigning and filing stay where they are.
-export function WorkProjects({ boards, onOpen }: { boards: { name: string; cards: Card[] }[]; onOpen: (board: string, card: Card) => void }) {
+// tabs and their cards, plus inputs and output in a selected date window.
+export function WorkProjects({ boards, workspace, onOpen }: ProjectProps) {
  const { data: overview } = useContext(WorkContext)
- const [choice, setChoice] = useState(saved), [data, setData] = useState<Snapshot | null>(null), [error, setError] = useState('')
+ const [choice, setChoice] = useState(saved)
+ const [ending, setEnding] = useState(savedEnding)
+ const range = fourDayRange(ending), today = dayKey(new Date())
  const projects = overview?.projects || []
- const project = pickProject(projects, overview?.runs || [], choice)
- useEffect(() => {
-  if (!project) return
-  let active = true
-  setData(null)
-  const poll = async () => {
-   try { const d = await read<Snapshot>(`/snapshot?project=${encodeURIComponent(project)}`); if (active) { setData(d); setError('') } }
-   catch (e) { if (active) setError(String(e)) }
-  }
-  void poll(); const timer = setInterval(poll, 15000)
-  return () => { active = false; clearInterval(timer) }
- }, [project])
+ const project = workspace ? workspace.project : pickProject(projects, overview?.runs || [], choice)
+ const history = useProjectSnapshot(project, range.after, range.before)
+ const { data, error } = history
+ const current = workspace?.data || data
  if (!overview || !projects.length) return null
  const choose = (name: string) => { setChoice(name); try { localStorage.setItem(SAVED, name) } catch { /* private browsing: just not remembered */ } }
- const now = new Date()
+ const chooseEnding = (value: string) => { if (!localDay(value) || value > today) return; setEnding(value); try { localStorage.setItem(ENDING, value) } catch { /* Remember when storage is available. */ } }
  const cards = boards.flatMap(b => b.cards.map(c => ({ board: b.name, id: c.id, title: c.title })))
  // Tabs and counts come from the overview so they are current even before
  // this project's own snapshot has loaded.
  const slots = overview.slots.filter(s => s.project === project)
  const rows = tabRows(slots, overview.sessions || [], cards, overview.machines)
- const counts = projectCounts(slots, (data?.runs || []).filter(r => r.project === project))
- const artifacts = uniqueArtifacts(data?.artifacts || [])
- const days = lastDays(artifacts, now), gallery = galleryMedia(artifacts, now)
- const commits = artifacts.filter(a => a.kind === 'commit').slice(0, 6)
+ const counts = projectCounts(slots)
+ const artifacts = artifactsInRange(data?.artifacts || [], range)
+ const inputs = inputsInRange(data?.documents || [], range), attachments = artifacts.filter(a => a.input)
+ const days = lastDays(artifacts, localDay(ending)!, 4, inputs), media = artifacts.filter(a => !a.input && isMedia(a)).slice(0, 8)
+ const commits = artifacts.filter(a => !a.input && a.kind === 'commit').slice(0, 6)
  const open = (id: string) => { for (const b of boards) { const c = b.cards.find(c => c.id === id); if (c) return onOpen(b.name, c) } }
- const machines = overview.machines.filter(m => slots.some(s => s.collector === m.collector) || (data?.runs || []).some(r => r.collector === m.collector))
+ const machines = overview.machines.filter(m => slots.some(s => s.collector === m.collector) || (current?.runs || []).some(r => r.collector === m.collector))
  return <section className="work-panel work-project" aria-labelledby="work-project-title">
-  <header className="work-inbox-heading"><div><h2 id="work-project-title">Projects</h2><p>What agents are doing and what they made, by herdr workspace.</p></div></header>
-  <div className="work-project-picker" role="group" aria-label="Project">
+  <header className="work-inbox-heading"><div><h2 id="work-project-title">{workspace ? project : 'Projects'}</h2><p>Open tabs, shared inputs and output from this workspace.</p></div></header>
+  {!workspace && <div className="work-project-picker" role="group" aria-label="Project">
    {projects.map(p => <button key={p} type="button" aria-pressed={p === project} onClick={() => choose(p)}>{p}</button>)}
-  </div>
+  </div>}
   <p className="work-project-state">
    <span className="work-dot working" aria-hidden="true" />{counts.working} working
    <span className="work-dot blocked" aria-hidden="true" />{counts.blocked} blocked
-   <span className="work-dot done" aria-hidden="true" />{counts.unreviewed} done, not reviewed
+   <span className="work-dot off" aria-hidden="true" />{counts.idle} idle
    {machines.length > 0 && <span className="work-project-machines">collectors: {machines.map(m => <span key={m.collector}>{m.name} <span className={`work-dot ${m.online ? 'done' : 'off'}`} aria-hidden="true" />{m.online ? 'online' : 'asleep'}</span>)}</span>}
   </p>
   {error && <p role="alert" className="form-error">{error}</p>}
@@ -64,19 +64,46 @@ export function WorkProjects({ boards, onOpen }: { boards: { name: string; cards
     <p className="muted">Assign a tab to a card from the card's Work tab.</p>
    </div>
    <div className="work-project-box">
-    <h3>Last four days</h3>
+    <div className="work-date-controls">
+     <label>Four days ending<input type="date" aria-label="Four days ending" value={ending} max={today} onChange={e => chooseEnding(e.target.value)} /></label>
+     <div><button className="quiet" type="button" aria-label="Previous four days" onClick={() => chooseEnding(shiftDay(ending, -4))}>‹</button>
+      <button className="quiet" type="button" aria-label="Next four days" disabled={ending >= today} onClick={() => { const next = shiftDay(ending, 4); chooseEnding(next > today ? today : next) }}>›</button>
+      <button className="quiet" type="button" disabled={ending === today} onClick={() => chooseEnding(today)}>Today</button></div>
+    </div>
     <ol className="work-days">{days.map(d => <li key={d.key}>
      <strong>{d.label}</strong>
      <span className="work-day-bar" aria-hidden="true"><span style={{ width: `${Math.round(d.share * 100)}%` }} /></span>
-     <span className="work-day-counts">{d.commits} {d.commits === 1 ? 'commit' : 'commits'} · {d.media} media</span>
+     <span className="work-day-counts">{data ? `${d.inputs} ${d.inputs === 1 ? 'input' : 'inputs'} · ${d.commits} ${d.commits === 1 ? 'commit' : 'commits'} · ${d.media} media` : 'Loading…'}</span>
      {d.notes.map((n, i) => <span className="work-day-note" key={i}>{n}</span>)}
     </li>)}</ol>
-    <h3>{gallery.today ? 'Today’s media' : 'Latest media'}</h3>
-    {gallery.items.length ? <ul className="work-gallery">{gallery.items.map(a => <MediaTile key={a.id} artifact={a} dated={!gallery.today} />)}</ul>
-     : <p className="muted">{data ? 'No images or videos recorded for this project yet.' : 'Loading…'}</p>}
-    {commits.length > 0 && <><h3>Latest commits</h3><ul className="work-artifacts">{commits.map(a => <ArtifactView key={a.id} artifact={a} />)}</ul></>}
+    <ProjectInputs key={`${project}:${ending}`} documents={inputs} attachments={attachments} snapshot={data} />
+    <h3>Media in these four days</h3>
+    {media.length ? <ul className="work-gallery">{media.map(a => <MediaTile key={a.id} artifact={a} dated />)}</ul>
+     : <p className="muted">{data ? 'No images or videos recorded in this date range.' : 'Loading…'}</p>}
+    <h3>Commits in these four days</h3>
+    {commits.length ? <ul className="work-artifacts">{commits.map(a => <ArtifactView key={a.id} artifact={a} />)}</ul> : <p className="muted">{data ? 'No commits recorded in this date range.' : 'Loading…'}</p>}
    </div>
   </div>
+ </section>
+}
+
+function ProjectInputs({ documents, attachments, snapshot }: { documents: Document[]; attachments: Artifact[]; snapshot: Snapshot | null }) {
+ const [limit, setLimit] = useState(8)
+ const sessionTitle = (runID: string) => {
+  const run = snapshot?.runs.find(r => r.id === runID)
+  const session = snapshot?.sessions.find(s => s.session_id === run?.session_id && s.collector === run?.collector)
+  return session?.title || session?.agent || 'Session'
+ }
+ return <section className="work-inputs" aria-label="Inputs in these four days">
+  <h3>Inputs in these four days</h3>
+  <p className="muted">Messages and attachments shared with sessions.</p>
+  {attachments.length > 0 && <ul className="work-gallery">{attachments.slice(0, limit).map(a => <MediaTile key={a.id} artifact={a} dated />)}</ul>}
+  {documents.length > 0 && <ul className="work-input-messages">{documents.slice(0, limit).map(d => <li key={d.key}><details>
+   <summary><span className="work-input-meta"><time dateTime={d.created_at}>{new Date(d.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</time> · {sessionTitle(d.run_id)}</span><span>{d.body.slice(0, 180)}{d.body.length > 180 ? '…' : ''}</span></summary>
+   <p>{d.body}</p>
+  </details></li>)}</ul>}
+  {Math.max(documents.length, attachments.length) > limit && <button className="quiet" type="button" onClick={() => setLimit(limit + 16)}>Show more inputs</button>}
+  {!documents.length && !attachments.length && <p className="muted">{snapshot ? 'No shared inputs recorded in this date range.' : 'Loading…'}</p>}
  </section>
 }
 

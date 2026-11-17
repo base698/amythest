@@ -77,6 +77,7 @@ type Board struct {
 	Name            string `json:"name" yaml:"name"`
 	DisplayName     string `json:"displayName" yaml:"displayName"`
 	Description     string `json:"description,omitempty" yaml:"description,omitempty"`
+	Workspace       string `json:"workspace,omitempty" yaml:"workspace,omitempty"`
 	Icon            string `json:"icon,omitempty" yaml:"icon,omitempty"`
 	Color           string `json:"color,omitempty" yaml:"color,omitempty"`
 	SortOrder       int    `json:"sortOrder" yaml:"sortOrder,omitempty"`
@@ -91,6 +92,7 @@ type BoardSummary struct {
 	Name            string         `json:"name"`
 	DisplayName     string         `json:"displayName"`
 	Description     string         `json:"description,omitempty"`
+	Workspace       string         `json:"workspace,omitempty"`
 	Icon            string         `json:"icon,omitempty"`
 	Color           string         `json:"color,omitempty"`
 	SortOrder       int            `json:"sortOrder"`
@@ -105,6 +107,7 @@ type BoardInput struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"displayName"`
 	Description string `json:"description"`
+	Workspace   string `json:"workspace"`
 	Icon        string `json:"icon"`
 	Color       string `json:"color"`
 	SortOrder   int    `json:"sortOrder"`
@@ -114,6 +117,7 @@ type BoardInput struct {
 type BoardSettingsPatch struct {
 	DisplayName     *string `json:"displayName"`
 	Description     *string `json:"description"`
+	Workspace       *string `json:"workspace"`
 	Icon            *string `json:"icon"`
 	Color           *string `json:"color"`
 	SortOrder       *int    `json:"sortOrder"`

@@ -48,6 +48,7 @@ type boardFrontmatter struct {
 	Name            string              `yaml:"name"`
 	DisplayName     string              `yaml:"displayName,omitempty"`
 	Description     string              `yaml:"description,omitempty"`
+	Workspace       string              `yaml:"workspace,omitempty"`
 	Icon            string              `yaml:"icon,omitempty"`
 	Color           string              `yaml:"color,omitempty"`
 	SortOrder       int                 `yaml:"sortOrder,omitempty"`
@@ -90,7 +91,7 @@ const commentTimeLayout = time.RFC3339
 func renderBoardMarkdown(board Board, doneOnly bool, now time.Time) []byte {
 	fm := boardFrontmatter{
 		Kanban: 4, Name: board.Name, DisplayName: board.DisplayName,
-		Description: board.Description, Icon: board.Icon, Color: board.Color,
+		Description: board.Description, Workspace: board.Workspace, Icon: board.Icon, Color: board.Color,
 		SortOrder: board.SortOrder, Pinned: board.Pinned, Archived: board.Archived,
 		FocusCard: board.FocusCardID, DispatchEnabled: board.DispatchEnabled,
 	}
@@ -219,7 +220,7 @@ func parseBoardMarkdown(data []byte, path string) (Board, error) {
 	}
 	board := Board{
 		Version: 4, Name: fm.Name, DisplayName: fm.DisplayName,
-		Description: fm.Description, Icon: fm.Icon, Color: fm.Color,
+		Description: fm.Description, Workspace: fm.Workspace, Icon: fm.Icon, Color: fm.Color,
 		SortOrder: fm.SortOrder, Pinned: fm.Pinned, Archived: fm.Archived,
 		FocusCardID: fm.FocusCard, DispatchEnabled: fm.DispatchEnabled,
 		Cards: []Card{},

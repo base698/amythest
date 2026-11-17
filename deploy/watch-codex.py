@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt one existing Codex chat into Amythest Collector's metadata-only lifecycle reader."""
+"""Opt one Codex chat into lifecycle capture, optionally including shared user inputs."""
 import argparse
 import fcntl
 import json
@@ -12,6 +12,7 @@ p.add_argument('--rollout', required=True, type=Path)
 p.add_argument('--session', required=True)
 p.add_argument('--project', default='')
 p.add_argument('--title', default='Codex session')
+p.add_argument('--capture-inputs', action='store_true', help='Also capture user messages and embedded image attachments for this chat')
 a = p.parse_args()
 path = a.rollout.expanduser().resolve(strict=True)
 with path.open() as f:
@@ -27,7 +28,7 @@ with (root / 'codex-config.lock').open('a') as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
     watches = json.loads(config.read_text()) if config.exists() else []
     watches = [w for w in watches if w['session_id'] != a.session]
-    watches.append({'session_id': a.session, 'path': str(path), 'project': a.project, 'title': a.title})
+    watches.append({'session_id': a.session, 'path': str(path), 'project': a.project, 'title': a.title, 'capture_inputs': a.capture_inputs})
     fd, temporary = tempfile.mkstemp(dir=root, prefix='.codex-')
     try:
         with os.fdopen(fd, 'w') as f:

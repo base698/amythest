@@ -107,12 +107,21 @@ python3 deploy/watch-codex.py --rollout /absolute/path/to/rollout.jsonl \
 
 This reads only explicitly selected files from `~/.local/state/amythest-collector/codex.json`.
 It projects saved `task_started`, `task_complete`, and `turn_aborted` records into
-start, finish, and cancelled events. Prompts, responses, tool contents and working
-files are not uploaded. Existing turns in that chat are included on first use;
+start, finish, and cancelled events. By default, prompts, responses, tool contents
+and working files are not uploaded. Existing turns in that chat are included on first use;
 checkpoints and durable receipts prevent duplicates after restart. It also works
 for an already-running desktop chat, without restarting the app or changing hook
 trust settings. Change project assignment later in Amythest Work → Projects →
 Sessions; that assignment covers earlier and future runs.
+
+To also show the selected chat's shared messages and screenshots in Project → Inputs,
+add `--capture-inputs` to the command. This captures user messages and embedded
+PNG/JPEG/GIF/WebP attachments, dated by the original message. It excludes assistant
+and tool bodies and app/environment wrappers. It never reads paths mentioned in a
+prompt or fetches external image URLs. Existing inputs are included when a chat is
+first registered with this option; enabling it on an already-watched chat captures
+future inputs without replaying old turns. Images use the durable media outbox and
+private media endpoint. Other chats remain unchanged.
 
 This adapter is tested with Codex CLI/app-server 0.166 rollout records, which are
 an internal format rather than a stable public API. It does not infer approval
