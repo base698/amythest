@@ -54,12 +54,33 @@ func syncWork(args []string) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	failed := make(chan error, 2)
+	failed := make(chan error, 3)
 	captureDone := make(chan struct{})
+	hcDone := make(chan struct{})
 	jobsDone := make(chan struct{})
+	// Without a stable provider session reference, a process restart cannot
+	// prove that a reused pane still holds the same agent incarnation.
+	if e = q.Update(func(s *hub.State) error {
+		for key, p := range s.Sessions {
+			if p.Pane.Provider == "" {
+				p.Pane.Provider = "unknown-before-restart"
+				s.Sessions[key] = p
+			}
+		}
+		return nil
+	}); e != nil {
+		return e
+	}
+	topo := newTopology(q, "tui", "hc")
 	go func() {
 		defer close(captureDone)
-		if e := captureTUI(ctx, q, *skipHermes); e != nil {
+		if e := captureTUI(ctx, topo, *skipHermes); e != nil {
+			failed <- e
+		}
+	}()
+	go func() {
+		defer close(hcDone)
+		if e := captureHC(ctx, topo, *skipHermes); e != nil {
 			failed <- e
 		}
 	}()
@@ -123,7 +144,7 @@ func syncWork(args []string) error {
 			}
 		}
 	}()
-	defer func() { cancel(); <-captureDone; <-jobsDone }()
+	defer func() { cancel(); <-captureDone; <-hcDone; <-jobsDone }()
 	backoff := 2 * time.Second
 	for {
 		if client == nil {
@@ -143,9 +164,8 @@ func syncWork(args []string) error {
 		}
 	}
 }
-func captureTUI(ctx context.Context, q *hub.Queue, skipHermes bool) error {
+func captureTUI(ctx context.Context, topo *topology, skipHermes bool) error {
 	m := herdr.Machine{Name: "local"}
-	first := true
 	for {
 		select {
 		case <-ctx.Done():
@@ -154,6 +174,9 @@ func captureTUI(ctx context.Context, q *hub.Queue, skipHermes bool) error {
 		}
 		t, e := m.Snapshot()
 		if e != nil {
+			if e = topo.unreachable("tui", notRunning(e)); e != nil {
+				return e
+			}
 			select {
 			case <-ctx.Done():
 				return nil
@@ -195,23 +218,9 @@ func captureTUI(ctx context.Context, q *hub.Queue, skipHermes bool) error {
 			}
 			panes = append(panes, hub.Pane{ID: p.PaneID, Provider: p.SessionID(), Agent: p.Agent, Project: t.Workspaces[p.WorkspaceID], Tab: t.Tabs[p.TabID], Dir: p.Dir(), Status: status})
 		}
-		if first {
-			// Without a stable provider session reference, a process restart cannot
-			// prove that a reused pane still holds the same agent incarnation.
-			if e = q.Update(func(s *hub.State) error {
-				for key, p := range s.Sessions {
-					if p.Pane.Provider == "" {
-						p.Pane.Provider = "unknown-before-restart"
-						s.Sessions[key] = p
-					}
-				}
-				return nil
-			}); e != nil {
-				return e
-			}
-			first = false
-		}
-		if e = q.Inventory(panes, time.Now()); e != nil {
+		// Reported as a copy: status changes below edit panes in place, and the
+		// merged list is read by the other runtime's capture.
+		if e = topo.report("tui", append([]hub.Pane(nil), panes...)); e != nil {
 			stop()
 			return e
 		}
@@ -260,7 +269,7 @@ func captureTUI(ctx context.Context, q *hub.Queue, skipHermes bool) error {
 				if !found {
 					break watch
 				}
-				if e = q.Inventory(panes, time.Now()); e != nil {
+				if e = topo.report("tui", append([]hub.Pane(nil), panes...)); e != nil {
 					timer.Stop()
 					stop()
 					return e

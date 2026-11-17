@@ -2,8 +2,15 @@
 
 The collector shipped in the Amythest repository, built as `cmd/amythest-collector`. The existing `watch`, `collect`, `panes`, `hook`
 and `show` prototype commands still work. `sync` is an opt-in shadow sender for the
-local herdr TUI; remote SSH and herdr-core remain available through the older watcher,
-but are not yet hub-delivery adapters.
+local herdr TUI and for herdr-core, the runtime behind the Herdr App; remote SSH remains
+available through the older watcher, but is not yet a hub-delivery adapter.
+
+`sync` reads both local runtimes and reports them as one inventory. A Herdr App
+terminal is reported when its program reports a status; its project and tab are the
+space and tab it is shown in, and a Claude Code terminal carries its Claude session id.
+Codex terminals are left to Codex's own session records. A runtime that is not running
+is treated as having no panes after 30 seconds, so a machine with only one of the two
+still reports; one that stops answering for any other reason keeps its last panes.
 
 ```sh
 make build-collector
