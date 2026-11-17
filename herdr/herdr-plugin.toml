@@ -37,6 +37,16 @@ title = "wall"
 placement = "split"
 command = ["./scripts/amy.sh", "wall"]
 
+# Find: one search over the vault, what agents made and their sessions.
+# Enter goes to the pane where it happened, or opens the result in the browser.
+[[panes]]
+id = "find"
+title = "find"
+placement = "popup"
+width = "80%"
+height = "70%"
+command = ["./scripts/amy.sh", "find"]
+
 [[actions]]
 id = "open-board"
 title = "Open amy board"
@@ -57,3 +67,10 @@ title = "Toggle wall"
 description = "Show what agents produced for this workspace in a split on the right, or close it if it is open."
 contexts = ["workspace"]
 command = ["bash", "scripts/toggle-wall.sh"]
+
+[[actions]]
+id = "find"
+title = "Find"
+description = "Search notes, cards, tasks and what agents made; go to the pane where a result happened."
+contexts = ["workspace"]
+command = ["bash", "scripts/find.sh"]

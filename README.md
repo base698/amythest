@@ -173,6 +173,22 @@ amy wall -project robot   # a named project; p switches inside the wall
 amy wall -list            # print the feed as text and exit
 ```
 
+`amy find` is one search across the vault (notes, cards, tasks), what agents
+made, and, in the Herdr App, the text on screen in open terminals. Enter on a
+result goes to the pane where it happened when that pane is still open on
+this machine; otherwise it opens the result in the browser. Ctrl+O always
+opens the browser.
+
+```sh
+amy find                  # open the search
+amy find gait timing      # open it with a query
+```
+
+Going to a pane needs the collector registered on this machine, which is how
+`amy find` tells this machine's panes from another's. In terminal herdr the
+plugin's `find` action opens it as a popup; in the Herdr App bind a key to
+`terminal.open` with `argv` `["/path/to/amy", "find", "-pane"]`.
+
 - **Terminal herdr:** the plugin in `herdr/` has a `toggle-wall` action that
   opens the wall in a split on the right and closes it again. Bind it with
   `type = "plugin_action"`, `command = "amythest.toggle-wall"`.

@@ -48,6 +48,7 @@ type WorkSession struct {
 	ID        string `json:"session_id"`
 	Collector string `json:"collector"`
 	Agent     string `json:"agent"`
+	Provider  string `json:"provider_ref"`
 	Title     string `json:"title"`
 	Status    string `json:"status"`
 	Project   string `json:"project"`
@@ -136,4 +137,55 @@ func (c *Client) WorkMedia(ctx context.Context, hash string, limit int64) ([]byt
 		return b, nil
 	}
 	return nil, fmt.Errorf("authentication failed")
+}
+
+// WorkRun returns the snapshot for one run, however old.
+func (c *Client) WorkRun(ctx context.Context, run string) (*WorkSnapshot, error) {
+	var out WorkSnapshot
+	if err := c.do(ctx, http.MethodGet, "/api/work/snapshot?run_id="+url.QueryEscape(run), nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// WorkHit is one match in what agents said and produced.
+type WorkHit struct {
+	Key     string `json:"key"`
+	Kind    string `json:"kind"`
+	Title   string `json:"title"`
+	Body    string `json:"body"` // a snippet around the match
+	Run     string `json:"run_id"`
+	Created string `json:"created_at"`
+	Card    string `json:"card_id"`
+	Project string `json:"project"`
+}
+
+// WorkSearch searches agent chats, commits, artifacts and observations.
+func (c *Client) WorkSearch(ctx context.Context, query string, limit int) ([]WorkHit, error) {
+	var out []WorkHit
+	path := fmt.Sprintf("/api/work/search?q=%s&limit=%d", url.QueryEscape(query), limit)
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// VaultHit is one match among notes, cards and tasks.
+type VaultHit struct {
+	Slug     string `json:"slug"`
+	Title    string `json:"title"`
+	Excerpt  string `json:"excerpt"` // plain text; \x02 and \x03 bracket each match
+	Kind     string `json:"kind"`    // note, card or task
+	Date     string `json:"date"`
+	URL      string `json:"url"` // relative to the endpoint
+	Archived bool   `json:"archived"`
+}
+
+// VaultSearch searches notes, cards and tasks.
+func (c *Client) VaultSearch(ctx context.Context, query string) ([]VaultHit, error) {
+	var out []VaultHit
+	if err := c.do(ctx, http.MethodGet, "/api/search?q="+url.QueryEscape(query), nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

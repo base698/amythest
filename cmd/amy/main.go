@@ -42,6 +42,9 @@ func main() {
 		case "wall":
 			runWall(args[1:])
 			return
+		case "find":
+			runFind(args[1:])
+			return
 		}
 	}
 	check := false
