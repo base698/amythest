@@ -5,6 +5,7 @@
 
 .card-editor { width: min(720px, 100%); }
 .card-editor .card-meta { margin: 6px 0 0; font-size: 11px; color: var(--muted); }
+.card-editor > .work-tabs { display: flex; gap: 8px; margin: 20px 0 12px; }
 .card-due, .card-milestone { align-self: flex-start; border: 1px solid color-mix(in srgb, var(--accent-2) 35%, transparent); border-radius: 999px; color: var(--accent-text); font-size: 10px; font-weight: 700; padding: 3px 7px; }
 .card-milestone { background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: color-mix(in srgb, var(--accent-2) 50%, transparent); }
 .card-editor .title-field { margin-top: 20px; }
@@ -33,6 +34,8 @@
 .attachments h3, .comments h3 { font-size: 11px; font-weight: 750; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
 .comments article { background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 8px 12px; }
 .comments article p { margin: 4px 0 0; white-space: pre-wrap; }
+.comments .comment-form { margin-bottom: 18px; }
+.comments-load-more { margin-top: 4px; }
 
 /* New-card button: give it real presence in the toolbar… */
 .new-card-button { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; font-size: 13.5px; }

@@ -58,6 +58,7 @@ interface DispatchRun { id: number; board: string; cardId: string; cardTitle: st
 interface AgentCatalog { agents: string[]; default: string }
 
 const ACTIVE_RUN_STATUSES = ['starting', 'running']
+const COMMENT_PAGE_SIZE = 10
 
 const NO_AGENTS: AgentCatalog = { agents: [], default: '' }
 
@@ -1142,6 +1143,9 @@ function CardEditor({ card, board, workspace, busy, agents, readOnly = false, op
   const [blocked, setBlocked] = useState(Boolean(card?.blocked))
   const [labels, setLabels] = useState(card?.labels.join(', ') || '')
   const [comment, setComment] = useState('')
+  const [visibleCommentCount, setVisibleCommentCount] = useState(COMMENT_PAGE_SIZE)
+  const newestComments = [...(card?.comments || [])].reverse().sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+  useEffect(() => setVisibleCommentCount(COMMENT_PAGE_SIZE), [board, card?.id])
   const [attachments, setAttachments] = useState<Attachment[]>(card?.attachments || [])
   const [attachmentFile, setAttachmentFile] = useState<File | null>(null)
   const [attachmentBusy, setAttachmentBusy] = useState('')
@@ -1254,7 +1258,17 @@ function CardEditor({ card, board, workspace, busy, agents, readOnly = false, op
             <p className="hint">Up to 10 files per card, 10 MiB each.</p>
           </form>}
         </section>}
-        {card && <div className="comments"><h3>Comments{card.comments.length > 0 ? ` (${card.comments.length})` : ''}</h3>{card.comments.length === 0 ? <p className="muted">No comments yet.</p> : card.comments.map((item) => <article key={item.id}><strong>{item.author}</strong><time>{new Date(item.createdAt).toLocaleString()}</time><p>{item.body}</p></article>)}{onComment && <form className="comment-form" onSubmit={async (event) => { event.preventDefault(); if (operationBusy || !comment.trim()) return; await onComment(comment); setComment('') }}><textarea aria-label="Add comment" disabled={operationBusy} maxLength={2000} placeholder="Add a comment…" rows={3} value={comment} onChange={(event) => setComment(event.target.value)} /><button className="quiet" disabled={operationBusy || !comment.trim()} type="submit">Comment</button></form>}</div>}
+        {card && <section className="comments" aria-labelledby="card-comments-title">
+          <h3 id="card-comments-title">Comments{newestComments.length > 0 ? ` (${newestComments.length})` : ''}</h3>
+          {onComment && <form className="comment-form" onSubmit={async (event) => { event.preventDefault(); if (operationBusy || !comment.trim()) return; await onComment(comment); setComment('') }}>
+            <textarea aria-label="Add comment" disabled={operationBusy} maxLength={2000} placeholder="Add a comment…" rows={3} value={comment} onChange={(event) => setComment(event.target.value)} />
+            <button className="quiet" disabled={operationBusy || !comment.trim()} type="submit">Comment</button>
+          </form>}
+          {newestComments.length === 0 ? <p className="muted">No comments yet.</p> : newestComments.slice(0, visibleCommentCount).map((item) => <article key={item.id}>
+            <strong>{item.author}</strong><time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString()}</time><p>{item.body}</p>
+          </article>)}
+          {visibleCommentCount < newestComments.length && <button className="quiet comments-load-more" type="button" onClick={() => setVisibleCommentCount((count) => count + COMMENT_PAGE_SIZE)}>Load more comments ({newestComments.length - visibleCommentCount} remaining)</button>}
+        </section>}
         {card && (onDelete || (onMoveBoard && moveBoards.length > 0)) && <section className="editor-section card-actions" aria-labelledby="card-actions-title">
           <h3 id="card-actions-title">Card actions</h3>
           {onMoveBoard && moveBoards.length > 0 && <div className="move-board-row">
