@@ -343,6 +343,8 @@ type fakeAPI struct {
 	overview, project *apiclient.WorkSnapshot
 	media             map[string][]byte
 	asked             []string
+	cards             map[string]string
+	cardsAsked        []string
 }
 
 func (f *fakeAPI) WorkOverview(context.Context) (*apiclient.WorkSnapshot, error) {
@@ -357,6 +359,10 @@ func (f *fakeAPI) WorkMedia(_ context.Context, hash string, _ int64) ([]byte, er
 		return b, nil
 	}
 	return nil, errors.New("not found")
+}
+func (f *fakeAPI) CardTitles(_ context.Context, ids []string) (map[string]string, error) {
+	f.cardsAsked = append(f.cardsAsked, ids...)
+	return f.cards, nil
 }
 func (f *fakeAPI) Endpoint() string { return "https://h/notes" }
 
@@ -575,5 +581,156 @@ func TestWallOpensStraightToAWantedItem(t *testing.T) {
 	m, _ = newWall(t, api, Options{Project: "Robot", Graphics: "off", Show: &Want{Kind: "image", Title: "gone.png"}})
 	if m.view != "feed" || !strings.Contains(m.View(), "older than this feed shows") {
 		t.Fatalf("missing item: view %s\n%s", m.view, m.View())
+	}
+}
+
+func projectSnapshot() *apiclient.WorkSnapshot {
+	s := snapshot()
+	bound := func(card string) *struct {
+		Card         string `json:"card_id"`
+		Acknowledged bool   `json:"acknowledged"`
+	} {
+		return &struct {
+			Card         string `json:"card_id"`
+			Acknowledged bool   `json:"acknowledged"`
+		}{Card: card, Acknowledged: true}
+	}
+	s.Slots = []apiclient.WorkSlot{
+		{Pane: "t10", Session: "s3", Status: "idle", Tab: "10"},
+		{Pane: "t2", Session: "s1", Status: "working", Tab: "2", Binding: bound("k1")},
+		{Pane: "t9", Session: "s9", Status: "gone", Tab: "9"},
+		{Pane: "t4", Session: "s2", Status: "blocked", Tab: "", Binding: bound("k404")},
+	}
+	s.Sessions = append(s.Sessions, apiclient.WorkSession{ID: "s2", Agent: "codex"})
+	s.Runs = []apiclient.WorkRun{
+		{ID: "r1", Session: "s1", Finished: "2026-11-17T10:05:00Z", OutputVersion: 3, Reviewed: 1},
+		{ID: "r2", Session: "s1", Finished: "2026-11-17T09:05:00Z", OutputVersion: 2, Reviewed: 2},
+		{ID: "r3", Session: "s1", OutputVersion: 1},
+		{ID: "r4", Session: "s1", Finished: "2026-11-10T09:05:00Z", OutputVersion: 2, Historical: true},
+	}
+	return s
+}
+
+func plain(lines []string) string {
+	out := strings.Join(lines, "\n")
+	for {
+		i := strings.Index(out, "\x1b[")
+		if i < 0 {
+			return out
+		}
+		j := strings.IndexByte(out[i:], 'm')
+		if j < 0 {
+			return out
+		}
+		out = out[:i] + out[i+j+1:]
+	}
+}
+
+func TestSummaryShowsStateTabsAndDays(t *testing.T) {
+	snap := projectSnapshot()
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	text := plain(summaryLines(snap, buildFeed(snap), map[string]string{"k1": "Learned gait indoors"}, now, 60))
+	for _, want := range []string{
+		"1 working", "1 blocked", "1 to review", // r1 only: r2 is reviewed, r3 unfinished, r4 imported
+		"claude · working  Learned gait indoors",
+		"codex · blocked  card k404", // a card that is not on an open board goes by its id
+		"agent · idle  no card",
+		"Sat 14", "Mon 16", "Tue 17",
+		"1c 2m", // today: one commit, an image and a video
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("summary lacks %q\n%s", want, text)
+		}
+	}
+	// Numbered tabs in numeric order, then named ones; ended sessions left out.
+	if i2, i10, i4 := strings.Index(text, "\n  2 "), strings.Index(text, "\n  10 "), strings.Index(text, "\n  t4 "); !(i2 > 0 && i2 < i10 && i10 < i4) || strings.Contains(text, "  9 ") {
+		t.Errorf("tab order (2 at %d, 10 at %d, t4 at %d)\n%s", i2, i10, i4, text)
+	}
+	if got := summaryLines(nil, nil, nil, now, 60); got != nil {
+		t.Errorf("no snapshot: %v", got)
+	}
+}
+
+func TestWallHeadsTheFeedWithTheSummaryAndLooksUpCards(t *testing.T) {
+	api := &fakeAPI{overview: snapshot(), project: projectSnapshot(), cards: map[string]string{"k1": "Learned gait indoors"}}
+	m, _ := newWall(t, api, Options{Project: "Robot", Graphics: "off"})
+	if strings.Join(api.cardsAsked, ",") != "k1,k404" {
+		t.Fatalf("cards asked: %v", api.cardsAsked)
+	}
+	view := m.View()
+	if !strings.Contains(view, "1 working") || !strings.Contains(view, "Learned gait indoors") || !strings.Contains(view, "Fix gait") {
+		t.Fatalf("summary above the feed:\n%s", view)
+	}
+	// A refresh does not ask for the same cards again.
+	drive(t, m, feedMsg{project: "Robot", snap: projectSnapshot()})
+	if len(api.cardsAsked) != 2 {
+		t.Errorf("asked again: %v", api.cardsAsked)
+	}
+	// s hides the summary; the feed starts at the top.
+	drive(t, m, keys("s")[0])
+	if view = m.View(); strings.Contains(view, "1 working") || !strings.Contains(view, "Fix gait") {
+		t.Fatalf("after s:\n%s", view)
+	}
+	// Moving down and back to the first item returns to the summary.
+	drive(t, m, keys("s")[0])
+	for _, k := range keys("G", "g") {
+		drive(t, m, k)
+	}
+	if m.top != 0 || m.cursor != 0 {
+		t.Fatalf("back at the top: top %d cursor %d", m.top, m.cursor)
+	}
+}
+
+func TestMediaFilterIsAGalleryOfTiles(t *testing.T) {
+	snap := snapshot()
+	for i, name := range []string{"b.png", "c.png", "d.png"} {
+		snap.Artifacts = append(snap.Artifacts, apiclient.WorkArtifact{ID: "m" + name, Kind: "image", Ref: "/w/" + name, RunID: "r1",
+			MediaHash: strings.Repeat(string(rune('b'+i)), 64), Available: true})
+	}
+	media := map[string][]byte{}
+	for _, h := range []string{"a", "b", "c", "d"} {
+		media[strings.Repeat(h, 64)] = picture(t)
+	}
+	api := &fakeAPI{overview: snapshot(), project: snap, media: media}
+	m, _ := newWall(t, api, Options{Project: "Robot", Graphics: "blocks"})
+	drive(t, m, keys("s")[0]) // the summary is not part of this
+	drive(t, m, keys("f")[0])
+	// 60 cells wide: two tiles to a row. Five media items: three rows.
+	if m.filter != "media" || m.columns() != 2 || len(m.items) != 5 {
+		t.Fatalf("filter %s columns %d items %d", m.filter, m.columns(), len(m.items))
+	}
+	if m.start[0] != m.start[1] || m.start[2] != m.start[3] || m.start[1] == m.start[2] || m.start[4] == m.start[3] {
+		t.Fatalf("rows: %v", m.start)
+	}
+	// Two pictures of a row draw on the same lines, their names side by side.
+	row := plain(m.lines[m.start[2]:m.start[4]])
+	names := ""
+	for _, l := range strings.Split(row, "\n") {
+		if strings.Contains(l, "b.png") {
+			names = l
+		}
+	}
+	if !strings.Contains(names, "c.png") || strings.Index(names, "c.png") < 28 {
+		t.Fatalf("names are not side by side in their columns: %q\n%s", names, row)
+	}
+	// Down moves a row, right moves a tile; the view follows.
+	drive(t, m, keys("j")[0])
+	if m.cursor != 2 {
+		t.Fatalf("j: cursor %d", m.cursor)
+	}
+	drive(t, m, keys("l")[0])
+	if m.cursor != 3 {
+		t.Fatalf("l: cursor %d", m.cursor)
+	}
+	for _, k := range keys("j", "j", "k") {
+		drive(t, m, k)
+	}
+	if m.cursor != 2 {
+		t.Fatalf("j j k from the last row: cursor %d", m.cursor)
+	}
+	// A narrow pane, or images turned off, is the plain list again.
+	drive(t, m, tea.WindowSizeMsg{Width: 40, Height: 30})
+	if m.columns() != 1 {
+		t.Errorf("narrow pane columns: %d", m.columns())
 	}
 }

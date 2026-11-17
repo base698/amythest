@@ -19,6 +19,7 @@ type API interface {
 	WorkOverview(ctx context.Context) (*apiclient.WorkSnapshot, error)
 	WorkProject(ctx context.Context, project string) (*apiclient.WorkSnapshot, error)
 	WorkMedia(ctx context.Context, hash string, limit int64) ([]byte, error)
+	CardTitles(ctx context.Context, ids []string) (map[string]string, error)
 	Endpoint() string
 }
 
@@ -89,7 +90,11 @@ type model struct {
 	project  string
 	projects []string
 	all      []Item
-	items    []Item // all, filtered
+	items    []Item                  // all, filtered
+	snap     *apiclient.WorkSnapshot // the project's tabs, runs and machines, for the summary
+	summary  bool                    // show the summary above the feed
+	cards    map[string]string       // titles of the cards tabs are assigned to
+	asked    string                  // the card ids last asked for
 	filter   string
 	cursor   int
 	top      int
@@ -133,6 +138,7 @@ type (
 		text  string
 		err   error
 	}
+	cardsMsg struct{ titles map[string]string }
 	tickMsg  struct{}
 	flashMsg struct{ text string }
 )
@@ -151,7 +157,7 @@ func New(api API, o Options) tea.Model {
 	if o.Out == nil {
 		o.Out = io.Discard
 	}
-	return &model{api: api, o: o, filter: "all", view: "feed", pics: map[string]*pic{}, next: 1, loading: true}
+	return &model{api: api, o: o, filter: "all", view: "feed", pics: map[string]*pic{}, next: 1, loading: true, summary: true, cards: map[string]string{}}
 }
 
 func (m *model) Init() tea.Cmd {
@@ -205,6 +211,34 @@ func (m *model) picCmd(hash string) tea.Cmd {
 	}
 }
 
+// cardsCmd looks up the titles of the cards this project's tabs are assigned
+// to, once per set of cards.
+func (m *model) cardsCmd() tea.Cmd {
+	var ids []string
+	for _, x := range m.snap.Slots {
+		if x.Binding != nil && x.Status != "gone" && m.cards[x.Binding.Card] == "" {
+			ids = append(ids, x.Binding.Card)
+		}
+	}
+	// Ask once per card: one that is not on an open board never gets a title.
+	fresh := ids[:0]
+	for _, id := range ids {
+		if !strings.Contains(","+m.asked+",", ","+id+",") {
+			fresh = append(fresh, id)
+			m.asked += "," + id
+		}
+	}
+	if ids = fresh; len(ids) == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		titles, _ := m.api.CardTitles(ctx, ids) // without titles the tabs show the card ids
+		return cardsMsg{titles}
+	}
+}
+
 func (m *model) diffCmd(it Item) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -251,11 +285,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cursor < len(m.items) {
 			keep = m.items[m.cursor].Art.ID
 		}
-		m.all = buildFeed(msg.snap)
+		m.all, m.snap = buildFeed(msg.snap), msg.snap
 		m.applyFilter(keep)
+		titles := m.cardsCmd()
 		if want := m.o.Show; want != nil {
 			m.o.Show = nil // only on the first load
-			return m, m.show(*want)
+			return m, tea.Batch(m.show(*want), titles)
+		}
+		return m, tea.Batch(m.relayout(), titles)
+	case cardsMsg:
+		for id, title := range msg.titles {
+			m.cards[id] = title
 		}
 		return m, m.relayout()
 	case picMsg:
@@ -373,9 +413,17 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "esc":
 		return m, m.quit()
 	case "j", "down":
-		return m, m.move(1)
+		return m, m.move(m.columns())
 	case "k", "up":
+		return m, m.move(-m.columns())
+	case "l", "right":
+		return m, m.move(1)
+	case "h", "left":
 		return m, m.move(-1)
+	case "s":
+		m.summary = !m.summary
+		m.top = 0
+		return m, m.relayout()
 	case "ctrl+d", "pgdown", " ":
 		return m, m.scroll(m.body())
 	case "ctrl+u", "pgup":
@@ -516,17 +564,30 @@ func (m *model) move(d int) tea.Cmd {
 	return m.reveal()
 }
 
+// span is the lines an item occupies: in the gallery, its whole row of tiles.
+func (m *model) span(i int) (first, last int) {
+	first, last = m.start[i], len(m.lines)
+	for j := i + 1; j < len(m.start); j++ {
+		if m.start[j] > first {
+			last = m.start[j]
+			break
+		}
+	}
+	return first, last
+}
+
 // reveal scrolls so the selected item is on screen, then loads what is near.
+// On the first item (or row) the view returns to the very top, where the
+// summary is.
 func (m *model) reveal() tea.Cmd {
 	if m.cursor < len(m.start) {
-		first := m.start[m.cursor]
-		last := len(m.lines)
-		if m.cursor+1 < len(m.start) {
-			last = m.start[m.cursor+1]
-		}
-		if first < m.top || last-first >= m.body() {
+		first, last := m.span(m.cursor)
+		switch {
+		case first == m.start[0]:
+			m.top = 0
+		case first < m.top || last-first >= m.body():
 			m.top = first
-		} else if last > m.top+m.body() {
+		case last > m.top+m.body():
 			m.top = last - m.body()
 		}
 	}
@@ -658,10 +719,106 @@ func (m *model) relayout() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// columns is how many tiles the media gallery puts side by side. One means
+// the plain list.
+func (m *model) columns() int {
+	if m.filter != "media" || m.o.Graphics == "off" {
+		return 1
+	}
+	switch {
+	case m.w >= 110:
+		return 4
+	case m.w >= 80:
+		return 3
+	case m.w >= 44:
+		return 2
+	}
+	return 1
+}
+
+// cell is one line of a gallery tile and the number of screen cells it
+// takes. Image rows are measured by construction, not by counting runes.
+type cell struct {
+	text string
+	w    int
+}
+
+// tile is one gallery cell: the picture, then its name and where it is from.
+func (m *model) tile(i, w, maxRows int, now time.Time) []cell {
+	it := m.items[i]
+	text := func(s string) cell { return cell{s, lipgloss.Width(s)} }
+	var lines []cell
+	p := m.picOf(it)
+	switch {
+	case p != nil && p.state == picReady:
+		b := p.src.Bounds()
+		cols, _ := boxFor(b.Dx(), b.Dy(), min(w, maxCells), min(maxRows, maxCells), m.o.CellAspect)
+		for _, row := range m.imageRows(p, w, maxRows) {
+			lines = append(lines, cell{row, cols})
+		}
+	case p != nil && p.state == picFailed:
+		lines = append(lines, text(dim.Render(clip(p.err, w))))
+	case p != nil && p.state == picLoading:
+		lines = append(lines, text(dim.Render("loading…")))
+	case it.Kind == "video" && it.Art.Available:
+		lines = append(lines, text(dim.Render(clip("▶ video · o to play", w))))
+	case !it.Art.Available:
+		lines = append(lines, text(dim.Render(clip("not uploaded", w))))
+	}
+	name := "  " + clip(it.Title, w-2)
+	if i == m.cursor {
+		name = accent.Render("▌ ") + strong.Render(clip(it.Title, w-2))
+	}
+	from := strings.Trim(it.Tab+" · "+ago(it.When, now), " ·")
+	return append(lines, text(name), text("  "+dim.Render(clip(from, w-2))))
+}
+
+// buildGrid lays the items out as rows of n tiles: the media gallery.
+func (m *model) buildGrid(n int) {
+	const gap = 2
+	tileW := (m.w - 2 - gap*(n-1)) / n
+	maxRows := max(4, min(12, m.body()-4))
+	now := m.o.Now()
+	for row := 0; row < len(m.items); row += n {
+		first := len(m.lines)
+		var tiles [][]cell
+		height := 0
+		for i := row; i < row+n && i < len(m.items); i++ {
+			m.start = append(m.start, first)
+			t := m.tile(i, tileW, maxRows, now)
+			tiles = append(tiles, t)
+			height = max(height, len(t))
+		}
+		for k := 0; k < height; k++ {
+			var b strings.Builder
+			b.WriteString("  ")
+			for j, t := range tiles {
+				used := 0
+				if k < len(t) {
+					b.WriteString(t[k].text)
+					used = t[k].w
+				}
+				if j < len(tiles)-1 {
+					b.WriteString(strings.Repeat(" ", max(0, tileW-used)+gap))
+				}
+			}
+			m.lines = append(m.lines, b.String())
+		}
+		m.lines = append(m.lines, "")
+	}
+}
+
 func (m *model) build() {
 	now := m.o.Now()
 	width := m.w - 2 // a two-cell gutter holds the selection mark
 	m.lines, m.start = m.lines[:0], m.start[:0]
+	if m.summary && m.snap != nil {
+		m.lines = append(m.lines, summaryLines(m.snap, m.all, m.cards, now, m.w)...)
+	}
+	if n := m.columns(); n > 1 {
+		m.buildGrid(n)
+		return
+	}
 	for i, it := range m.items {
 		m.start = append(m.start, len(m.lines))
 		mark := "  "
@@ -737,11 +894,8 @@ func (m *model) want() []tea.Cmd {
 		if p == nil {
 			continue
 		}
-		end := len(m.lines)
-		if i+1 < len(m.start) {
-			end = m.start[i+1]
-		}
-		if p.state == picNone && m.fetching < maxFetching && m.near(m.start[i], end) {
+		first, end := m.span(i)
+		if p.state == picNone && m.fetching < maxFetching && m.near(first, end) {
 			p.state = picLoading
 			m.fetching++
 			cmds = append(cmds, m.picCmd(it.Art.MediaHash))
@@ -796,7 +950,7 @@ func (m *model) View() string {
 	b.WriteString(dim.Render(strings.Repeat("─", m.w)) + "\n")
 
 	body := make([]string, 0, m.body())
-	hint := "enter view · o open · f filter · p project · q close"
+	hint := "enter view · o open · f filter · s summary · p project · q close"
 	switch m.view {
 	case "pick":
 		hint = "j/k move · enter choose · esc back"

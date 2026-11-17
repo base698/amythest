@@ -42,6 +42,10 @@ type WorkRun struct {
 	Started   string `json:"started_at"`
 	Finished  string `json:"finished_at"`
 	Outcome   string `json:"outcome"`
+	// A finished run needs review while its output is newer than what was reviewed.
+	OutputVersion int64 `json:"output_version"`
+	Reviewed      int64 `json:"reviewed_through_version"`
+	Historical    bool  `json:"historical"`
 }
 
 type WorkSession struct {
@@ -61,6 +65,11 @@ type WorkSlot struct {
 	Status    string `json:"status"`
 	Project   string `json:"project"`
 	Tab       string `json:"tab"`
+	// Binding is the card this pane's runs are filed under, when assigned.
+	Binding *struct {
+		Card         string `json:"card_id"`
+		Acknowledged bool   `json:"acknowledged"`
+	} `json:"binding,omitempty"`
 }
 
 type WorkMachine struct {
@@ -186,6 +195,41 @@ func (c *Client) VaultSearch(ctx context.Context, query string) ([]VaultHit, err
 	var out []VaultHit
 	if err := c.do(ctx, http.MethodGet, "/api/search?q="+url.QueryEscape(query), nil, &out); err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// CardTitles finds the titles of cards by id across the boards. Cards that
+// are not on an open board are simply absent from the result.
+func (c *Client) CardTitles(ctx context.Context, ids []string) (map[string]string, error) {
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	out := map[string]string{}
+	if len(want) == 0 {
+		return out, nil
+	}
+	boards, err := c.ListBoards(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range boards {
+		if b.Archived {
+			continue
+		}
+		full, err := c.GetBoard(ctx, b.Name)
+		if err != nil {
+			continue // one unreadable board must not hide the others' cards
+		}
+		for _, card := range full.Cards {
+			if want[card.ID] {
+				out[card.ID] = card.Title
+			}
+		}
+		if len(out) == len(want) {
+			break
+		}
 	}
 	return out, nil
 }
