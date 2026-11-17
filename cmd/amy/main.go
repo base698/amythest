@@ -39,6 +39,9 @@ func main() {
 		case "herdr":
 			runHerdr(args[1:])
 			return
+		case "wall":
+			runWall(args[1:])
+			return
 		}
 	}
 	check := false

@@ -29,6 +29,14 @@ width = "70%"
 height = 9
 command = ["./scripts/amy.sh", "capture"]
 
+# The wall: what agents produced for this workspace (commits, images) as a
+# newest-first feed in a split on the right.
+[[panes]]
+id = "wall"
+title = "wall"
+placement = "split"
+command = ["./scripts/amy.sh", "wall"]
+
 [[actions]]
 id = "open-board"
 title = "Open amy board"
@@ -42,3 +50,10 @@ title = "Quick capture"
 description = "Capture a task into today's daily note without leaving what you are doing."
 contexts = ["workspace"]
 command = ["bash", "scripts/quick-capture.sh"]
+
+[[actions]]
+id = "toggle-wall"
+title = "Toggle wall"
+description = "Show what agents produced for this workspace in a split on the right, or close it if it is open."
+contexts = ["workspace"]
+command = ["bash", "scripts/toggle-wall.sh"]

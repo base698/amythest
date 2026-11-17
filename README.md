@@ -162,6 +162,29 @@ a board as a card, send to an agent — never writing state back). Run
 mode with demo data; real credentials are env-only: `JIRA_EMAIL`,
 `JIRA_API_TOKEN`). `0` shows each source's health.
 
+`amy wall` is a feed of what agents produced for one Work project, newest
+first: commits (Enter shows the captured diff) and images drawn inline
+(Enter enlarges). It is meant for a pane beside the work and needs the Work
+module enabled on the server.
+
+```sh
+amy wall                  # the current herdr workspace's project
+amy wall -project robot   # a named project; p switches inside the wall
+amy wall -list            # print the feed as text and exit
+```
+
+- **Terminal herdr:** the plugin in `herdr/` has a `toggle-wall` action that
+  opens the wall in a split on the right and closes it again. Bind it with
+  `type = "plugin_action"`, `command = "amythest.toggle-wall"`.
+- **Herdr App:** bind a key in `keys.json` to
+  `{"command": "terminal.open", "args": {"place": "right", "argv": ["/path/to/amy", "wall", "-pane"]}}`.
+  With `-pane` the same key closes an open wall and quitting closes the pane.
+  The App does not search your shell's PATH, so give the full path.
+- **Images:** real pixels through Kitty graphics where the terminal draws
+  Unicode image placeholders: the Herdr App, kitty, Ghostty, and terminal
+  herdr when the terminal it runs in answers a graphics query. Coloured half
+  blocks elsewhere. `-images kitty|blocks|off` overrides the choice.
+
 ## Layout
 
 ```
