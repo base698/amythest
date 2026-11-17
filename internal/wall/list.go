@@ -21,15 +21,17 @@ func DetectGraphics(getenv func(string) string, answers func() bool) string {
 	switch {
 	case getenv("TMUX") != "":
 		return "blocks" // tmux does not pass image uploads through
-	case getenv("HC_TERMINAL_ID") != "":
-		return "kitty" // Herdr App terminals
 	case getenv("HERDR_ENV") == "1":
 		// Terminal herdr draws placeholder images itself, but only when the
 		// terminal it runs in can show them, which it reports by answering.
+		// Checked before the Herdr App: a herdr started inside an App
+		// terminal carries that terminal's variables too.
 		if answers != nil && answers() {
 			return "kitty"
 		}
 		return "blocks"
+	case getenv("HC_TERMINAL_ID") != "":
+		return "kitty" // Herdr App terminals
 	case getenv("KITTY_WINDOW_ID") != "", getenv("TERM") == "xterm-kitty", getenv("TERM") == "xterm-ghostty", getenv("TERM_PROGRAM") == "ghostty":
 		return "kitty"
 	}

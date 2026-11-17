@@ -44,6 +44,16 @@ func Locate(getenv func(string) string, run Runner) Place {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
+	// Terminal herdr first: it sets these for every pane it owns, while a
+	// herdr started from inside a Herdr App terminal also inherits that
+	// terminal's HC_TERMINAL_ID, which describes the wrong place.
+	if ws := getenv("HERDR_WORKSPACE_ID"); ws != "" {
+		bin := getenv("HERDR_BIN_PATH")
+		if bin == "" {
+			bin = "herdr"
+		}
+		return locateHerdr(ctx, bin, ws, run)
+	}
 	if id := getenv("HC_TERMINAL_ID"); id != "" {
 		// A terminal the App has just opened is placed in its space a moment
 		// after its program starts; ask again rather than give up at once.
@@ -57,13 +67,6 @@ func Locate(getenv func(string) string, run Runner) Place {
 			p = locateApp(ctx, id, run)
 		}
 		return p
-	}
-	if ws := getenv("HERDR_WORKSPACE_ID"); ws != "" {
-		bin := getenv("HERDR_BIN_PATH")
-		if bin == "" {
-			bin = "herdr"
-		}
-		return locateHerdr(ctx, bin, ws, run)
 	}
 	return Place{}
 }

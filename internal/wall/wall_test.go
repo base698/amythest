@@ -261,6 +261,11 @@ func TestLocateInTerminalHerdr(t *testing.T) {
 	if p := Locate(env(nil), run); p.Host != "" || p.Project != "" {
 		t.Fatalf("outside herdr: %+v", p)
 	}
+	// A herdr started from inside a Herdr App terminal: the pane is herdr's.
+	nested := env(map[string]string{"HERDR_WORKSPACE_ID": "w2", "HERDR_BIN_PATH": "/opt/herdr", "HC_TERMINAL_ID": "t9"})
+	if p := Locate(nested, run); p.Host != "herdr" || p.Project != "robot" {
+		t.Fatalf("nested: %+v", p)
+	}
 }
 
 func TestProjectForPrefersTheWorkspacesOwnSessions(t *testing.T) {
@@ -301,6 +306,9 @@ func TestDetectGraphics(t *testing.T) {
 	herdr := env(map[string]string{"HERDR_ENV": "1", "TERM_PROGRAM": "ghostty"})
 	if DetectGraphics(herdr, yes) != "kitty" || DetectGraphics(herdr, no) != "blocks" || DetectGraphics(herdr, nil) != "blocks" {
 		t.Error("terminal herdr must follow the terminal's answer")
+	}
+	if got := DetectGraphics(env(map[string]string{"HERDR_ENV": "1", "HC_TERMINAL_ID": "t1"}), no); got != "blocks" {
+		t.Errorf("herdr inside a Herdr App terminal: %s", got)
 	}
 	if got := DetectGraphics(env(map[string]string{"TMUX": "/tmp/x", "HC_TERMINAL_ID": "t1"}), yes); got != "blocks" {
 		t.Errorf("tmux: %s", got)
