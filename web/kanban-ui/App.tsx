@@ -1,4 +1,4 @@
-import { WorkPanel, WorkInbox, WorkContext, useWorkEnabled } from './Work'
+import { WorkPanel, WorkContext, useWorkEnabled } from './Work'
 import { WorkProjects } from './WorkProject'
 import { BoardWorkspace } from './BoardWorkspace'
 import { FormEvent, useContext, useEffect, useRef, useState, type CSSProperties } from 'react'
@@ -788,7 +788,6 @@ function FocusView({ boards, tasks, taskError, busy, onOpen, onOpenTask, onCompl
     </header>
     <FocusSearch query={query} onChange={setQuery} notesBase={NOTES_BASE} boards={boards} tasks={tasks} busy={busy} taskError={taskError} onOpen={onOpen} onOpenTask={onOpenTask} onCompleteTask={onCompleteTask} />
     {!query.trim() && <>
-    <WorkInbox boards={boards} onOpen={onOpen} />
     <WorkProjects boards={boards} onOpen={onOpen} />
     <FocusReviewSection boards={boards} busy={busy} onOpen={onOpen} />
     {busy && boards.length === 0 ? <div className="center-screen"><div className="spinner" aria-label="Loading focus" /></div> : <>
