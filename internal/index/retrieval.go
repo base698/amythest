@@ -221,6 +221,13 @@ func (d *DB) SearchWithOptions(q string, o SearchOptions) ([]SearchResult, error
 		where = append(where, "kind=?")
 		args = append(args, o.Kind)
 	}
+	if query != "" {
+		// A title lookup should find that document before short task mentions
+		// or body matches. BM25 alone penalizes long notes even with title boosts.
+		titleQuery := strings.ToLower(strings.Join(strings.Fields(strings.ReplaceAll(strings.Join(words, " "), `"`, "")), " "))
+		order = "CASE WHEN lower(trim(title)) = ? THEN 0 ELSE 1 END, archived, " + score + ", source_date DESC, slug, kind"
+		args = append(args, titleQuery)
+	}
 	args = append(args, o.Limit)
 	rows, err := d.r.Query(`SELECT slug,title,`+excerpt+`,`+score+`,archived,archived_reason,kind,source_date,date_source,url FROM retrieval_fts WHERE `+strings.Join(where, " AND ")+` ORDER BY `+order+` LIMIT ?`, args...)
 	if err != nil {

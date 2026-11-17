@@ -17,7 +17,7 @@ import (
 // renderVersion participates in change detection: bump it whenever the
 // renderer's HTML output changes shape, and every note re-renders on the
 // next reconcile without anyone having to delete the data dir.
-const renderVersion = "12"
+const renderVersion = "13"
 
 // versionedHash is a note's change-detection identity: its own content hash
 // plus a fingerprint of the notes it directly transcludes, so a note's
@@ -286,7 +286,7 @@ func collectTags(n *vault.Note, res *markdown.Result) []string {
 // archivedStatus reports whether a note counts as archived and why, so
 // search results can show provenance. Checked in priority order: an
 // explicit frontmatter `archived: true`, a frontmatter `status: archived`,
-// then an `archive`/`archived` tag — which also covers kanban `done.md`
+// then an `archive`/`archived` tag or directory — which also covers kanban `done.md`
 // boards, whose renderer tags completed cards `archive` (board/store.go).
 func archivedStatus(n *vault.Note, tags []string) (archived bool, reason string) {
 	if b, ok := n.FM.Meta["archived"].(bool); ok && b {
@@ -298,6 +298,14 @@ func archivedStatus(n *vault.Note, tags []string) (archived bool, reason string)
 	for _, t := range tags {
 		if t == "archive" || t == "archived" {
 			return true, "tag:archive"
+		}
+	}
+	// Folder placement is an archive decision too, including nested archives.
+	// Match complete directory names, not filenames or names like Archive Research.
+	dirs := strings.Split(n.Path, "/")
+	for _, dir := range dirs[:len(dirs)-1] {
+		if strings.EqualFold(dir, "archive") || strings.EqualFold(dir, "archived") {
+			return true, "folder:archive"
 		}
 	}
 	return false, ""

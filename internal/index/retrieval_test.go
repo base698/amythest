@@ -87,3 +87,86 @@ func TestRetrievalRejectsInvalidFilters(t *testing.T) {
 		}
 	}
 }
+
+func TestTitleLookupPrefersCurrentLongNoteOverMentionsAndArchive(t *testing.T) {
+	root := t.TempDir()
+	writeNote(t, root, "Projects/Release Plan.md", "---\ntitle: Release Plan\n---\n"+strings.Repeat("Detailed current project context and history.\n", 1800))
+	writeNote(t, root, "Archive/Old/Release Plan.md", "---\ntitle: Release Plan\n---\nOld release plan.\n- [ ] Review release plan\n")
+	writeNote(t, root, "Tasks.md", "- [ ] Follow the release plan\n")
+	writeNote(t, root, "Journal.md", "The release plan is mentioned here.\n")
+	v, err := vault.Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.Reconcile(v, markdown.New("/")); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{"release plan", `"Release Plan"`, "  RELEASE   PLAN  ", "release plan type:note", "release plan after:2000-01-01"} {
+		for _, archived := range []bool{false, true} {
+			results, err := db.Search(q, 1, archived)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(results) != 1 || results[0].Slug != "Projects/Release-Plan" || results[0].Kind != "note" {
+				t.Fatalf("query %q, archived %v: expected current note first, got %+v", q, archived, results)
+			}
+		}
+	}
+	results, err := db.Search("release plan", 50, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range results {
+		if strings.HasPrefix(r.Slug, "Archive/") {
+			t.Fatalf("archived note or task leaked: %+v", r)
+		}
+	}
+	results, err = db.Search("release plan", 50, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivedCount := 0
+	for _, r := range results {
+		if strings.HasPrefix(r.Slug, "Archive/") {
+			archivedCount++
+			if !r.Archived || r.ArchivedReason != "folder:archive" {
+				t.Fatalf("missing archive provenance: %+v", r)
+			}
+		}
+	}
+	if archivedCount != 2 {
+		t.Fatalf("expected archived note and task, got %d", archivedCount)
+	}
+}
+
+func TestArchiveDirectoriesMatchWholeNamesAtAnyDepth(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{"Archive/Old.md", "Projects/aRcHiVeD/Old.md", "Projects/Archive/Older/Old.md", "Archive Research/Current.md", "Projects/Archive.md"} {
+		writeNote(t, root, rel, "A synthetic beacon note.\n")
+	}
+	v, err := vault.Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.Reconcile(v, markdown.New("/")); err != nil {
+		t.Fatal(err)
+	}
+	results, err := db.Search("beacon", 50, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := slugsOf(results)
+	if len(got) != 2 || got[0] != "Archive-Research/Current" || got[1] != "Projects/Archive" {
+		t.Fatalf("wrong folder archive classification: %v", got)
+	}
+}
