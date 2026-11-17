@@ -12,6 +12,7 @@ data/
 *.credential.json
 credential.json
 credentials.json
+*.token
 *.db
 *.db-wal
 *.db-shm
@@ -22,3 +23,8 @@ credentials.json
 hub.json
 codex.json
 __pycache__/
+
+# Personal Telegram development environment and session credentials
+.venv-telegram/
+*.session
+*.session-journal

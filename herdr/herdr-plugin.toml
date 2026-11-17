@@ -74,3 +74,19 @@ title = "Find"
 description = "Search notes, cards, tasks and what agents made; go to the pane where a result happened."
 contexts = ["workspace"]
 command = ["bash", "scripts/find.sh"]
+
+# Optional messaging POC. Start `amy messages serve -demo` first.
+[[panes]]
+id = "messages"
+title = "messages"
+placement = "popup"
+width = "90%"
+height = "80%"
+command = ["./scripts/amy.sh", "messages"]
+
+[[actions]]
+id = "messages"
+title = "Message focus"
+description = "Review messages, reply, attach wall items, or jump into IRC."
+contexts = ["workspace"]
+command = ["bash", "scripts/messages.sh"]

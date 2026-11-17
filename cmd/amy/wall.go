@@ -94,6 +94,9 @@ func showWall(client *apiclient.Client, images string, opts wall.Options, pane s
 	if graphics != "kitty" && graphics != "blocks" && graphics != "off" {
 		return fmt.Errorf("wall: -images must be auto, kitty, blocks or off")
 	}
+	if opts.Share == nil {
+		opts.Share = func(it wall.Item) tea.Cmd { return shareWallItem(client, it) }
+	}
 	out := &serialOut{File: os.Stdout}
 	opts.Graphics, opts.Out, opts.Open = graphics, out, openURL
 	// The terminal reports its size in cells and in pixels; together they give

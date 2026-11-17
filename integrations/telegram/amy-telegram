@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+set -eu
+exec "$HOME/.local/share/amythest-telegram/venv/bin/python" "$HOME/.local/share/amythest-telegram/connector.py" "$@"

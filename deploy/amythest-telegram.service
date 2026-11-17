@@ -1,0 +1,16 @@
+[Unit]
+Description=Amythest personal Telegram connector
+After=network-online.target amythest-messages.service
+Requires=amythest-messages.service
+
+[Service]
+Type=simple
+# Start after interactive login and selecting chats in private messages.json.
+ExecStart=%h/.local/share/amythest-telegram/venv/bin/python %h/.local/share/amythest-telegram/connector.py watch
+Restart=on-failure
+RestartSec=15
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

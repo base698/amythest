@@ -27,6 +27,9 @@ func main() {
 	args := os.Args[1:]
 	if len(args) > 0 {
 		switch args[0] {
+		case "messages":
+			runMessages(args[1:])
+			return
 		case "auth":
 			runAuth(args[1:])
 			return

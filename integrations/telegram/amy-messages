@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+set -eu
+exec "$HOME/.local/share/amythest-messaging/amy" messages "$@"

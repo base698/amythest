@@ -132,6 +132,15 @@ and duration histograms, vault note/asset gauges, rescan health, heap usage,
 and goroutine count. The HTTP series use only method and status-code labels
 to avoid unbounded path cardinality.
 
+### Optional messaging POC
+
+`amy messages demo` opens a terminal attention queue with sample conversations,
+direct replies, attachment selection, and an IRC interface for Irssi. In `amy wall`,
+**Shift+S** opens the reply picker with the selected artifact attached. Demo
+delivery is simulated; optional [Telegram](docs/telegram.md), [Signal](docs/signal.md), and
+[iMessage](docs/imessage.md) connectors add live messages, replies, and attachments after account login. See [Messaging POC](docs/messages-poc.md)
+for the persistent gateway, herdr action, agent grants, and private configuration.
+
 ### amy — terminal client
 
 `amy` is an interactive TUI for a running server: a today view of what's

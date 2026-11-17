@@ -25,6 +25,9 @@ type API interface {
 
 // Options configure a wall.
 type Options struct {
+	// Share opens the message reply picker with a snapshot of the selected item.
+	Share func(Item) tea.Cmd
+
 	Project    string        // show this project; empty: the current herdr workspace
 	Graphics   string        // "kitty", "blocks" or "off"
 	Refresh    time.Duration // how often to look for new items
@@ -80,6 +83,8 @@ const (
 	picReady
 	picFailed
 )
+
+type ShareDone struct{ Err error }
 
 type model struct {
 	api  API
@@ -250,6 +255,11 @@ func (m *model) diffCmd(it Item) tea.Cmd {
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case ShareDone:
+		if msg.Err != nil {
+			return m, m.say("share: " + msg.Err.Error())
+		}
+		return m, m.relayout()
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		return m, m.relayout()
@@ -360,6 +370,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	s := k.String()
+	if s == "S" && m.o.Share != nil && m.view != "pick" && m.cursor < len(m.items) {
+		return m, m.o.Share(m.items[m.cursor])
+	}
 	if s == "ctrl+c" {
 		return m, m.quit()
 	}
@@ -951,6 +964,9 @@ func (m *model) View() string {
 
 	body := make([]string, 0, m.body())
 	hint := "enter view · o open · f filter · s summary · p project · q close"
+	if m.o.Share != nil {
+		hint = "enter view · S reply with item · f filter · s summary · p project · q close"
+	}
 	switch m.view {
 	case "pick":
 		hint = "j/k move · enter choose · esc back"

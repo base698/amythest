@@ -1,0 +1,15 @@
+[Unit]
+Description=Amythest personal Signal connector
+After=network-online.target amythest-messages.service
+Requires=amythest-messages.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 %h/.local/share/amythest-signal/connector.py watch
+Restart=on-failure
+RestartSec=15
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
