@@ -11,6 +11,7 @@ import {
   type FilterMode,
 } from './labels'
 import { searchCards } from './cardSearch'
+import { FocusSearch } from './FocusSearch.ts'
 import { Markdown } from './MarkdownView'
 import { toggleTaskLine } from './markdown'
 import { KANBAN_MOUNT, NOTES_BASE, cardIdFromHash } from './mount.ts'
@@ -765,6 +766,7 @@ function FocusView({ boards, tasks, taskError, busy, onOpen, onOpenTask, onCompl
   onCompleteTask: (task: VaultTask) => void
   onRefresh: () => void
 }) {
+  const [query, setQuery] = useState('')
   const candidates = boards.map((board) => ({
     board,
     staleFocus: Boolean(board.focusCardId && !board.cards.some((card) => card.id === board.focusCardId)),
@@ -777,6 +779,8 @@ function FocusView({ boards, tasks, taskError, busy, onOpen, onOpenTask, onCompl
       <div><p className="eyebrow">Across active boards</p><h1 id="focus-page-title">Focus</h1><p>Explicitly selected focus cards always outrank read-only fallback suggestions. Amythest never changes focus or priority automatically.</p></div>
       <button className="quiet" disabled={busy} onClick={onRefresh} type="button">{busy ? 'Refreshing…' : 'Refresh'}</button>
     </header>
+    <FocusSearch query={query} onChange={setQuery} notesBase={NOTES_BASE} boards={boards} tasks={tasks} busy={busy} taskError={taskError} onOpen={onOpen} onOpenTask={onOpenTask} onCompleteTask={onCompleteTask} />
+    {!query.trim() && <>
     <WorkInbox boards={boards} onOpen={onOpen} />
     <FocusReviewSection boards={boards} busy={busy} onOpen={onOpen} />
     {busy && boards.length === 0 ? <div className="center-screen"><div className="spinner" aria-label="Loading focus" /></div> : <>
@@ -792,6 +796,7 @@ function FocusView({ boards, tasks, taskError, busy, onOpen, onOpenTask, onCompl
       </div>
     </>}
     <FocusTasksSection tasks={tasks} busy={busy} error={taskError} onOpen={onOpenTask} onComplete={onCompleteTask} />
+    </>}
   </section>
 }
 

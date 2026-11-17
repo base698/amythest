@@ -310,7 +310,7 @@ export async function completeFocusTask(notesBase: string, task: VaultTask, csrf
   if (!response.ok) throw new TaskCompletionError(response.status)
 }
 
-export function FocusTasksSection({ tasks, busy, error, onOpen, onComplete }: { tasks: VaultTask[]; busy: boolean; error: string; onOpen: (task: VaultTask) => void; onComplete: (task: VaultTask) => void }) {
+export function FocusTasksSection({ tasks, busy, error, onOpen, onComplete, emptyMessage = 'No open vault tasks.' }: { tasks: VaultTask[]; busy: boolean; error: string; onOpen: (task: VaultTask) => void; onComplete: (task: VaultTask) => void; emptyMessage?: string }) {
   return createElement('section', { className: 'focus-section tasks-section', 'aria-labelledby': 'focus-tasks-title' },
     createElement('div', { className: 'focus-section-heading' },
       createElement('div', null,
@@ -323,7 +323,7 @@ export function FocusTasksSection({ tasks, busy, error, onOpen, onComplete }: { 
     busy && tasks.length === 0
       ? createElement('div', { className: 'focus-section-loading', role: 'status' }, 'Loading open tasks…')
       : tasks.length === 0
-        ? createElement('p', { className: 'muted' }, error ? 'Open tasks are unavailable.' : 'No open vault tasks.')
+        ? createElement('p', { className: 'muted' }, error ? 'Open tasks are unavailable.' : emptyMessage)
         : createElement('div', { className: 'focus-task-list' }, tasks.map((task) =>
             createElement('div', {
               className: 'focus-task-row',

@@ -540,3 +540,14 @@
   .board-tabs { grid-area:tabs; height:38px; min-width:0; overflow-x:auto; width:100%; }
   .top-actions { grid-area:actions; min-width:0; }
 }
+
+.focus-search { margin-bottom: 18px; }
+.focus-search > .card-search { margin-bottom: 6px; }
+.focus-search .card-search label { max-width: 680px; }
+.focus-search > p { font-size: 11px; margin: 6px 0 16px; }
+.focus-search-shortcut { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.focus-search-results h2 { font-size: 17px; margin: 0 0 12px; }
+.focus-note-results { display: grid; gap: 9px; }
+.focus-note-results a { text-decoration: none; }
+.focus-search-archived { align-items: center; color: var(--muted); display: flex; font-size: 11px; gap: 7px; }
+.focus-search-archived input { accent-color: var(--accent); }
