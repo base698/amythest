@@ -541,6 +541,15 @@
   .top-actions { grid-area:actions; min-width:0; }
 }
 
+/* Desktop favorites wrap into the header instead of becoming a scroll strip.
+   Compact layouts already use the board selector in place of favorite tabs. */
+@media (min-width: 651px) {
+  .topbar { height:auto; min-height:58px; }
+  .board-tabs { align-content:center; flex:1 1 auto; flex-wrap:wrap; overflow:visible; padding-block:4px; }
+  .board-tabs button { max-width:100%; min-height:42px; overflow-wrap:anywhere; white-space:normal; }
+  .board-tabs button .board-count { flex-shrink:0; }
+}
+
 .focus-search { margin-bottom: 18px; }
 .focus-search > .card-search { margin-bottom: 6px; }
 .focus-search .card-search label { max-width: 680px; }
