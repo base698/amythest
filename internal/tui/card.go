@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/herdr"
@@ -21,22 +22,27 @@ import (
 var checkboxLineRe = regexp.MustCompile(`^(\s*[-*+]\s+\[)(.)(\])\s*(.*)$`)
 
 type cardView struct {
-	client      *apiclient.Client
-	boardName   string
-	card        board.Card
-	lines       []string // description split on \n; index = 0-based line
-	checkIdxs   []int    // indexes into lines that are checkboxes
-	focus       int      // index into checkIdxs
-	offset      int      // scroll offset in display rows
-	busy        bool
-	pendingEdit bool
-	now         func() time.Time
-	find        finder
-	comment     textinput.Model
-	commenting  bool
-	picker      movePicker
-	agents      agentPicker
-	del         confirm
+	client       *apiclient.Client
+	boardName    string
+	card         board.Card
+	lines        []string // description split on \n; index = 0-based line
+	checkIdxs    []int    // indexes into lines that are checkboxes
+	focus        int      // index into checkIdxs
+	offset       int      // scroll offset in display rows
+	revealFocus  bool
+	jumpLine     int
+	pageRows     int
+	bodyWidth    int
+	focusVisible bool
+	busy         bool
+	pendingEdit  bool
+	now          func() time.Time
+	find         finder
+	comment      textinput.Model
+	commenting   bool
+	picker       movePicker
+	agents       agentPicker
+	del          confirm
 }
 
 // cardAgentsMsg carries the herdr agent list for this card's send picker.
@@ -55,7 +61,7 @@ func newCardView(client *apiclient.Client, boardName string, card board.Card) *c
 	ci := textinput.New()
 	ci.Prompt = "comment: "
 	ci.CharLimit = 4000
-	v := &cardView{client: client, boardName: boardName, card: card, now: time.Now, find: newFinder(), comment: ci}
+	v := &cardView{client: client, boardName: boardName, card: card, now: time.Now, find: newFinder(), comment: ci, jumpLine: -1}
 	v.setDescription(card.Description)
 	return v
 }
@@ -82,8 +88,8 @@ func (v *cardView) setDescription(desc string) {
 	}
 }
 
-func (v *cardView) Title() string   { return v.card.Title }
-func (v *cardView) Busy() bool      { return v.busy }
+func (v *cardView) Title() string { return v.card.Title }
+func (v *cardView) Busy() bool    { return v.busy }
 func (v *cardView) Capturing() bool {
 	return v.find.active() || v.commenting || v.picker.active || v.agents.active || v.del.active
 }
@@ -273,17 +279,35 @@ func (v *cardView) Update(msg tea.Msg) (view, tea.Cmd) {
 		case "j", "down":
 			if v.focus < len(v.checkIdxs)-1 {
 				v.focus++
+				v.revealFocus = true
 			} else {
 				v.offset++
 			}
 		case "k", "up":
 			if v.focus > 0 {
 				v.focus--
+				v.revealFocus = true
 			} else if v.offset > 0 {
 				v.offset--
 			}
+		case "ctrl+d":
+			v.offset += max(1, v.pageRows/2)
+		case "ctrl+u":
+			v.offset = max(0, v.offset-max(1, v.pageRows/2))
+		case "pgdown", "ctrl+f":
+			v.offset += max(1, v.pageRows)
+		case "pgup", "ctrl+b":
+			v.offset = max(0, v.offset-max(1, v.pageRows))
+		case "g", "home":
+			v.offset = 0
+		case "G", "end":
+			v.offset = max(0, len(v.bodyRows(max(8, v.bodyWidth)))-max(1, v.pageRows))
 		case " ":
 			if v.busy || len(v.checkIdxs) == 0 {
+				return v, nil
+			}
+			if v.pageRows > 0 && !v.focusVisible {
+				v.revealFocus = true
 				return v, nil
 			}
 			lineIdx := v.checkIdxs[v.focus]
@@ -476,10 +500,11 @@ func (v *cardView) searchJump(dir int) tea.Cmd {
 	for fi, li := range v.checkIdxs {
 		if li == hit {
 			v.focus = fi
+			v.revealFocus = true
 			return nil
 		}
 	}
-	v.offset = hit
+	v.jumpLine = hit
 	return nil
 }
 
@@ -507,7 +532,9 @@ func (v *cardView) bodyRows(width int) []displayRow {
 		if comment.Author != "" {
 			meta = comment.Author + " · " + meta
 		}
-		rows = append(rows, displayRow{text: dimStyle.Render("· " + meta), line: -1})
+		for _, wrapped := range wrapLine("· "+meta, width) {
+			rows = append(rows, displayRow{text: dimStyle.Render(wrapped), line: -1})
+		}
 		for _, bodyLine := range strings.Split(comment.Body, "\n") {
 			for _, wrapped := range wrapLine("  "+bodyLine, width) {
 				rows = append(rows, displayRow{text: wrapped, line: -1})
@@ -539,31 +566,42 @@ func (v *cardView) View(width, height int) string {
 	if len(v.card.Labels) > 0 {
 		meta = append(meta, dimStyle.Render(strings.Join(v.card.Labels, ", ")))
 	}
-	b.WriteString(" " + columnTitleStyle.Render(v.card.Title) + "\n")
-	b.WriteString(" " + strings.Join(meta, " · ") + "\n\n")
+	var header []string
+	for _, line := range limitedWrap(v.card.Title, max(8, width-4), max(1, height/3)) {
+		header = append(header, " "+columnTitleStyle.Render(line))
+	}
+	metadata := strings.Split(ansi.Wrap(strings.Join(meta, " · "), max(8, width-4), ""), "\n")
+	metaLimit := max(1, height/2-len(header)-1)
+	if len(metadata) > metaLimit {
+		metadata = metadata[:metaLimit]
+		metadata[metaLimit-1] = ansi.Truncate(metadata[metaLimit-1], max(1, width-5), "") + "…"
+	}
+	for _, line := range metadata {
+		header = append(header, " "+line)
+	}
+	header = append(header, dimStyle.Render(" "+strings.Repeat("─", max(1, width-3))))
+	b.WriteString(strings.Join(header, "\n") + "\n")
 
-	bodyWidth := max(20, width-4)
+	bodyWidth := max(8, min(96, width-4))
 	rows := v.bodyRows(bodyWidth)
-
+	bodyHeight := max(1, height-len(header)-1)
+	v.bodyWidth, v.pageRows = bodyWidth, bodyHeight
 	focusLine := -1
 	if len(v.checkIdxs) > 0 {
 		focusLine = v.checkIdxs[v.focus]
 	}
-	// First display row of the focused logical line, for scroll math.
 	focusRow := -1
 	for i, row := range rows {
-		if row.line == focusLine && focusLine >= 0 {
+		if row.line == focusLine && focusLine >= 0 && focusRow < 0 {
 			focusRow = i
-			break
+		}
+		if v.jumpLine >= 0 && row.line == v.jumpLine {
+			v.offset = i
+			v.jumpLine = -1
 		}
 	}
-	bodyHeight := height - 5
-	start := v.offset
-	if start > len(rows)-1 {
-		start = max(0, len(rows)-1)
-		v.offset = start
-	}
-	if focusRow >= 0 {
+	start := max(0, min(v.offset, max(0, len(rows)-bodyHeight)))
+	if v.revealFocus && focusRow >= 0 {
 		if focusRow < start {
 			start = focusRow
 		}
@@ -571,19 +609,25 @@ func (v *cardView) View(width, height int) string {
 			start = focusRow - bodyHeight + 1
 		}
 	}
+	v.revealFocus = false
+	v.offset = start
 	end := min(len(rows), start+bodyHeight)
+	v.focusVisible = focusRow >= start && focusRow < end
 	for i := start; i < end; i++ {
 		row := rows[i]
 		if row.line < 0 {
 			b.WriteString(" " + row.text + "\n")
-			continue
+		} else {
+			b.WriteString(v.renderBodyRow(row, row.line == focusLine) + "\n")
 		}
-		b.WriteString(v.renderBodyRow(row, row.line == focusLine) + "\n")
+	}
+	for i := end - start; i < bodyHeight; i++ {
+		b.WriteString("\n")
 	}
 
-	hint := dimStyle.Render(" space toggle · e edit · c comment · d done · m move · / search · esc back")
+	hint := dimStyle.Render(" Ctrl+D/U scroll · PgDn/PgUp page · space toggle · e edit · c comment · esc back")
 	if len(v.checkIdxs) == 0 {
-		hint = dimStyle.Render(" (no checklist — e edit, c comment, d done, m move, esc back)")
+		hint = dimStyle.Render(" j/k scroll · Ctrl+D/U half page · e edit · c comment · esc back")
 	}
 	if bar := v.find.bar(); bar != "" {
 		hint = " " + bar
@@ -594,7 +638,7 @@ func (v *cardView) View(width, height int) string {
 	if v.del.active {
 		hint = v.del.bar()
 	}
-	b.WriteString(hint)
+	b.WriteString(ansi.Truncate(hint, width, "…"))
 	return b.String()
 }
 
@@ -612,6 +656,8 @@ func (v *cardView) renderBodyRow(row displayRow, focused bool) string {
 		}
 	} else if v.find.query != "" {
 		text = highlight(text, v.find.query)
+	} else if strings.HasPrefix(strings.TrimSpace(v.lines[row.line]), "#") {
+		text = groupHeaderStyle.Render(strings.TrimLeft(text, " #"))
 	}
 	return prefix + text
 }

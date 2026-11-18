@@ -37,10 +37,44 @@ Numbers **1–4** and **7** also navigate while no input has focus. Function key
 leave search fields directly; cancel an editing prompt before navigating.
 Click either panel to focus it; click a wall item to select it. Arrow keys or
 **j/k** move through items, and the mouse wheel scrolls the panel under it.
+Keyboard commands go only to the focused panel; the top bar says
+**keyboard: wall**, **navigation** or **search**. Ctrl+W switches sides without
+changing an unfinished input. Tab keeps its local meaning in Notes/search.
+
+With the wall focused, press **?** for its keys:
+
+| Key | Movement |
+| --- | --- |
+| j / k or ↓ / ↑ | Next / previous item (lines in a diff) |
+| h / l or ← / → | Previous / next gallery tile |
+| Ctrl+D / Ctrl+U | Half page down / up |
+| Space / b or PageDown / PageUp | Full page down / up |
+| Ctrl+E / Ctrl+Y | Scroll one line down / up |
+| g or gg / G, Home / End | First / last item; top / bottom of a diff |
+
+Ctrl+F/B also page down/up when the terminal passes them through. Herdr uses
+Ctrl+B as its command prefix, so **b** or **PageUp** works there without a clash.
+The left panel retains its own keys, including Space to toggle tasks.
+
 Below 105 terminal columns, Ctrl+W/F8 switches between full-width panels. At wider
 sizes both panels remain visible. The wall retains its project when F9 expands
 browsing to All. Its own **p** picker can switch projects. Enter on a search
 artifact opens it in the wall; Escape closes search without closing Amythest.
+
+Boards show **two status columns at a time** (one in a narrow panel). **h/l**
+or left/right slides across the statuses; **j/k** selects cards. Titles wrap,
+with a short description below. Enter opens the complete card. In a card,
+**Ctrl+D/U** scrolls half a page, **PageDown/PageUp** a full page, and **g/G**
+jumps to the beginning/end, including comments below checklists. **j/k** still
+selects checklist items; Space reveals a hidden selection before toggling it.
+
+**Enter on a commit opens its diff across the full dashboard.** Added and
+removed lines have colour and old/new line numbers. **Esc** returns to the
+split wall at the selected item. **[ / ]** jumps between files; **h/l** scrolls
+long lines sideways and **0** resets that offset. **o** opens the file named
+in the diff header on GitHub, at the recorded commit and visible line; removed
+lines/files open at its parent revision. This requires a recorded GitHub repo
+address. Switching panels with Ctrl+W keeps the diff open for your return.
 
 The wall includes this workspace's **canvases** alongside recorded work, newest
 first. Press **c** to toggle canvases only, or **f** to cycle all/media/commits/

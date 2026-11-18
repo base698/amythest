@@ -114,10 +114,14 @@ type model struct {
 	next  int // next Kitty image id
 
 	view      string // "feed", "pick", "zoom" or "diff"
+	help      bool
 	zoom      []string
 	pick      int
 	diff      []string
+	patch     []diffLine
+	diffItem  Item
 	diffTop   int
+	diffLeft  int
 	loading   bool
 	synced    time.Time
 	showing   string // media hash of an image to enlarge once it has loaded
@@ -147,13 +151,15 @@ type (
 		err  error
 	}
 	diffMsg struct {
+		item  Item
 		title string
 		text  string
 		err   error
 	}
-	cardsMsg struct{ titles map[string]string }
-	tickMsg  struct{}
-	flashMsg struct{ text string }
+	cardsMsg  struct{ titles map[string]string }
+	tickMsg   struct{}
+	flashMsg  struct{ text string }
+	redrawMsg struct{}
 )
 
 // New returns the wall as a Bubble Tea model.
@@ -269,12 +275,14 @@ func (m *model) diffCmd(it Item) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		b, err := m.api.WorkMedia(ctx, it.Art.MediaHash, maxDiffBytes)
-		return diffMsg{title: shortRef(it.Art.Ref) + "  " + it.Title, text: string(b), err: err}
+		return diffMsg{item: it, title: shortRef(it.Art.Ref) + "  " + it.Title, text: string(b), err: err}
 	}
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case redrawMsg:
+		return m, m.relayout()
 	case ShareDone:
 		if msg.Err != nil {
 			return m, m.say("share: " + msg.Err.Error())
@@ -287,6 +295,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.say("opened in Herdr")
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
+		if m.view == "diff" {
+			m.diffTop = min(m.diffTop, max(0, len(m.diff)-1))
+			return m, nil // preserve the split feed's layout and scroll position
+		}
 		return m, m.relayout()
 	case startMsg:
 		if msg.err != nil {
@@ -358,6 +370,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.say("no diff: " + msg.err.Error())
 		}
 		m.diff, m.diffTop, m.view = append([]string{msg.title, ""}, strings.Split(strings.ReplaceAll(msg.text, "\t", "    "), "\n")...), 0, "diff"
+		m.patch, m.diffItem, m.diffLeft = parseDiff(m.diff), msg.item, 0
 		return m, nil
 	case tickMsg:
 		next := tea.Tick(m.o.Refresh, func(time.Time) tea.Msg { return tickMsg{} })
@@ -400,14 +413,29 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	s := k.String()
+	if s == "ctrl+c" {
+		return m, m.quit()
+	}
+	if s == "?" {
+		m.help = !m.help
+		return m, nil
+	}
+	if m.help {
+		if s == "esc" || s == "q" || s == "enter" {
+			m.help = false
+		}
+		return m, nil
+	}
+	if m.view == "feed" || m.view == "diff" {
+		if delta, ok := wallScroll(s, m.body()); ok {
+			return m, m.scroll(delta)
+		}
+	}
 	if s == "S" && m.o.Share != nil && m.view != "pick" && m.cursor < len(m.items) {
 		if m.items[m.cursor].Canvas != nil {
 			return m, m.say("Open the canvas and use Copy PNG to share it")
 		}
 		return m, m.o.Share(m.items[m.cursor])
-	}
-	if s == "ctrl+c" {
-		return m, m.quit()
 	}
 	switch m.view {
 	case "pick":
@@ -432,17 +460,30 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "diff":
 		switch s {
 		case "q", "esc", "enter":
-			m.view, m.diff = "feed", nil
+			m.view, m.diff, m.patch = "feed", nil, nil
+			// Let the dashboard restore the split width before laying out the
+			// feed; an intermediate full-width layout could clamp its scroll.
+			return m, func() tea.Msg { return redrawMsg{} }
+		case "o":
+			return m, m.openDiffFile()
+		case "]":
+			m.jumpFile(1)
+		case "[":
+			m.jumpFile(-1)
+		case "l", "right":
+			m.diffLeft += 8
+		case "h", "left":
+			m.diffLeft = max(0, m.diffLeft-8)
+		case "0":
+			m.diffLeft = 0
 		case "j", "down":
 			return m, m.scroll(1)
 		case "k", "up":
 			return m, m.scroll(-1)
-		case "ctrl+d", "pgdown", " ":
-			return m, m.scroll(m.body())
-		case "ctrl+u", "pgup":
-			return m, m.scroll(-m.body())
 		case "g", "home":
 			m.diffTop = 0
+		case "G", "end":
+			m.diffTop = max(0, len(m.diff)-m.body())
 		}
 		return m, nil
 	case "zoom":
@@ -470,10 +511,6 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.summary = !m.summary
 		m.top = 0
 		return m, m.relayout()
-	case "ctrl+d", "pgdown", " ":
-		return m, m.scroll(m.body())
-	case "ctrl+u", "pgup":
-		return m, m.scroll(-m.body())
 	case "g", "home":
 		m.cursor = 0
 		return m, m.reveal()
@@ -529,6 +566,26 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.open()
 	}
 	return m, nil
+}
+
+// Paging scrolls screen rows, so large previews can be read without jumping
+// to the next item. j/k keep selecting items (or lines inside a diff).
+func wallScroll(key string, height int) (int, bool) {
+	switch key {
+	case "ctrl+d":
+		return max(1, height/2), true
+	case "ctrl+u":
+		return -max(1, height/2), true
+	case "ctrl+f", "pgdown", " ":
+		return height, true
+	case "ctrl+b", "pgup", "b":
+		return -height, true
+	case "ctrl+e":
+		return 1, true
+	case "ctrl+y":
+		return -1, true
+	}
+	return 0, false
 }
 
 // show selects the wanted item and opens it: a commit's diff, an image
@@ -684,7 +741,7 @@ func (m *model) reveal() tea.Cmd {
 
 func (m *model) scroll(d int) tea.Cmd {
 	if m.view == "diff" {
-		m.diffTop = max(0, min(m.diffTop+d, len(m.diff)-m.body()))
+		m.diffTop = max(0, min(m.diffTop+d, len(m.diff)-1))
 		return nil
 	}
 	m.top = max(0, min(m.top+d, len(m.lines)-m.body()))
@@ -802,6 +859,9 @@ func clip(s string, w int) string {
 // place on screen when things above it change height.
 func (m *model) relayout() tea.Cmd {
 	if m.w <= 0 || m.h <= 0 {
+		return nil
+	}
+	if m.view == "diff" {
 		return nil
 	}
 	offset, anchored := 0, m.cursor < len(m.start)
@@ -1046,7 +1106,13 @@ func (m *model) View() string {
 	}
 	var b strings.Builder
 	title := "wall"
-	if m.project != "" {
+	if m.view == "diff" {
+		title = "diff"
+		if row := m.diffTarget(); row != nil {
+			title += " · " + row.file
+		}
+	}
+	if m.project != "" && m.view != "diff" {
 		title += " · " + m.project
 	}
 	right := ""
@@ -1055,19 +1121,48 @@ func (m *model) View() string {
 		right = bad.Render(clip("error: "+m.err.Error(), m.w-lipgloss.Width(title)-3))
 	case m.loading:
 		right = dim.Render("loading…")
+	case m.view == "diff":
+		right = dim.Render(fmt.Sprintf("%d–%d / %d", m.diffTop+1, min(len(m.diff), m.diffTop+m.body()), len(m.diff)))
 	case m.view == "feed":
 		right = dim.Render(fmt.Sprintf("%d %s · %s", len(m.items), map[string]string{"all": "items", "media": "media", "code": "commits", "canvas": "canvases"}[m.filter], ago(m.synced, m.o.Now())))
 	}
+	title = clip(title, max(0, m.w-lipgloss.Width(right)-3))
 	gap := max(1, m.w-lipgloss.Width(title)-lipgloss.Width(right)-2)
-	b.WriteString(" " + strong.Render(clip(title, m.w-2)) + strings.Repeat(" ", gap) + right + "\n")
+	b.WriteString(" " + strong.Render(title) + strings.Repeat(" ", gap) + right + "\n")
 	b.WriteString(dim.Render(strings.Repeat("─", m.w)) + "\n")
 
 	body := make([]string, 0, m.body())
-	hint := "↑↓ move · enter view · c canvases · f filter · o browser · s summary · p project · q close"
+	hint := "j/k ↑↓ move · Space/b page · ? keys · enter view · c canvases · f filter · o browser · s summary · p project · q close"
 	if m.o.Share != nil {
-		hint = "↑↓ move · enter view · c canvases · S reply · f filter · s summary · p project · q close"
+		hint = "j/k ↑↓ move · Space/b page · ? keys · enter view · c canvases · S reply · f filter · s summary · p project · q close"
 	}
-	switch m.view {
+	view := m.view
+	if m.help {
+		view = "help"
+	}
+	switch view {
+	case "help":
+		hint = "? / Esc return"
+		for _, line := range []string{
+			"Wall keys — only the focused panel receives them",
+			"j/k or ↑↓       next / previous item",
+			"h/l or ←→       previous / next gallery tile",
+			"Ctrl+D / Ctrl+U half page down / up",
+			"Space / b       full page down / up",
+			"PgDn / PgUp     full page down / up",
+			"Ctrl+F / Ctrl+B full page down / up*",
+			"Ctrl+E / Ctrl+Y scroll one line down / up",
+			"g or gg / G     first / last item (Home / End)",
+			"Enter           open selection; Esc backs out",
+			"c canvases · f filter · s summary · r refresh",
+			"o browser · p project · S reply · q close",
+			"Diffs: o open file · [/] previous/next file",
+			"Diffs: h/l horizontal scroll · 0 reset · Esc back",
+			"Dashboard: Ctrl+W/F8 or click to switch panels.",
+			"* Herdr uses Ctrl+B; use b or PgUp there.",
+		} {
+			body = append(body, " "+clip(line, m.w-2))
+		}
 	case "pick":
 		hint = "j/k move · enter choose · esc back"
 		if len(m.projects) == 0 {
@@ -1083,23 +1178,16 @@ func (m *model) View() string {
 			}
 		}
 	case "diff":
-		hint = "j/k scroll · space page · esc back"
-		for _, l := range m.diff[min(m.diffTop, len(m.diff)):] {
+		hint = "Esc back · o open file · [/] files · j/k scroll · Space/b page · h/l sideways · ? keys"
+		for i := min(m.diffTop, len(m.diff)); i < len(m.diff); i++ {
 			if len(body) == m.body() {
 				break
 			}
-			l = clip(l, m.w-1)
-			switch {
-			case strings.HasPrefix(l, "+") && !strings.HasPrefix(l, "+++"):
-				l = added.Render(l)
-			case strings.HasPrefix(l, "-") && !strings.HasPrefix(l, "---"):
-				l = bad.Render(l)
-			case strings.HasPrefix(l, "@@"):
-				l = accent.Render(l)
-			case strings.HasPrefix(l, "diff "), strings.HasPrefix(l, "+++"), strings.HasPrefix(l, "---"):
-				l = strong.Render(l)
+			if i < len(m.patch) {
+				body = append(body, m.patch[i].render(m.w, m.diffLeft))
+			} else {
+				body = append(body, " "+clip(m.diff[i], m.w-1))
 			}
-			body = append(body, " "+l)
 		}
 	case "zoom":
 		hint = "esc back · o open in browser"

@@ -27,6 +27,7 @@ type fakeServer struct {
 	failedOnce       bool
 	toggleCode       int
 	toggleCalls      int
+	addCalls         int
 	contentIndexHits int
 	propertyVersion  string
 }
@@ -58,6 +59,10 @@ func newFakeServer(t *testing.T) *fakeServer {
 				return
 			}
 			fs.sawCSRF[r.URL.Path] = r.Header.Get("X-CSRF-Token")
+			if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions && r.Header.Get("X-CSRF-Token") != "csrf-token" {
+				http.Error(w, "invalid CSRF token", http.StatusForbidden)
+				return
+			}
 			next(w, r)
 		}
 	}
@@ -124,6 +129,7 @@ func newFakeServer(t *testing.T) *fakeServer {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	mux.HandleFunc("POST /api/tasks/add", authed(func(w http.ResponseWriter, r *http.Request) {
+		fs.addCalls++
 		var payload struct {
 			Slug  string `json:"slug"`
 			Daily bool   `json:"daily"`
@@ -393,8 +399,8 @@ func TestCSRFSentOnKanbanWritesButNotTaskToggles(t *testing.T) {
 	if got := srv.sawCSRF["/kanban/api/boards/personal/cards/c1"]; got != "csrf-token" {
 		t.Fatalf("kanban write CSRF = %q", got)
 	}
-	if got := srv.sawCSRF["/api/tasks/toggle"]; got != "" {
-		t.Fatalf("task toggle CSRF = %q, want empty", got)
+	if got := srv.sawCSRF["/api/tasks/toggle"]; got != "csrf-token" {
+		t.Fatalf("task toggle CSRF = %q, want session token", got)
 	}
 }
 
@@ -436,8 +442,8 @@ func TestSetTaskRecurrencePostsExpectedTriple(t *testing.T) {
 	if err := c.SetTaskRecurrence(context.Background(), task, "every 4 days when done"); err != nil {
 		t.Fatal(err)
 	}
-	if got := srv.sawCSRF["/api/tasks/recurrence"]; got != "" {
-		t.Fatalf("recurrence CSRF = %q, want empty (notes-side write)", got)
+	if got := srv.sawCSRF["/api/tasks/recurrence"]; got != "csrf-token" {
+		t.Fatalf("recurrence CSRF = %q, want session token", got)
 	}
 }
 
@@ -471,8 +477,21 @@ func TestAddTaskDailyAndSlugDestinations(t *testing.T) {
 	if err != nil || path != "Inbox.md" {
 		t.Fatalf("slug add: path=%q err=%v", path, err)
 	}
-	if got := srv.sawCSRF["/api/tasks/add"]; got != "" {
-		t.Fatalf("task add CSRF = %q, want empty (notes-side write)", got)
+	if got := srv.sawCSRF["/api/tasks/add"]; got != "csrf-token" {
+		t.Fatalf("task add CSRF = %q, want session token", got)
+	}
+}
+
+func TestAddTaskRefreshesStaleCSRFBeforeWritingOnce(t *testing.T) {
+	srv := newFakeServer(t)
+	c := testClient(t, srv)
+	c.session = &session{Cookie: "amythest_kanban_session=tok", CSRF: "stale", Exp: float64(frozenNow.Add(time.Hour).Unix())}
+	path, err := c.AddTask(context.Background(), "Inbox", false, "Capture this once")
+	if err != nil || path != "Inbox.md" {
+		t.Fatalf("retry add: path=%q err=%v", path, err)
+	}
+	if srv.addCalls != 1 || srv.logins != 1 {
+		t.Fatalf("CSRF retry wrote %d tasks after %d logins", srv.addCalls, srv.logins)
 	}
 }
 

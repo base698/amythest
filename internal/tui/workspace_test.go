@@ -154,6 +154,60 @@ func (p *workspacePanelRecorder) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return p, nil
 }
 
+type expandingWall struct {
+	workspacePanelRecorder
+	expanded bool
+	width    int
+}
+
+func (p *expandingWall) Fullscreen() bool { return p.expanded }
+func (p *expandingWall) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	p.messages = append(p.messages, msg)
+	switch m := msg.(type) {
+	case tea.WindowSizeMsg:
+		p.width = m.Width
+	case tea.KeyMsg:
+		if m.Type == tea.KeyEnter {
+			p.expanded = true
+		}
+		if m.Type == tea.KeyEsc {
+			p.expanded = false
+		}
+	}
+	return p, nil
+}
+
+func TestWorkspaceDiffExpandsAndReturnsWithoutLosingNavigation(t *testing.T) {
+	w := workspaceFixture()
+	p := &expandingWall{}
+	w.wall = p
+	w.Update(tea.WindowSizeMsg{Width: 160, Height: 30})
+	w.Update(tea.KeyMsg{Type: tea.KeyF2})
+	w.Update(workspaceMsg{"app", w.generation, loadedTasks()})
+	w.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+	splitWidth := p.width
+	w.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if p.width != 160 || !w.wallExpanded() || strings.Contains(w.View(), "water the ferns") {
+		t.Fatal("diff did not take both panels")
+	}
+	w.Update(tea.MouseMsg{X: 7, Y: 5, Button: tea.MouseButtonWheelDown})
+	if got := p.messages[len(p.messages)-1].(tea.MouseMsg); got.X != 7 || got.Y != 4 {
+		t.Fatalf("expanded mouse coordinates: %+v", got)
+	}
+	w.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+	if p.width != splitWidth || !strings.Contains(w.View(), "water the ferns") {
+		t.Fatal("switching focus did not restore navigation")
+	}
+	w.Update(tea.MouseMsg{X: 159, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	if p.width != 160 {
+		t.Fatal("clicking back into the diff did not expand it")
+	}
+	w.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if w.wallExpanded() || p.width != splitWidth || !strings.Contains(w.View(), "water the ferns") {
+		t.Fatal("Escape did not return to original split view")
+	}
+}
+
 func TestWorkspacePanelNavigationPreservesInputs(t *testing.T) {
 	w := workspaceFixture()
 	w.Update(tea.WindowSizeMsg{Width: 140, Height: 35})
@@ -185,6 +239,33 @@ func TestWorkspacePanelNavigationPreservesInputs(t *testing.T) {
 	}
 	if !strings.Contains(w.View(), "Ctrl+W") {
 		t.Fatal("panel switch hidden from the footer")
+	}
+}
+
+func TestWorkspaceWallKeysDoNotReachTasks(t *testing.T) {
+	w := workspaceFixture()
+	w.Update(tea.WindowSizeMsg{Width: 140, Height: 35})
+	w.Update(tea.KeyMsg{Type: tea.KeyF2})
+	w.Update(workspaceMsg{"app", w.generation, loadedTasks()})
+	tasks := w.app.top().(*tasksView)
+	wall := &workspacePanelRecorder{}
+	w.wall = wall
+	start := tasks.cursor
+	w.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+	for _, key := range []tea.KeyMsg{keyMsg("j"), keyMsg(" "), keyMsg("b"), keyMsg("?"), {Type: tea.KeyCtrlD}, {Type: tea.KeyCtrlU}} {
+		_, cmd := w.Update(key)
+		if cmd != nil || tasks.cursor != start || tasks.busy || w.app.help {
+			t.Fatalf("wall key %q affected the left panel", key.String())
+		}
+	}
+	if len(wall.messages) != 6 {
+		t.Fatal("wall did not receive its keys")
+	}
+	w.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+	w.Update(keyMsg("j"))
+	_, cmd := w.Update(keyMsg(" "))
+	if tasks.cursor == start || cmd == nil || !tasks.busy || len(wall.messages) != 6 {
+		t.Fatal("left panel lost its normal move/toggle keys")
 	}
 }
 

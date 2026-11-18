@@ -1,13 +1,54 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/base698/amythest/internal/kanban/board"
 )
+
+func TestBoardTwoColumnsFollowSelectionAndFit(t *testing.T) {
+	v := newBoardView(nil, "example")
+	b := &board.Board{Name: "example"}
+	for _, status := range boardColumns {
+		for i := 0; i < 20; i++ {
+			b.Cards = append(b.Cards, board.Card{ID: fmt.Sprintf("%s-%d", status, i), Status: status,
+				Title:       fmt.Sprintf("Card %02d: a readable title with enough detail to wrap", i),
+				Description: "A short explanation of the work to do next.", Priority: board.P2})
+		}
+	}
+	v.Update(boardLoadedMsg{b: b})
+	for _, width := range []int{40, 70, 100, 160} {
+		v.col, v.firstCol = 0, 0
+		for col := 0; col < 5; col++ {
+			v.col = col
+			v.cursors[col] = 15
+			out := v.View(width, 22)
+			count := 2
+			if width < 70 {
+				count = 1
+			}
+			if v.firstCol > col || col >= v.firstCol+count {
+				t.Fatalf("selected column %d outside window %d", col, v.firstCol)
+			}
+			if !strings.Contains(out, "Card 15:") || !strings.Contains(out, "↑") || !strings.Contains(out, "↓") {
+				t.Fatalf("selected card or overflow markers missing:\n%s", out)
+			}
+			if strings.Count(out, "╭") != count || len(strings.Split(out, "\n")) > 22 {
+				t.Fatalf("wrong number of columns or height at width %d:\n%s", width, out)
+			}
+			for _, line := range strings.Split(out, "\n") {
+				if ansi.StringWidth(line) > width {
+					t.Fatalf("width %d overflow: %q", width, line)
+				}
+			}
+		}
+	}
+}
 
 func loadedBoard() boardLoadedMsg {
 	return boardLoadedMsg{b: &board.Board{

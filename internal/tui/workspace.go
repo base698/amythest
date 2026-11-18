@@ -100,11 +100,16 @@ func workspaceCommand(panel string, generation int, cmd tea.Cmd) tea.Cmd {
 }
 func (w *Workspace) sizes() (int, int, int) {
 	h := max(1, w.height-2)
-	if w.width < 105 {
+	if w.width < 105 || w.wallExpanded() {
 		return max(1, w.width), max(1, w.width), h
 	}
 	right := max(38, w.width*38/100)
 	return max(1, w.width-right-1), right, h
+}
+
+func (w *Workspace) wallExpanded() bool {
+	v, ok := w.wall.(interface{ Fullscreen() bool })
+	return w.wallFocus && ok && v.Fullscreen()
 }
 func (w *Workspace) resize() tea.Cmd {
 	left, right, h := w.sizes()
@@ -146,9 +151,10 @@ func (w *Workspace) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.Y < 1 || m.Y >= w.height-1 {
 			return w, nil
 		}
+		wasExpanded := w.wallExpanded()
 		left, _, _ := w.sizes()
 		inWall := w.wallFocus
-		if w.width >= 105 {
+		if w.width >= 105 && !w.wallExpanded() {
 			if m.X == left {
 				return w, nil
 			}
@@ -162,7 +168,11 @@ func (w *Workspace) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			w.wallFocus = inWall
 		}
 		if inWall {
-			return w, w.deliver("wall", m)
+			cmd := w.deliver("wall", m)
+			if wasExpanded != w.wallExpanded() {
+				return w, tea.Batch(cmd, w.resize())
+			}
+			return w, cmd
 		}
 		if w.searching {
 			return w, w.deliver("search", m)
@@ -202,7 +212,11 @@ func (w *Workspace) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return w, tea.Quit
 		}
 		if key == "f8" || key == "ctrl+w" || ((key == "tab" || key == "shift+tab") && w.tabSwitchesPanels()) {
+			wasExpanded := w.wallExpanded()
 			w.wallFocus = !w.wallFocus
+			if wasExpanded != w.wallExpanded() {
+				return w, w.resize()
+			}
 			return w, nil
 		}
 		if key == "f9" {
@@ -259,6 +273,7 @@ func (w *Workspace) tabSwitchesPanels() bool {
 	return true
 }
 func (w *Workspace) deliver(panel string, msg tea.Msg) tea.Cmd {
+	wasExpanded := w.wallExpanded()
 	var cmd tea.Cmd
 	switch panel {
 	case "wall":
@@ -269,6 +284,9 @@ func (w *Workspace) deliver(panel string, msg tea.Msg) tea.Cmd {
 		}
 	default:
 		_, cmd = w.app.Update(msg)
+	}
+	if wasExpanded != w.wallExpanded() {
+		return tea.Batch(w.command(panel, cmd), w.resize())
 	}
 	return w.command(panel, cmd)
 }
@@ -313,20 +331,26 @@ func (w *Workspace) View() string {
 	}
 	header := headerStyle.Width(w.width).Render(ansi.Truncate(" amy · "+label+" · keyboard: "+active, w.width, "…"))
 	left, right, h := w.sizes()
-	frame := w.app.view(true)
-	if w.searching && w.search != nil {
-		frame = w.search.View()
-	}
-	body := box(frame, left, h)
-	if w.width >= 105 {
-		divider := strings.TrimSuffix(strings.Repeat("│\n", h), "\n")
-		body = lipgloss.JoinHorizontal(lipgloss.Top, body, dimStyle.Render(divider), box(w.wall.View(), right, h))
-	} else if w.wallFocus {
+	var body string
+	if w.wallFocus && (w.width < 105 || w.wallExpanded()) {
 		body = box(w.wall.View(), right, h)
+	} else {
+		frame := w.app.view(true)
+		if w.searching && w.search != nil {
+			frame = w.search.View()
+		}
+		body = box(frame, left, h)
+		if w.width >= 105 {
+			divider := strings.TrimSuffix(strings.Repeat("│\n", h), "\n")
+			body = lipgloss.JoinHorizontal(lipgloss.Top, body, dimStyle.Render(divider), box(w.wall.View(), right, h))
+		}
 	}
 	hint := " Ctrl+W/F8 switch panel · F1 Focus F2 Tasks F3 Boards F4 Notes F7 Search F9 Scope"
 	if w.wallFocus {
-		hint = " Ctrl+W/Tab return · ↑↓ move · Enter view · c canvases · o browser · F9 Scope"
+		hint = " Ctrl+W/Tab return · j/k ↑↓ move · Space/b page · ? keys · Enter view · c canvases"
+		if w.wallExpanded() {
+			hint = " Esc back to wall · o open file · [ / ] previous / next file · j/k scroll · Space/b page · Ctrl+W switch panel"
+		}
 	} else if w.tabSwitchesPanels() {
 		hint = " Tab/Ctrl+W wall · F1 Focus F2 Tasks F3 Boards F4 Notes F7 Search F9 Scope"
 	}

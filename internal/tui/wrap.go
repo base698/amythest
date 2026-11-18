@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // wrapLine soft-wraps one logical line into display rows of at most width
@@ -11,16 +12,14 @@ import (
 // word overflows. Continuation rows inherit the line's leading indentation
 // so wrapped list items stay visually nested.
 func wrapLine(line string, width int) []string {
-	if width < 8 {
-		width = 8
-	}
+	width = max(8, width)
 	if lipgloss.Width(line) <= width {
 		return []string{line}
 	}
 	indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
 	cont := strings.Repeat(" ", lipgloss.Width(indent)+2)
 	if len(cont) >= width {
-		cont = "  "
+		cont = strings.Repeat(" ", min(2, width-1))
 	}
 
 	var rows []string
@@ -43,6 +42,9 @@ func wrapLine(line string, width int) []string {
 			rows = append(rows, current)
 			current = cont + word
 		}
+		if current == "" {
+			current = candidate
+		}
 		// A single word longer than the width gets hard-broken.
 		for lipgloss.Width(current) > limit {
 			cut := truncate(current, limit)
@@ -55,6 +57,15 @@ func wrapLine(line string, width int) []string {
 	}
 	if len(rows) == 0 {
 		return []string{line}
+	}
+	return rows
+}
+
+func limitedWrap(text string, width, limit int) []string {
+	rows := wrapLine(text, width)
+	if len(rows) > limit {
+		rows = rows[:limit]
+		rows[limit-1] = ansi.Truncate(rows[limit-1], max(0, width-1), "") + "…"
 	}
 	return rows
 }

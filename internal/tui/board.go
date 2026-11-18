@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/kanban/board"
@@ -62,13 +63,14 @@ type boardView struct {
 	archive       []board.Card
 	archiveLoaded bool
 
-	col     int
-	cursors [6]int // one per column in boardColumns order
-	offsets [6]int // scroll offset per column
-	busy    bool
-	loaded  bool
-	find    finder
-	picker  movePicker
+	col      int
+	firstCol int
+	cursors  [6]int // one per column in boardColumns order
+	offsets  [6]int // scroll offset per column
+	busy     bool
+	loaded   bool
+	find     finder
+	picker   movePicker
 
 	newCard    textinput.Model
 	addingCard bool
@@ -474,51 +476,78 @@ func (v *boardView) View(width, height int) string {
 	if v.picker.active {
 		return v.picker.view()
 	}
-	colWidth := max(18, width/len(boardColumns)-2)
-	inner := colWidth - 2 // columnStyle pads one cell each side
-	maxRows := max(3, height-4)
+	count := 2
+	if width < 70 {
+		count = 1
+	}
+	v.firstCol = columnWindow(len(boardColumns), v.col, v.firstCol, count)
+	outer := max(6, (width-(count-1))/count)
+	inner := max(2, outer-4)
+	room := max(1, height-7)
 	var columns []string
-	for col, status := range boardColumns {
+	for col := v.firstCol; col < min(len(boardColumns), v.firstCol+count); col++ {
+		status := boardColumns[col]
 		cards := v.columnCards(col)
-		title := columnTitleStyle.Render(fmt.Sprintf("%s (%d)", statusLabels[status], len(cards)))
+		title := fmt.Sprintf("%s (%d)", statusLabels[status], len(cards))
 		if status == board.Done && !v.archiveLoaded {
-			title = columnTitleStyle.Render("Done (…)")
+			title = "Done (…)"
 		}
-		lines := []string{title}
-		selectedRow := func(i int) bool { return col == v.col && i == v.cursors[col] }
-		if len(cards) <= maxRows {
-			v.offsets[col] = 0
-			for i, card := range cards {
-				lines = append(lines, renderCardLine(card, selectedRow(i), inner))
+		blocks := make([][]string, len(cards))
+		for i, card := range cards {
+			blocks[i] = boardCardRows(card, col == v.col && i == v.cursors[col], inner)
+		}
+		off := min(v.offsets[col], max(0, len(cards)-1))
+		if v.cursors[col] < off {
+			off = v.cursors[col]
+		}
+		endAt := func(start int) int {
+			used, end := 0, start
+			for end < len(blocks) {
+				n := min(room, len(blocks[end]))
+				if used+n > room {
+					break
+				}
+				used += n
+				end++
 			}
-		} else {
-			// Scroll window: the cursor stays visible, markers show what's
-			// clipped above and below.
-			visible := max(1, maxRows-2)
-			v.offsets[col] = columnWindow(len(cards), v.cursors[col], v.offsets[col], visible)
-			off := v.offsets[col]
-			above := " "
-			if off > 0 {
-				above = fmt.Sprintf("↑ %d more", off)
-			}
-			lines = append(lines, dimStyle.Render(above))
-			for i := off; i < min(off+visible, len(cards)); i++ {
-				lines = append(lines, renderCardLine(cards[i], selectedRow(i), inner))
-			}
-			if below := len(cards) - (off + visible); below > 0 {
-				lines = append(lines, dimStyle.Render(fmt.Sprintf("↓ %d more", below)))
-			}
+			return end
+		}
+		for off < v.cursors[col] && endAt(off) <= v.cursors[col] {
+			off++
+		}
+		v.offsets[col] = off
+		end := endAt(off)
+		above, below := "", ""
+		if off > 0 {
+			above = fmt.Sprintf("↑ %d more", off)
+		}
+		if end < len(cards) {
+			below = fmt.Sprintf("↓ %d more", len(cards)-end)
+		}
+		lines := []string{columnTitleStyle.Render(ansi.Truncate(title, inner, "…")), dimStyle.Render(above)}
+		var content []string
+		for i := off; i < end; i++ {
+			content = append(content, blocks[i][:min(room, len(blocks[i]))]...)
 		}
 		if len(cards) == 0 {
-			lines = append(lines, dimStyle.Render("—"))
+			content = append(content, dimStyle.Render("—"))
 		}
+		for len(content) < room {
+			content = append(content, "")
+		}
+		lines = append(lines, content...)
+		lines = append(lines, dimStyle.Render(below))
 		style := columnStyle
 		if col == v.col {
 			style = columnFocusStyle
 		}
-		columns = append(columns, style.Width(colWidth).Render(strings.Join(lines, "\n")))
+		if len(columns) > 0 {
+			columns = append(columns, " ")
+		}
+		columns = append(columns, style.Width(outer-2).Render(strings.Join(lines, "\n")))
 	}
-	view := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
+	nav := fmt.Sprintf(" Columns %d–%d of %d · h/l ←→ columns · j/k ↑↓ cards", v.firstCol+1, min(len(boardColumns), v.firstCol+count), len(boardColumns))
+	view := dimStyle.Render(ansi.Truncate(nav, width, "…")) + "\n" + lipgloss.JoinHorizontal(lipgloss.Top, columns...)
 	hint := dimStyle.Render(" enter open · + new card · e edit · d done · m move · / filter · h/l columns")
 	if bar := v.find.filterBar(); bar != "" {
 		hint = " " + bar
@@ -529,7 +558,44 @@ func (v *boardView) View(width, height int) string {
 	if v.del.active {
 		hint = v.del.bar()
 	}
-	return view + "\n" + hint
+	return view + "\n" + ansi.Truncate(hint, width, "…")
+}
+
+// Cards use their column's width for the title and a short description instead
+// of squeezing all six statuses into single-line labels.
+func boardCardRows(card board.Card, selected bool, width int) []string {
+	var rows []string
+	for i, line := range limitedWrap(card.Title, max(1, width-2), 3) {
+		prefix := "  "
+		if selected {
+			line = cursorStyle.Render(line)
+			if i == 0 {
+				prefix = cursorStyle.Render("▸ ")
+			}
+		} else {
+			line = columnTitleStyle.Render(line)
+		}
+		rows = append(rows, prefix+line)
+	}
+	if desc := strings.Join(strings.Fields(card.Description), " "); desc != "" {
+		for _, line := range limitedWrap(desc, max(1, width-2), 2) {
+			rows = append(rows, "  "+dimStyle.Render(line))
+		}
+	}
+	var meta []string
+	if card.Priority != "" && card.Priority != board.P3 {
+		meta = append(meta, priorityBadge(string(card.Priority)))
+	}
+	if card.Blocked {
+		meta = append(meta, blockedStyle.Render("blocked"))
+	}
+	if card.DueDate != "" {
+		meta = append(meta, dueStyle.Render("due "+card.DueDate))
+	}
+	if len(meta) > 0 {
+		rows = append(rows, "  "+ansi.Truncate(strings.Join(meta, " · "), max(1, width-2), "…"))
+	}
+	return append(rows, "")
 }
 
 // renderCardLine renders one card as a single row that never exceeds width

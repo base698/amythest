@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -603,6 +604,60 @@ func TestWallFiltersAndHandlesKeysTypedTogether(t *testing.T) {
 	drive(t, m, keys("f")[0])
 	if !strings.Contains(m.View(), "press o to open in the browser") {
 		t.Errorf("no hint for an image that is not drawn:\n%s", m.View())
+	}
+}
+
+func TestWallVimLessPagingAndHelp(t *testing.T) {
+	snap := &apiclient.WorkSnapshot{}
+	for i := range 60 {
+		snap.Artifacts = append(snap.Artifacts, apiclient.WorkArtifact{ID: fmt.Sprint(i), Kind: "commit", Title: fmt.Sprint("Commit ", i)})
+	}
+	api := &fakeAPI{overview: snap, project: snap}
+	m, _ := newWall(t, api, Options{Project: "Garden", Graphics: "off"})
+	m.summary = false
+	m.relayout()
+	for _, view := range []string{"feed", "diff"} {
+		m.view = view
+		m.diff = make([]string, 200)
+		for _, tc := range []struct {
+			key   tea.KeyMsg
+			delta int
+		}{
+			{tea.KeyMsg{Type: tea.KeyCtrlD}, m.body() / 2}, {tea.KeyMsg{Type: tea.KeyCtrlU}, -m.body() / 2},
+			{tea.KeyMsg{Type: tea.KeyCtrlF}, m.body()}, {tea.KeyMsg{Type: tea.KeyCtrlB}, -m.body()},
+			{tea.KeyMsg{Type: tea.KeyPgDown}, m.body()}, {tea.KeyMsg{Type: tea.KeyPgUp}, -m.body()},
+			{tea.KeyMsg{Type: tea.KeySpace}, m.body()}, {keys("b")[0].(tea.KeyMsg), -m.body()},
+			{tea.KeyMsg{Type: tea.KeyCtrlE}, 1}, {tea.KeyMsg{Type: tea.KeyCtrlY}, -1},
+		} {
+			m.top, m.diffTop = 60, 60
+			drive(t, m, tc.key)
+			got := m.top
+			if view == "diff" {
+				got = m.diffTop
+			}
+			if got != 60+tc.delta {
+				t.Fatalf("%s %s: scrolled to %d, want %d", view, tc.key.String(), got, 60+tc.delta)
+			}
+		}
+		drive(t, m, keys("G")[0])
+		if view == "diff" && m.diffTop != len(m.diff)-m.body() {
+			t.Fatal("G did not reach diff end")
+		}
+		if view == "feed" && m.cursor != len(m.items)-1 {
+			t.Fatal("G did not reach last item")
+		}
+		drive(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("gg")})
+		if (view == "diff" && m.diffTop != 0) || (view == "feed" && m.top != 0) {
+			t.Fatal("gg did not return to top")
+		}
+		drive(t, m, keys("?")[0])
+		if !strings.Contains(m.View(), "Ctrl+D / Ctrl+U") {
+			t.Fatal("help missing movement keys")
+		}
+		drive(t, m, keys("q")[0])
+		if m.help || m.view != view {
+			t.Fatal("closing help lost the active view")
+		}
 	}
 }
 

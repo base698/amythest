@@ -119,8 +119,8 @@ func (c *Client) ensureSession(ctx context.Context, force bool) (*session, error
 }
 
 // do performs one authenticated request. path is relative to the endpoint
-// (e.g. "/api/tasks" or "/kanban/api/boards"). Non-GET kanban requests and
-// note-property writes carry the CSRF token. On 401/403 it re-logs-in once and
+// (e.g. "/api/tasks" or "/kanban/api/boards"). All state-changing requests
+// carry the session's CSRF token. On 401/403 it re-logs-in once and
 // retries, mirroring kanban.py.
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	sess, err := c.ensureSession(ctx, false)
@@ -145,7 +145,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
-		if method != http.MethodGet && (strings.HasPrefix(path, "/kanban/") || strings.HasPrefix(path, "/api/canvas") || path == "/api/notes/property") {
+		if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
 			req.Header.Set("X-CSRF-Token", sess.CSRF)
 		}
 		resp, err := c.http.Do(req)
