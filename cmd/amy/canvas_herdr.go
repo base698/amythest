@@ -229,7 +229,7 @@ func canvasSnapshot(ctx context.Context, client *apiclient.Client, endpoint, id,
 		}
 		out.Files[fid] = path
 	}
-	if meta.Drawing {
+	if meta.Drawing || meta.Stale {
 		if b, err := client.CanvasDrawing(ctx, id, "png"); err == nil {
 			png := filepath.Join(base, canvas.FileName(meta.Title)+".png")
 			if writeFileAtomic(png, b) == nil {

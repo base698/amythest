@@ -545,7 +545,7 @@ func canvasRead(ctx context.Context, client *apiclient.Client, endpoint, id stri
 		changes = sum.Summary.Diff(prev.Summary)
 	}
 	var png string
-	if pngOut != "" && sum.Meta.Drawing {
+	if pngOut != "" && (sum.Meta.Drawing || sum.Meta.Stale) {
 		if png, err = canvasExport(ctx, client, id, "png", pngOut); err != nil {
 			return err
 		}

@@ -1,6 +1,7 @@
 package wall
 
 import (
+	"fmt"
 	"path"
 	"sort"
 	"strings"
@@ -18,6 +19,21 @@ type Item struct {
 	Agent  string
 	When   time.Time
 	Canvas *apiclient.CanvasMeta
+}
+
+// A canvas has a new preview on each revision; uploaded artifacts are
+// content-addressed. Keep those identities separate from their feed IDs.
+func (it Item) pictureKey() string {
+	if c := it.Canvas; c != nil {
+		if c.Drawing || c.Stale {
+			return fmt.Sprintf("canvas:%s:%d", c.ID, c.Rev)
+		}
+		return ""
+	}
+	if it.Kind == "image" && it.Art.Available {
+		return it.Art.MediaHash
+	}
+	return ""
 }
 
 func withCanvases(items []Item, canvases []apiclient.CanvasMeta) []Item {

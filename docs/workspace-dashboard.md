@@ -46,6 +46,8 @@ The wall includes this workspace's **canvases** alongside recorded work, newest
 first. Press **c** to toggle canvases only, or **f** to cycle all/media/commits/
 canvases. **Enter** on a canvas opens its native Herdr pane; **o** explicitly
 opens its browser editor. The list refreshes with the wall (**r** immediately).
+Canvas previews appear below their titles, including drawings made only in the
+native pane; edits replace the preview on the next refresh.
 
 Image previews use pixel graphics in Herdr App and other
 compatible terminals, including inside the dashboard. They clip and resize

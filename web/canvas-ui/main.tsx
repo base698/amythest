@@ -250,7 +250,7 @@ function CanvasList() {
         {items?.map((m) => (
           <li key={m.id}>
             <a href={m.url}>
-              {m.drawing ? <img src={`${base}api/canvas/${m.id}/drawing.png`} alt="" loading="lazy" /> : <span className="blank" />}
+              {m.drawing || m.stale ? <img src={`${base}api/canvas/${m.id}/drawing.png?rev=${m.rev}`} alt="" loading="lazy" /> : <span className="blank" />}
               <span className="title">{m.title}</span>
               <span className="muted">{new Date(m.updated).toLocaleString()}</span>
             </a>

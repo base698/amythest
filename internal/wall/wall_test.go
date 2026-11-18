@@ -350,6 +350,44 @@ type fakeAPI struct {
 	canvases          []apiclient.CanvasMeta
 	canvasAsked       []string
 	canvasErr         error
+	canvasPictures    map[string][]byte
+	canvasDrawn       []string
+}
+
+func (f *fakeAPI) CanvasDrawing(_ context.Context, id, kind string) ([]byte, error) {
+	f.canvasDrawn = append(f.canvasDrawn, id+"."+kind)
+	if b, ok := f.canvasPictures[id]; ok {
+		return b, nil
+	}
+	return nil, errors.New("canvas preview unavailable")
+}
+
+func TestCanvasPreviewsLoadAndRefreshWithoutBrowser(t *testing.T) {
+	c := apiclient.CanvasMeta{Meta: canvas.Meta{ID: "abcdefgh2345", Title: "Native sketch", Rev: 1, Stale: true}}
+	api := &fakeAPI{overview: &apiclient.WorkSnapshot{}, project: &apiclient.WorkSnapshot{},
+		canvases: []apiclient.CanvasMeta{c}, canvasPictures: map[string][]byte{c.ID: picture(t)}}
+	m, out := newWall(t, api, Options{Project: "Garden", Graphics: "kitty"})
+	if len(api.canvasDrawn) != 1 || api.canvasDrawn[0] != c.ID+".png" || !strings.ContainsRune(m.View(), placeholder) {
+		t.Fatal("native canvas did not load and display its preview")
+	}
+	old := m.items[0].pictureKey()
+	api.canvases[0].Rev++
+	for _, msg := range run(m.feedCmd("Garden")) {
+		drive(t, m, msg)
+	}
+	if len(api.canvasDrawn) != 2 || m.pics[old] != nil || !strings.ContainsRune(m.View(), placeholder) {
+		t.Fatal("new canvas revision did not replace the preview")
+	}
+	if !strings.Contains(out.String(), "a=d,d=I") {
+		t.Fatal("old preview was not released")
+	}
+	api.canvases = nil
+	for _, msg := range run(m.feedCmd("Garden")) {
+		drive(t, m, msg)
+	}
+	if len(m.pics) != 0 || strings.ContainsRune(m.View(), placeholder) {
+		t.Fatal("deleted canvas preview remains")
+	}
 }
 
 func (f *fakeAPI) CanvasList(_ context.Context, workspace string) ([]apiclient.CanvasMeta, error) {

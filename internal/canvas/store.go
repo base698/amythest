@@ -305,7 +305,8 @@ func (s *Store) Scene(id string) (Meta, []byte, error) {
 	return m, b, err
 }
 
-// Drawing returns the last rendering; kind is "svg" or "png".
+// Drawing returns the browser rendering, or a current PNG preview when native
+// edits have changed the scene. Previewing never changes the scene revision.
 func (s *Store) Drawing(id, kind string) ([]byte, Meta, error) {
 	dir, err := s.dir(id)
 	if err != nil {
@@ -314,9 +315,34 @@ func (s *Store) Drawing(id, kind string) ([]byte, Meta, error) {
 	if kind != "svg" && kind != "png" {
 		return nil, Meta{}, ErrNotFound
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	m, err := readMeta(dir)
 	if err != nil {
 		return nil, Meta{}, err
+	}
+	if kind == "png" && (m.Stale || !m.Drawing) {
+		rev := strconv.FormatInt(m.Rev, 10)
+		cached, _ := os.ReadFile(filepath.Join(dir, "preview.rev"))
+		if string(cached) == rev {
+			if b, err := os.ReadFile(filepath.Join(dir, "preview.png")); err == nil {
+				return b, m, nil
+			}
+		}
+		scene, err := os.ReadFile(filepath.Join(dir, "scene.json"))
+		if err != nil {
+			return nil, m, err
+		}
+		b, err := previewPNG(scene)
+		if err != nil {
+			return nil, m, err
+		}
+		// A failed cache write must not prevent a read, nor mark an old PNG
+		// current. Both files are protected by the store lock.
+		if writeAtomic(filepath.Join(dir, "preview.png"), b) == nil {
+			_ = writeAtomic(filepath.Join(dir, "preview.rev"), []byte(rev))
+		}
+		return b, m, nil
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "drawing."+kind))
 	if errors.Is(err, os.ErrNotExist) {

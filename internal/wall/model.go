@@ -21,6 +21,7 @@ type API interface {
 	WorkMedia(ctx context.Context, hash string, limit int64) ([]byte, error)
 	CardTitles(ctx context.Context, ids []string) (map[string]string, error)
 	CanvasList(ctx context.Context, workspace string) ([]apiclient.CanvasMeta, error)
+	CanvasDrawing(ctx context.Context, id, kind string) ([]byte, error)
 	Endpoint() string
 }
 
@@ -203,11 +204,18 @@ func (m *model) feedCmd(project string) tea.Cmd {
 	}
 }
 
-func (m *model) picCmd(hash string) tea.Cmd {
+func (m *model) picCmd(it Item) tea.Cmd {
+	hash := it.pictureKey()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		b, err := m.api.WorkMedia(ctx, hash, maxImageBytes)
+		var b []byte
+		var err error
+		if it.Canvas != nil {
+			b, err = m.api.CanvasDrawing(ctx, it.Canvas.ID, "png")
+		} else {
+			b, err = m.api.WorkMedia(ctx, hash, maxImageBytes)
+		}
 		if err != nil {
 			return picMsg{hash: hash, err: err}
 		}
@@ -314,6 +322,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.canvasErr = msg.canvasErr
 		m.all, m.snap = withCanvases(buildFeed(msg.snap), msg.canvases), msg.snap
+		m.prunePictures()
 		m.applyFilter(keep)
 		titles := m.cardsCmd()
 		if want := m.o.Show; want != nil {
@@ -690,15 +699,34 @@ func (m *model) scroll(d int) tea.Cmd {
 }
 
 func (m *model) picOf(it Item) *pic {
-	if it.Kind != "image" || it.Art.MediaHash == "" || !it.Art.Available {
+	key := it.pictureKey()
+	if key == "" {
 		return nil
 	}
-	p := m.pics[it.Art.MediaHash]
+	p := m.pics[key]
 	if p == nil {
 		p = &pic{placed: map[[2]int]int{}, blocks: map[[2]int][]string{}}
-		m.pics[it.Art.MediaHash] = p
+		m.pics[key] = p
 	}
 	return p
+}
+
+// Drop deleted items and superseded canvas revisions, including their terminal
+// uploads. Late downloads are ignored because their cache key no longer exists.
+func (m *model) prunePictures() {
+	keep := make(map[string]bool, len(m.all))
+	for _, it := range m.all {
+		keep[it.pictureKey()] = true
+	}
+	for key, p := range m.pics {
+		if keep[key] {
+			continue
+		}
+		for _, id := range p.placed {
+			io.WriteString(m.o.Out, kittyDelete(id))
+		}
+		delete(m.pics, key)
+	}
 }
 
 // imageRows returns the text rows that draw a loaded image in a box of at most
@@ -983,7 +1011,7 @@ func (m *model) want() []tea.Cmd {
 		if p.state == picNone && m.fetching < maxFetching && m.near(first, end) {
 			p.state = picLoading
 			m.fetching++
-			cmds = append(cmds, m.picCmd(it.Art.MediaHash))
+			cmds = append(cmds, m.picCmd(it))
 		}
 		if p.state == picReady {
 			loaded++

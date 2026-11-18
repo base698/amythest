@@ -16,6 +16,15 @@ Mermaid, images or text back.
 - **Browser:** `/canvas/` lists every canvas with thumbnails.
   Each has a **Delete** button; confirmation permanently removes that canvas,
   its drawing and pending inputs. Existing links to it will stop working.
+- **Workspace dashboard:** the wall shows a preview beneath each canvas.
+  Native edits appear without opening the browser, and refresh with the wall.
+  Enter still opens the native editor.
+
+Native drawings get a server-rendered PNG preview with shapes, text, arrows,
+freehand strokes and embedded bitmap images. It uses a standard font and clean
+lines; the browser's exported PNG takes over when available. SVG image embeds
+need a browser export for their full rendering. Previews are cached by revision
+without changing the saved scene.
 
 Inside a Herdr space a new canvas belongs to that workspace, and to its board
 (the `cli.yaml` workspace mapping, else a board named after the workspace).

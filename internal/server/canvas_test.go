@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -12,6 +14,31 @@ import (
 	"github.com/base698/amythest/internal/canvas"
 	"github.com/base698/amythest/internal/config"
 )
+
+func TestNativeCanvasDrawingRouteRendersWithoutBrowser(t *testing.T) {
+	s := newCanvasServer(t)
+	auth := withSessionCSRF(t, s)
+	m, _ := s.canvases.Create("Native sketch", canvas.Placement{})
+	_, err := s.canvases.ApplyOps(m.ID, canvas.Ops{Upsert: []map[string]any{{"id": "shape", "type": "ellipse", "x": -100, "y": -100, "width": 200, "height": 100}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/canvas/" + m.ID + "/drawing.png"
+	if w := canvasDo(s, nil, "GET", path, ""); w.Code != http.StatusUnauthorized {
+		t.Fatal("private preview exposed")
+	}
+	w := canvasDo(s, auth, "GET", path, "")
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("preview: %d %s", w.Code, w.Body)
+	}
+	if _, err := png.Decode(bytes.NewReader(w.Body.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+	meta, _ := s.canvases.Meta(m.ID)
+	if meta.Rev != 1 || !meta.Stale || meta.Drawing {
+		t.Fatal("preview changed the saved scene metadata")
+	}
+}
 
 func newCanvasServer(t *testing.T) *Server {
 	t.Helper()
