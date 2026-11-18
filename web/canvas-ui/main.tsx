@@ -626,53 +626,65 @@ function Editor({ id }: { id: string }) {
 
   return (
     <div className="canvas-shell">
+      <header className="canvas-bar">
+        <a className="canvas-home" href={`${base}canvas/`} title="All canvases" aria-label="All canvases">
+          ←
+        </a>
+        <input
+          className="canvas-title"
+          value={title}
+          aria-label="Canvas title"
+          onChange={(e) => {
+            setTitle(e.target.value)
+            titleDirtyRef.current = true
+            setStatus("dirty")
+            scheduleSave()
+          }}
+        />
+        <span className={`canvas-status ${status}`} title={message}>
+          {statusLabel[status]}
+        </span>
+        <span className="canvas-bar-spacer" />
+        <button className="wide-only" onClick={() => setMermaidOpen(true)} title="Paste Mermaid to draw it">
+          Mermaid
+        </button>
+        <button className="wide-only" onClick={copyPNG} title="Copy as PNG for messages, notes, chat">
+          Copy PNG
+        </button>
+        <details className="canvas-menu">
+          <summary>More</summary>
+          <div>
+            <button className="narrow-only" onClick={() => setMermaidOpen(true)}>Draw from Mermaid</button>
+            <button className="narrow-only" onClick={copyPNG}>Copy PNG</button>
+            <button onClick={() => download("png")}>Download PNG</button>
+            <button onClick={() => download("svg")}>Download SVG</button>
+            <button onClick={saveToNote}>Save to note</button>
+            <button onClick={copyID}>Copy canvas id</button>
+          </div>
+        </details>
+        <button className="primary" onClick={() => setSendOpen(true)} title="Hand this to the agent waiting on it">
+          Send<span className="wide-only"> to agent</span>
+          {meta && meta.sent > 0 ? ` (${meta.sent})` : ""}
+        </button>
+      </header>
+      <div className="canvas-stage">
       <ex.Excalidraw
-        excalidrawAPI={(a) => (apiRef.current = a)}
+        excalidrawAPI={(a) => {
+          if (apiRef.current) return
+          apiRef.current = a
+          // Open showing the whole drawing, wherever it was last scrolled.
+          window.setTimeout(() => {
+            const els = a.getSceneElements()
+            if (els.length) a.scrollToContent(els, { fitToContent: true, animate: false })
+          }, 60)
+        }}
         initialData={initial}
         onChange={onChange as any}
         theme={dark ? "dark" : "light"}
         name={title}
         UIOptions={{ canvasActions: { loadScene: true, saveToActiveFile: false, export: { saveFileToDisk: true } } }}
-        renderTopRightUI={() => (
-          <div className="canvas-actions">
-            <a className="ghost" href={`${base}canvas/`} title="All canvases">
-              ☰
-            </a>
-            <input
-              className="canvas-title"
-              value={title}
-              aria-label="Canvas title"
-              onChange={(e) => {
-                setTitle(e.target.value)
-                titleDirtyRef.current = true
-                setStatus("dirty")
-                scheduleSave()
-              }}
-            />
-            <span className={`canvas-status ${status}`} title={message}>
-              {statusLabel[status]}
-            </span>
-            <button onClick={() => setMermaidOpen(true)} title="Paste Mermaid to draw it">
-              Mermaid
-            </button>
-            <button onClick={copyPNG} title="Copy as PNG for messages, notes, chat">
-              Copy PNG
-            </button>
-            <details className="canvas-menu">
-              <summary>More</summary>
-              <div>
-                <button onClick={() => download("png")}>Download PNG</button>
-                <button onClick={() => download("svg")}>Download SVG</button>
-                <button onClick={saveToNote}>Save to note</button>
-                <button onClick={copyID}>Copy canvas id</button>
-              </div>
-            </details>
-            <button className="primary" onClick={() => setSendOpen(true)} title="Hand this to the agent waiting on it">
-              Send to agent{meta && meta.sent > 0 ? ` (${meta.sent})` : ""}
-            </button>
-          </div>
-        )}
       />
+      </div>
       {status === "conflict" && (
         <div className="canvas-banner">
           {message}

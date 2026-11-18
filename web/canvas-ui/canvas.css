@@ -43,42 +43,93 @@ body {
   color: var(--cv-muted);
 }
 
-.canvas-actions {
+/* App bar above the drawing: everything of ours lives here, so Excalidraw's
+   own toolbars keep their space. */
+.canvas-shell {
+  display: flex;
+  flex-direction: column;
+}
+.canvas-bar {
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  gap: 8px;
+  height: 48px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--cv-border);
+  background: var(--cv-panel);
+  box-sizing: border-box;
+  z-index: 5;
 }
-.canvas-actions button,
-.canvas-actions summary,
-.canvas-actions .ghost,
+.canvas-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.canvas-bar-spacer {
+  flex: 1;
+}
+.canvas-home {
+  font-size: 18px;
+  line-height: 1;
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: var(--cv-muted);
+  text-decoration: none;
+}
+.canvas-home:hover {
+  background: var(--cv-bg);
+  color: var(--cv-fg);
+}
+.canvas-bar button,
+.canvas-bar summary,
 .canvas-list button,
 .canvas-dialog button,
 .canvas-banner button {
   font: inherit;
   font-size: 13px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   border-radius: 8px;
   border: 1px solid var(--cv-border);
   background: var(--cv-panel);
   color: var(--cv-fg);
   cursor: pointer;
-  text-decoration: none;
   line-height: 1.2;
   white-space: nowrap;
 }
-.canvas-actions button.primary,
+.canvas-bar button:hover,
+.canvas-bar summary:hover {
+  border-color: var(--cv-muted);
+}
+.canvas-bar button.primary,
 .canvas-list button.primary,
 .canvas-dialog button.primary {
   background: var(--cv-accent);
   border-color: var(--cv-accent);
   color: var(--cv-accent-fg);
 }
+.narrow-only {
+  display: none;
+}
+@media (max-width: 720px) {
+  .canvas-bar .wide-only,
+  .canvas-bar button.wide-only {
+    display: none;
+  }
+  .canvas-menu .narrow-only {
+    display: block;
+  }
+  .canvas-bar {
+    gap: 6px;
+    padding: 0 8px;
+  }
+}
 .canvas-title {
   font: inherit;
-  font-size: 13px;
-  width: 14rem;
+  font-size: 15px;
+  font-weight: 600;
+  min-width: 0;
+  width: 18rem;
   max-width: 40vw;
   padding: 6px 8px;
   border-radius: 8px;
@@ -95,7 +146,7 @@ body {
 .canvas-status {
   font-size: 12px;
   color: var(--cv-muted);
-  min-width: 4.5rem;
+  white-space: nowrap;
 }
 .canvas-status.saved {
   color: var(--cv-ok);
@@ -261,6 +312,10 @@ body {
 }
 @media (max-width: 720px) {
   .canvas-title {
-    width: 8rem;
+    width: auto;
+    flex: 1;
+  }
+  .canvas-status {
+    display: none;
   }
 }
