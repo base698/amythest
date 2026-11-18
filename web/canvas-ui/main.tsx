@@ -235,6 +235,9 @@ function CanvasList() {
   }
   return (
     <div className="canvas-list">
+      <nav className="canvas-list-nav" aria-label="Breadcrumb">
+        <a className="canvas-notes" href={base} aria-label="Up to Notes">↑ Notes</a>
+      </nav>
       <header>
         <h1>Canvases</h1>
         <button className="primary" onClick={create}>
@@ -637,6 +640,7 @@ function Editor({ id }: { id: string }) {
   if (status === "error" && !initial) {
     return (
       <div className="canvas-list">
+        <a className="canvas-notes" href={base} aria-label="Up to Notes">↑ Notes</a>
         <SignInError message={message} />
         <a href={`${base}canvas/`}>All canvases</a>
       </div>
@@ -659,6 +663,7 @@ function Editor({ id }: { id: string }) {
         <a className="canvas-home" href={`${base}canvas/`} title="All canvases" aria-label="All canvases">
           ←
         </a>
+        <a className="canvas-notes" href={base} aria-label="Up to Notes">↑ Notes</a>
         <input
           className="canvas-title"
           value={title}
