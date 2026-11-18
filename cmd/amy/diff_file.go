@@ -25,11 +25,11 @@ func openWallFile(target wall.FileTarget) tea.Cmd {
 		if err != nil {
 			return wall.FileOpened{Err: err}
 		}
-		root, err := findDiffCheckout(ctx, target.Repo, cwd, nil)
+		root, err := findDiffCheckout(ctx, target, cwd, nil)
 		if err != nil && ctx.Err() == nil && os.Getenv("HC_TERMINAL_ID") != "" {
 			// A dashboard may start in a workspace container directory.
 			// Local Herdr terminals provide additional checkout locations.
-			root, err = findDiffCheckout(ctx, target.Repo, cwd, localTerminalDirs(ctx))
+			root, err = findDiffCheckout(ctx, target, cwd, localTerminalDirs(ctx))
 		}
 		if err != nil {
 			return wall.FileOpened{Err: err}
@@ -59,6 +59,10 @@ func diffVimCommand(root string, target wall.FileTarget) (*exec.Cmd, error) {
 	}
 	cmd := exec.Command("vim", fmt.Sprintf("+%d", max(1, target.Line)), "--", file)
 	cmd.Dir = root
+	// Bubble Tea's graphics writer wraps stdout; os/exec would turn that
+	// wrapper into a pipe, making Vim report "Output is not to a terminal".
+	// ExecProcess pauses Amy's renderer, so Vim can use the terminal directly.
+	cmd.Stdout = os.Stdout
 	return cmd, nil
 }
 
@@ -85,15 +89,27 @@ func localTerminalDirs(ctx context.Context) []string {
 // Prefer the active checkout; otherwise inspect nearby repositories and the
 // local Herdr terminal directories. Match Git identity, never just a folder
 // or filename. This also accepts .git files used by linked worktrees.
-func findDiffCheckout(ctx context.Context, repo, cwd string, extra []string) (string, error) {
+func findDiffCheckout(ctx context.Context, target wall.FileTarget, cwd string, extra []string) (string, error) {
+	repo := target.Repo
 	if repo == "" {
 		return "", fmt.Errorf("no repository recorded for this diff")
+	}
+	if target.Path != "" && !filepath.IsLocal(target.Path) {
+		return "", fmt.Errorf("invalid repository-relative filename")
 	}
 	git := func(dir string, args ...string) string {
 		out, _ := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
 		return strings.TrimSpace(string(out))
 	}
 	seen := map[string]bool{}
+	var matches []string
+	hasFile := func(root string) bool {
+		if target.Path == "" {
+			return true
+		}
+		info, err := os.Stat(filepath.Join(root, target.Path))
+		return err == nil && info.Mode().IsRegular()
+	}
 	probe := func(dir string) string {
 		if dir == "" || seen[dir] || ctx.Err() != nil {
 			return ""
@@ -103,15 +119,22 @@ func findDiffCheckout(ctx context.Context, repo, cwd string, extra []string) (st
 		if root == "" {
 			return ""
 		}
+		matched := false
 		if filepath.IsAbs(repo) {
 			canonical, err := filepath.EvalSymlinks(repo)
 			if err == nil && canonical == root {
-				return root
+				matched = true
 			}
 		}
 		for _, remote := range strings.Split(git(root, "config", "--get-regexp", `^remote\..*\.url$`), "\n") {
 			_, address, ok := strings.Cut(remote, " ")
 			if ok && diffRepoIdentity(address) == diffRepoIdentity(repo) {
+				matched = true
+			}
+		}
+		if matched {
+			matches = append(matches, root)
+			if hasFile(root) {
 				return root
 			}
 		}
@@ -142,8 +165,20 @@ func findDiffCheckout(ctx context.Context, repo, cwd string, extra []string) (st
 			}
 		}
 	}
+	// An older branch can match the repository but lack a newly added file.
+	// Registered worktrees may live outside the workspace's parent folder.
+	for _, root := range matches {
+		for _, field := range strings.Split(git(root, "worktree", "list", "--porcelain", "-z"), "\x00") {
+			if dir, ok := strings.CutPrefix(field, "worktree "); ok && hasFile(dir) {
+				return dir, nil
+			}
+		}
+	}
 	if ctx.Err() != nil {
 		return "", fmt.Errorf("local repository lookup timed out")
+	}
+	if len(matches) > 0 {
+		return "", fmt.Errorf("file missing from local checkouts; sync or switch branch: %s", target.Path)
 	}
 	return "", fmt.Errorf("no local checkout found; open Amy from that repository or its parent folder")
 }

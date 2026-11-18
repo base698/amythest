@@ -58,13 +58,13 @@ func TestDiffFindsMatchingLocalCheckout(t *testing.T) {
 		{"Herdr workspace folder", "github.com/example/demo", home, repo, []string{base}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := findDiffCheckout(context.Background(), tc.identity, tc.cwd, tc.extra)
+			got, err := findDiffCheckout(context.Background(), wall.FileTarget{Repo: tc.identity}, tc.cwd, tc.extra)
 			if err != nil || got != tc.want {
 				t.Fatalf("got %q, %v; want %q", got, err, tc.want)
 			}
 		})
 	}
-	if _, err := findDiffCheckout(context.Background(), "github.com/elsewhere/demo", base, nil); err == nil {
+	if _, err := findDiffCheckout(context.Background(), wall.FileTarget{Repo: "github.com/elsewhere/demo"}, base, nil); err == nil {
 		t.Fatal("matched a repository with only the same basename")
 	}
 }
@@ -76,9 +76,53 @@ func TestDiffPrefersActiveWorktree(t *testing.T) {
 	worktree := filepath.Join(base, "active")
 	diffGit(t, repo, "worktree", "add", "--detach", worktree, "HEAD")
 	worktree, _ = filepath.EvalSymlinks(worktree)
-	got, err := findDiffCheckout(context.Background(), "github.com/example/demo", worktree, []string{repo})
+	got, err := findDiffCheckout(context.Background(), wall.FileTarget{Repo: "github.com/example/demo"}, worktree, []string{repo})
 	if err != nil || got != worktree {
 		t.Fatalf("active worktree lost: %q, %v", got, err)
+	}
+}
+
+func TestDiffLookupSkipsCheckoutThatLacksTheFile(t *testing.T) {
+	base := t.TempDir()
+	stale := diffRepo(t, base, "stale", "https://github.com/example/demo.git")
+	ready := diffRepo(t, base, "ready", "git@github.com:example/demo.git")
+	file := "new-file.go"
+	if err := os.WriteFile(filepath.Join(ready, file), []byte("package example\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	target := wall.FileTarget{Repo: "github.com/example/demo", Path: file}
+	got, err := findDiffCheckout(context.Background(), target, stale, nil)
+	if err != nil || got != ready {
+		t.Fatalf("stopped at a checkout without the file: %q, %v", got, err)
+	}
+	// When both contain it, keep editing the active checkout.
+	if err := os.WriteFile(filepath.Join(stale, file), []byte("package example\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err = findDiffCheckout(context.Background(), target, stale, nil)
+	if err != nil || got != stale {
+		t.Fatalf("active checkout lost: %q, %v", got, err)
+	}
+	target.Path = "absent.go"
+	if _, err := findDiffCheckout(context.Background(), target, stale, nil); err == nil || !strings.Contains(err.Error(), "sync or switch branch") {
+		t.Fatalf("missing file needs an actionable error: %v", err)
+	}
+}
+
+func TestDiffFindsFileInRegisteredWorktreeOutsideWorkspace(t *testing.T) {
+	repo := diffRepo(t, t.TempDir(), "main", "https://github.com/example/demo.git")
+	diffGit(t, repo, "-c", "user.name=Example", "-c", "user.email=example@example.test", "commit", "--allow-empty", "-m", "initial")
+	worktree := filepath.Join(t.TempDir(), "another folder")
+	diffGit(t, repo, "worktree", "add", "--detach", worktree, "HEAD")
+	worktree, _ = filepath.EvalSymlinks(worktree)
+	if err := os.WriteFile(filepath.Join(worktree, "new-file.go"), []byte("package example\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, identity := range []string{"github.com/example/demo", repo} {
+		got, err := findDiffCheckout(context.Background(), wall.FileTarget{Repo: identity, Path: "new-file.go"}, repo, nil)
+		if err != nil || got != worktree {
+			t.Fatalf("registered worktree was missed: %q, %v", got, err)
+		}
 	}
 }
 
@@ -95,6 +139,9 @@ func TestDiffVimOpensWorkingFileAtLineWithLiteralArguments(t *testing.T) {
 	}
 	if want := []string{"vim", "+23", "--", file}; !reflect.DeepEqual(cmd.Args, want) || cmd.Dir != root {
 		t.Fatalf("Vim command: %v dir %q", cmd.Args, cmd.Dir)
+	}
+	if cmd.Stdout != os.Stdout {
+		t.Fatal("Vim must inherit the terminal file, not Bubble Tea's wrapped writer (which becomes a pipe)")
 	}
 	for _, name := range []string{"../outside.go", file, "missing.go", "."} {
 		if _, err := diffVimCommand(root, wall.FileTarget{Path: name}); err == nil {

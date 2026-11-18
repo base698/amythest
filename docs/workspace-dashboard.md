@@ -76,8 +76,10 @@ in the diff header in **local Vim**, near the visible line. Quit Vim with
 `:q` (or save and quit with `:wq`) to return to the same diff. This opens the
 current working copy, so edits stay in your checkout. Amy matches the recorded
 repository to the current directory, nearby checkouts, or local Herdr terminal
-directories. A missing checkout or deleted file shows a message. Switching
-panels with Ctrl+W keeps the diff open for your return.
+directories, and checks registered Git worktrees if the file is absent there.
+It keeps looking when a matching checkout lacks the file. If none contains it,
+Amy asks you to sync the checkout or switch branches. Switching panels with
+Ctrl+W keeps the diff open for your return.
 
 The wall includes this workspace's **canvases** alongside recorded work, newest
 first. Press **c** to toggle canvases only, or **f** to cycle all/media/commits/
