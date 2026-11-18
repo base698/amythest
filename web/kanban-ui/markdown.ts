@@ -241,3 +241,19 @@ export function toggleTaskLine(text: string, line: number, done: boolean, today:
   lines[line] = updated
   return lines.join('\n')
 }
+
+// canvasImage returns the live drawing for a link to one of this site's
+// canvases (…/canvas/<id>), or null. Other origins never load an image.
+export function canvasImage(href: string, here: string): string | null {
+  let url: URL
+  let base: URL
+  try {
+    base = new URL(here)
+    url = new URL(href, base)
+  } catch {
+    return null
+  }
+  if (url.origin !== base.origin) return null
+  const m = /^(.*\/)canvas\/([a-z2-7]{12})\/?$/.exec(url.pathname)
+  return m ? `${url.origin}${m[1]}api/canvas/${m[2]}/drawing.png` : null
+}

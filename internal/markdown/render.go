@@ -57,6 +57,7 @@ func (e *Engine) resolve(v *vault.Vault, n *vault.Note, doc ast.Node, source []b
 	// Kanban board checkboxes stay read-only: those files belong to the
 	// kanban store's lock/journal machinery, not the task toggle endpoint.
 	editable := !strings.HasPrefix(n.Path, "kanban/")
+	e.canvasEmbeds(doc, source)
 	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil

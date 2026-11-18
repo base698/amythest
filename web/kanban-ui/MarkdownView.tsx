@@ -1,5 +1,5 @@
 import { createElement, Fragment, type ReactNode } from 'react'
-import { parseMarkdown, type Block, type Inline, type ListItem } from './markdown'
+import { canvasImage, parseMarkdown, type Block, type Inline, type ListItem } from './markdown'
 
 // Renders card-description markdown. When onToggleTask is given, task
 // checkboxes are live and report the 0-based source line of the clicked task.
@@ -56,7 +56,13 @@ function renderInline(inline: Inline): ReactNode {
     case 'text': return inline.text
     case 'br': return <br />
     case 'code': return <code>{inline.text}</code>
-    case 'link': return <a href={inline.href} rel="noreferrer" target="_blank">{renderInlines(inline.children)}</a>
+    case 'link': {
+      const link = <a href={inline.href} rel="noreferrer" target="_blank">{renderInlines(inline.children)}</a>
+      const drawing = typeof location === 'undefined' ? null : canvasImage(inline.href, location.href)
+      if (!drawing) return link
+      // A canvas link also shows the drawing as it is now.
+      return <span className="md-canvas">{link}<a href={inline.href} rel="noreferrer" target="_blank"><img src={drawing} alt="" loading="lazy" /></a></span>
+    }
     case 'strong': return <strong>{renderInlines(inline.children)}</strong>
     case 'em': return <em>{renderInlines(inline.children)}</em>
     case 'del': return <del>{renderInlines(inline.children)}</del>

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseInline, parseMarkdown, safeHref, toggleTaskLine, type Block } from './markdown.ts'
+import { canvasImage, parseInline, parseMarkdown, safeHref, toggleTaskLine, type Block } from './markdown.ts'
 
 test('headings, paragraphs, and rules', () => {
   const blocks = parseMarkdown('# Title\n\nFirst line\nsecond line\n\n---\n\nAfter')
@@ -117,4 +117,13 @@ test('indented tasks keep the correct source line', () => {
     toggleTaskLine(body, 3, true, '2026-08-07'),
     '# Card\n\n- [ ] top\n  - [x] nested ✅ 2026-08-07\n- [ ] last',
   )
+})
+
+test('canvas links resolve to their live drawing on this site only', () => {
+  const here = 'https://notes.example.com/notes/kanban/plants'
+  assert.equal(canvasImage('https://notes.example.com/notes/canvas/abcdefghij23', here), 'https://notes.example.com/notes/api/canvas/abcdefghij23/drawing.png')
+  assert.equal(canvasImage('/notes/canvas/abcdefghij23/', here), 'https://notes.example.com/notes/api/canvas/abcdefghij23/drawing.png')
+  assert.equal(canvasImage('https://evil.example.net/notes/canvas/abcdefghij23', here), null)
+  assert.equal(canvasImage('/notes/canvas/ABC', here), null)
+  assert.equal(canvasImage('/notes/canvases/abcdefghij23', here), null)
 })

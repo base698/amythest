@@ -563,3 +563,5 @@
 .focus-note-results a { text-decoration: none; }
 .focus-search-archived { align-items: center; color: var(--muted); display: flex; font-size: 11px; gap: 7px; }
 .focus-search-archived input { accent-color: var(--accent); }
+.md-canvas { display: inline-flex; flex-direction: column; gap: 4px; max-width: 100%; vertical-align: top; }
+.md-canvas img { display: block; max-width: 100%; max-height: 240px; object-fit: contain; background: #fff; border: 1px solid var(--border, #d9d9e0); border-radius: 6px; }

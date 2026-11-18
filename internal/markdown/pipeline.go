@@ -57,13 +57,17 @@ func (e *Engine) boardNames() []string {
 func (e *Engine) RenderSalt() string {
 	names := e.boardNames()
 	if len(names) == 0 {
-		return ""
+		return renderFormat
 	}
 	sorted := append([]string(nil), names...)
 	sort.Strings(sorted)
 	sum := sha256.Sum256([]byte(strings.Join(sorted, "\x00")))
-	return hex.EncodeToString(sum[:8])
+	return renderFormat + ":" + hex.EncodeToString(sum[:8])
 }
+
+// renderFormat changes whenever rendering itself changes in a way cached
+// note HTML must pick up (it feeds RenderSalt). canvas1: canvas links embed.
+const renderFormat = "canvas1"
 
 type Heading struct {
 	ID    string
