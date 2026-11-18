@@ -26,13 +26,14 @@ func withSessionTB(tb testing.TB, s *Server) func(*http.Request) *http.Request {
 	if err != nil {
 		tb.Fatal(err)
 	}
-	token, _, err := manager.NewSession(time.Now())
+	token, session, err := manager.NewSession(time.Now())
 	if err != nil {
 		tb.Fatal(err)
 	}
 	s.kanbanAuth = manager
 	return func(r *http.Request) *http.Request {
 		r.AddCookie(&http.Cookie{Name: kanbanSessionCookie, Value: token})
+		r.Header.Set("X-CSRF-Token", session.CSRF)
 		return r
 	}
 }

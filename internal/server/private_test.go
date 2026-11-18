@@ -42,10 +42,13 @@ func TestPrivateAuthSessionRoutesAndCSRF(t *testing.T) {
 			t.Fatalf("%s %d", path, w.Code)
 		}
 	}
-	for _, path := range []string{"/Note", "/metrics", "/assets/private.txt", "/presentations/test"} {
+	for _, path := range []string{"/Note", "/assets/private.txt", "/presentations/test"} {
 		if w := request("GET", path, "", nil, "", ""); w.Code != 303 {
 			t.Fatalf("%s %d", path, w.Code)
 		}
+	}
+	if w := request("GET", "/metrics", "", nil, "", ""); w.Code != 200 || !strings.Contains(w.Body.String(), "amythest_") {
+		t.Fatalf("/metrics %d %s", w.Code, w.Body.String())
 	}
 	w := request("POST", "/kanban/api/login", `{"username":"owner","password":"correct horse"}`, nil, "", "")
 	if w.Code != 200 {

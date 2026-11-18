@@ -14,6 +14,26 @@ export const shareTextTitleSelector = "#share-text-title"
 export const shareTextDescriptionSelector = "#share-text-description"
 export const shareTextSaveSelector = "#share-text-save"
 export const shareTextEndpoint = "api/share/text"
+export const shareSessionEndpoint = "kanban/api/session"
+
+interface ShareSession { csrf: string }
+
+export function shareMutationHeaders(csrf: string, json = false): Record<string, string> {
+  const headers: Record<string, string> = { "X-CSRF-Token": csrf }
+  if (json) headers["Content-Type"] = "application/json"
+  return headers
+}
+
+async function currentCSRF(): Promise<string> {
+  const res = await fetch(`${baseURL()}${shareSessionEndpoint}`, {
+    credentials: "same-origin",
+    cache: "no-store",
+  })
+  if (!res.ok) throw new Error((await res.text()) || "Sign in to save notes")
+  const session = (await res.json()) as ShareSession
+  if (!session.csrf) throw new Error("Sign in to save notes")
+  return session.csrf
+}
 
 export function buildTextNotePayload(title: string, description: string) {
   title = title.trim()
@@ -68,10 +88,11 @@ async function saveTextNote() {
   button.disabled = true
   textStatus("Saving…")
   try {
+    const csrf = await currentCSRF()
     const res = await fetch(`${baseURL()}${shareTextEndpoint}`, {
       method: "POST",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers: shareMutationHeaders(csrf, true),
       body: JSON.stringify(payload),
     })
     if (!res.ok) throw new Error((await res.text()) || `save failed (${res.status})`)
@@ -162,6 +183,7 @@ async function upload() {
   btn.disabled = true
   status("Uploading…")
   try {
+    const csrf = await currentCSRF()
     const form = new FormData()
     form.append("file", file.blob, file.name)
     const title = el<HTMLInputElement>("share-title")?.value ?? ""
@@ -169,6 +191,7 @@ async function upload() {
     const res = await fetch(`${baseURL()}api/share/upload`, {
       method: "POST",
       credentials: "same-origin",
+      headers: shareMutationHeaders(csrf),
       body: form,
     })
     if (!res.ok) throw new Error((await res.text()) || `upload failed (${res.status})`)

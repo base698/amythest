@@ -68,6 +68,10 @@ func (s *Server) privateGuard(next http.Handler) http.Handler {
 			}
 			return
 		}
+		if r.URL.Path == "/metrics" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if !s.sameOrigin(r) {
 			http.Error(w, "request origin is not allowed", 403)
 			return

@@ -68,6 +68,18 @@ func TestShareTextRequiresTitle(t *testing.T) {
 	}
 }
 
+func TestShareTextRequiresMatchingCSRF(t *testing.T) {
+	s, stamp := newShareTestServer(t, 1)
+	r := textShareRequest(t, "Should not exist", "Missing CSRF must fail.")
+	r = stamp(r)
+	r.Header.Set("X-CSRF-Token", "wrong-token")
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, r)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestShareTextIndexTitleGetsDistinctReachableURL(t *testing.T) {
 	s, stamp := newShareTestServer(t, 1)
 	rec := httptest.NewRecorder()

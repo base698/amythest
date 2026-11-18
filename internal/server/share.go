@@ -77,7 +77,7 @@ func (s *Server) sharePluginsBlurb() string {
 // That put a full-corpus reconcile (hundreds of ms per thousand notes, seconds
 // on the Pi) inside every upload and serialized concurrent uploads behind it.
 func (s *Server) handleShareUpload(w http.ResponseWriter, r *http.Request) {
-	if !s.requireKanbanSession(w, r, "share") {
+	if !s.requireKanbanSessionCSRF(w, r, "share") {
 		return
 	}
 	if s.share == nil {
@@ -126,7 +126,7 @@ const (
 // handleShareText creates a plain text note directly in _Inbox without an
 // uploaded asset. Title is required; description is optional.
 func (s *Server) handleShareText(w http.ResponseWriter, r *http.Request) {
-	if !s.requireKanbanSession(w, r, "share") {
+	if !s.requireKanbanSessionCSRF(w, r, "share") {
 		return
 	}
 	if s.share == nil {
