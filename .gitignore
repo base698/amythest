@@ -28,3 +28,7 @@ __pycache__/
 .venv-telegram/
 *.session
 *.session-journal
+
+# Private mail OAuth material (configuration belongs outside the checkout)
+*oauth*.json
+*client_secret*.json

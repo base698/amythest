@@ -151,6 +151,13 @@ func messageCommand(args []string) error {
 			return e
 		}
 		g.ConnectorTokens = map[string]string{"signal": signalToken, "imessage": imessageToken}
+		for _, provider := range []string{"gmail", "outlook"} {
+			token, err := messages.Token(*state, provider)
+			if err != nil {
+				return err
+			}
+			g.ConnectorTokens[provider] = token
+		}
 		httpL, e := messageListen(*listen)
 		if e != nil {
 			return e

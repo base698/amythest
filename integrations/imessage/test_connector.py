@@ -10,6 +10,9 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch, MagicMock
+from connector import main
 from connector import Connector,Gateway,Journal,Source,normalized
 
 ACCOUNT='00000000-0000-4000-8000-000000000001'
@@ -48,6 +51,18 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.temp=tempfile.TemporaryDirectory();self.journal=Journal(Path(self.temp.name)/'bridge.db');self.rpc=FakeRPC();self.api=FakeGateway()
         self.connector=Connector(self.rpc,FakeSource(),self.api,self.journal,ACCOUNT,all_chats=True,send=True)
     async def asyncTearDown(self):self.journal.db.close();self.temp.cleanup()
+    async def test_startup_failure_releases_lock_even_with_retained_traceback(self):
+        source=MagicMock()
+        cfg={'state_dir':self.temp.name,'database':'unused','services':['iMessage'],
+             'all_chats':True,'chats':[],'amy_binary':'amy'}
+        args=SimpleNamespace(command='service',settings='unused')
+        errors=[]
+        with patch('connector.Source',return_value=source), patch('connector.subprocess.run',side_effect=OSError('offline')):
+            for _ in range(2):
+                try: await main(args,cfg)
+                except OSError as error: errors.append(error)
+        self.assertEqual(len(errors),2)
+        self.assertEqual(source.db.close.call_count,2)
     async def test_backfill_and_watch_are_durable_deduplicated(self):
         await self.connector.backfill(10);self.connector.capture(MESSAGE,advance=True)
         self.assertEqual(len(self.journal.pending_inbox()),1);self.assertEqual(self.journal.checkpoint('watch'),1)

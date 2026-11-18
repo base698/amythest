@@ -17,13 +17,14 @@ COPYFILE_DISABLE=1 tar "${tar_opts[@]}" -czf "$staging_dir/bundle.tgz" bin/amy-l
   integrations/telegram/connector.py integrations/telegram/requirements.txt \
   integrations/telegram/amy-telegram integrations/telegram/amy-messages \
   integrations/common/messaging_common.py integrations/signal/connector.py integrations/signal/amy-signal \
+  integrations/mail/connector.py integrations/mail/providers.py integrations/mail/oauth.py integrations/mail/amy-mail \
   scripts/install-signal-runtime.sh \
-  deploy/amythest-messages.service deploy/amythest-telegram.service deploy/amythest-signal.service
+  deploy/amythest-messages.service deploy/amythest-telegram.service deploy/amythest-signal.service deploy/amythest-mail.service
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3)
 ssh "${ssh_opts[@]}" "$remote_host" 'install -d -m 0700 ~/.local/share/amythest-messaging; cat > ~/.local/share/amythest-messaging/deploy.tgz' < "$staging_dir/bundle.tgz"
 ssh "${ssh_opts[@]}" "$remote_host" 'bash -se' <<'REMOTE'
 set -euo pipefail
-install -d -m 0700 ~/.local/share/amythest-messaging/deploy ~/.local/share/amythest-telegram ~/.local/share/amythest-signal
+install -d -m 0700 ~/.local/share/amythest-messaging/deploy ~/.local/share/amythest-telegram ~/.local/share/amythest-signal ~/.local/share/amythest-mail
 install -d ~/bin ~/.config/systemd/user
 tar -xzf ~/.local/share/amythest-messaging/deploy.tgz -C ~/.local/share/amythest-messaging/deploy
 cd ~/.local/share/amythest-messaging/deploy
@@ -32,14 +33,16 @@ python3 -m venv ~/.local/share/amythest-telegram/venv
 install -m 0600 integrations/telegram/connector.py integrations/telegram/requirements.txt ~/.local/share/amythest-telegram/
 install -m 0600 integrations/common/messaging_common.py ~/.local/share/amythest-telegram/
 install -m 0600 integrations/common/messaging_common.py integrations/signal/connector.py ~/.local/share/amythest-signal/
+install -m 0600 integrations/mail/connector.py integrations/mail/providers.py integrations/mail/oauth.py integrations/common/messaging_common.py ~/.local/share/amythest-mail/
+install -m 0755 integrations/mail/amy-mail ~/bin/
 install -m 0700 scripts/install-signal-runtime.sh ~/.local/share/amythest-signal/
 install -m 0755 integrations/signal/amy-signal ~/bin/
 install -m 0755 integrations/telegram/amy-telegram integrations/telegram/amy-messages ~/bin/
 install -m 0755 bin/amy-linux ~/.local/share/amythest-messaging/amy.next
 mv ~/.local/share/amythest-messaging/amy.next ~/.local/share/amythest-messaging/amy
-install -m 0644 deploy/amythest-messages.service deploy/amythest-telegram.service deploy/amythest-signal.service ~/.config/systemd/user/
+install -m 0644 deploy/amythest-messages.service deploy/amythest-telegram.service deploy/amythest-signal.service deploy/amythest-mail.service ~/.config/systemd/user/
 active_connectors=()
-for connector in telegram signal; do
+for connector in telegram signal mail; do
   if systemctl --user is-active --quiet "amythest-$connector.service"; then
     active_connectors+=("amythest-$connector.service")
   fi

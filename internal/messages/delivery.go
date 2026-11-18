@@ -96,11 +96,12 @@ func (s *Store) Heartbeat(c Connector) error {
 	defer s.mu.Unlock()
 	c.Provider = providerName([]string{c.Provider})
 	validAccount := c.Provider == "telegram" && decimal(c.Account, true) || (c.Provider == "signal" || c.Provider == "imessage") && canonicalUUID(c.Account)
+	validAccount = validAccount || mailProvider(c.Provider) && mailAccount(c.Account)
 	if !validAccount || !validID(c.Worker) || len(c.Chats) > 2000 {
 		return fault(400, "invalid connector registration")
 	}
 	for _, id := range c.Chats {
-		if c.Provider == "telegram" && !decimal(id, false) || c.Provider == "signal" && !signalChat(id) || c.Provider == "imessage" && !imessageChat(id) {
+		if c.Provider == "telegram" && !decimal(id, false) || c.Provider == "signal" && !signalChat(id) || c.Provider == "imessage" && !imessageChat(id) || mailProvider(c.Provider) && !mailID(c.Provider, id) {
 			return fault(400, "invalid native chat ID")
 		}
 	}
@@ -139,6 +140,10 @@ func validateNativeConversation(c Conversation) error {
 	if r.Provider == "imessage" {
 		valid = (c.Service == "iMessage" || c.Service == "Messages") && canonicalUUID(r.Account) && imessageChat(r.Chat) && r.Thread == "" && c.ID == IMessageConversationID(r)
 	}
+	if mailProvider(r.Provider) {
+		service := map[string]string{"gmail": "Gmail", "outlook": "Outlook"}[r.Provider]
+		valid = c.Service == service && mailAccount(r.Account) && mailID(r.Provider, r.Chat) && r.Thread == "" && c.ID == MailConversationID(r)
+	}
 	if !valid || c.Demo || c.Account != r.Account || c.Recipient != r.Chat || c.Thread != r.Thread {
 		return fault(400, "invalid native source identifiers")
 	}
@@ -152,6 +157,7 @@ func (s *Store) ValidateIngress(in Ingress) error {
 	}
 	r := in.Conversation.Route
 	valid := r.Provider == "telegram" && decimal(in.Message.NativeID, true) || r.Provider == "signal" && signalParent(in.Message.NativeID) || r.Provider == "imessage" && validID(in.Message.NativeID)
+	valid = valid || mailProvider(r.Provider) && mailID(r.Provider, in.Message.NativeID)
 	if !valid {
 		return fault(400, "invalid native message ID")
 	}
@@ -165,6 +171,23 @@ func TelegramConversationID(r Route) string {
 	return "telegram/" + r.Account + "/" + r.Chat + "/" + r.Thread
 }
 func validateLive(d Draft) error {
+	if mailProvider(d.Target.Route.Provider) {
+		if e := validateNativeConversation(d.Target); e != nil {
+			return e
+		}
+		if d.Target.Route.Provider == "outlook" {
+			total := 0
+			for _, a := range d.Attachments {
+				total += a.Size
+			}
+			// MIME expands attachment bytes by about a third. Leave room for
+			// headers and body within Graph's simple request size limit.
+			if total > 2<<20 {
+				return fault(400, "Outlook replies support up to 2 MiB of attachments")
+			}
+		}
+		return nil
+	}
 	if d.Target.Route.Provider == "imessage" {
 		r := d.Target.Route
 		if !canonicalUUID(r.Account) || !imessageChat(r.Chat) || r.Thread != "" {
@@ -315,13 +338,17 @@ func (s *Store) Complete(r Receipt) (Draft, error) {
 	if r.State != "sent" && r.State != "failed" && r.State != "uncertain" && r.State != "submitted" {
 		return d, fault(400, "invalid delivery result")
 	}
-	if r.State == "submitted" && (d.Target.Route.Provider != "imessage" || r.NativeID != "") {
-		return d, fault(400, "submitted is only supported for unconfirmed iMessage handoff")
+	if r.State == "submitted" && ((d.Target.Route.Provider != "imessage" && d.Target.Route.Provider != "outlook") || r.NativeID != "") {
+		return d, fault(400, "submitted requires an unconfirmed provider handoff")
 	}
-	if r.State == "sent" && d.Target.Route.Provider == "imessage" {
-		return d, fault(400, "iMessage automation cannot confirm delivery")
+	if r.State == "sent" && (d.Target.Route.Provider == "imessage" || d.Target.Route.Provider == "outlook") {
+		return d, fault(400, "provider handoff cannot confirm delivery")
 	}
-	if r.State == "sent" && !decimal(r.NativeID, true) {
+	validReceipt := decimal(r.NativeID, true)
+	if d.Target.Route.Provider == "gmail" {
+		validReceipt = mailID("gmail", r.NativeID)
+	}
+	if r.State == "sent" && !validReceipt {
 		return d, fault(400, "delivery requires a native message ID")
 	}
 	if d.State == "sent" || d.State == "failed" || d.State == "submitted" {
@@ -396,9 +423,12 @@ func DeliveryStatus(d Draft) string {
 	case "queued", "sending":
 		return "Reply queued for " + d.Target.Service + ". Delivery status is in D drafts."
 	case "submitted":
+		if d.Target.Route.Provider == "outlook" {
+			return "Outlook accepted the reply. Delivery is unconfirmed; check Sent Items."
+		}
 		return "Handed to Messages on your Mac. Delivery is unconfirmed; check Messages."
 	case "sent":
-		return "Reply delivered to " + d.Target.Service + "."
+		return "Reply sent through " + d.Target.Service + "."
 	default:
 		return strings.TrimSpace(d.State + ": " + d.DeliveryError)
 	}

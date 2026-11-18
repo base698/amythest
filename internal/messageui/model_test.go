@@ -172,3 +172,37 @@ func TestContactViewAndServiceFilter(t *testing.T) {
 		t.Fatal("service filter did not select Signal contacts")
 	}
 }
+
+func TestMailComposerUsesLatestIncomingParent(t *testing.T) {
+	for _, provider := range []string{"gmail", "outlook"} {
+		t.Run(provider, func(t *testing.T) {
+			m := New(nil, Options{})
+			conversation := messages.Conversation{ID: "mail-thread", Route: messages.Route{Provider: provider}}
+			m.items = []messages.Item{{Conversation: conversation, Message: messages.Message{ID: "sent", Outgoing: true}}}
+			m.thread = messages.Thread{Conversation: conversation, Messages: []messages.Message{
+				{ID: "older", At: time.Unix(1, 0)},
+				{ID: "sent", Outgoing: true, At: time.Unix(3, 0)},
+				{ID: "incoming", At: time.Unix(2, 0)},
+			}}
+			m.startCompose()
+			if m.target == nil || m.target.Message.ID != "incoming" {
+				t.Fatal("mail reply did not pin the most recent incoming message")
+			}
+			if m.items[0].Message.ID != "sent" {
+				t.Fatal("composition mutated the conversation list")
+			}
+		})
+	}
+}
+
+func TestMailComposerRejectsMissingOrStaleIncomingParent(t *testing.T) {
+	m := New(nil, Options{})
+	m.items = []messages.Item{{Conversation: messages.Conversation{ID: "selected", Route: messages.Route{Provider: "gmail"}}, Message: messages.Message{ID: "sent", Outgoing: true}}}
+	for _, thread := range []messages.Thread{{}, {Conversation: messages.Conversation{ID: "previous"}, Messages: []messages.Message{{ID: "unrelated"}}}} {
+		m.thread = thread
+		m.startCompose()
+		if m.target != nil || m.mode == "compose" {
+			t.Fatal("mail composer accepted an unrelated or absent incoming parent")
+		}
+	}
+}

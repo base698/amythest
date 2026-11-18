@@ -99,6 +99,7 @@ func New(api API, o Options) tea.Model {
 	in.Prompt = "› "
 	in.Placeholder = "search agents, notes, cards and open terminals"
 	in.CharLimit = 200
+	in.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#515b6b", Dark: "#b8c2d1"})
 	in.SetValue(o.Query)
 	in.Focus()
 	return &model{api: api, o: o, input: in, errs: map[string]string{}, heads: map[int]string{}}

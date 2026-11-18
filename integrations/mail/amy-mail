@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+set -eu
+exec python3 "$HOME/.local/share/amythest-mail/connector.py" "$@"

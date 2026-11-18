@@ -105,15 +105,30 @@ active conversation changes but the terminal window is not activated for you.
 
 The herdr plugin provides a **Message focus** action and popup. Install the updated
 binary with `make install-amy`, then bind your preferred terminal herdr key with
-`type = "plugin_action"`, `command = "amythest.messages"`. For Herdr App, use a
-`terminal.open` binding with `argv: ["/absolute/path/to/amy", "messages", "-pane"]`;
-Press the same key again to close Messages in the current tab. `-pane` also
-closes its pane on exit. Find and Wall toggle independently. Existing key
-bindings are not modified.
+`type = "plugin_action"`, `command = "amythest.messages"`.
+
+For Herdr App, install personal launchers after installing `amy`:
+
+```sh
+python3 scripts/install-herdr-app-messaging.py --binary ~/bin/amy
+```
+
+This backs up `~/.config/herdr-app/keys.json` and binds **Cmd+Shift+M** to
+Messages and **Cmd+Shift+F** to Find. Each opens one full terminal tab; pressing
+its shortcut again closes that tool, including from another tab. `q` also
+closes the tool. The launcher runs locally even over a remote tab, so private
+workstation settings and SSH forwarding remain consistent. It waits for Herdr
+to register the terminal before displaying and focusing it. Other bindings are
+preserved. Personal absolute paths are generated outside the checkout.
+
+The older `terminal.open` binding with
+`argv: ["/absolute/path/to/amy", "messages", "-pane"]` remains available for
+splits in a local tab. Its toggle is scoped to that tab.
 
 ## Contacts, service filtering and trash
 
-`p` cycles between all services, Signal, Telegram and the Mac Messages feeder.
+`p` cycles between all services, Signal, Telegram, the Mac Messages feeder, Gmail,
+and Outlook.
 It opens All conversations so quiet Signal contacts remain visible. `Tab`
 switches between Focus and All. To open one service directly:
 

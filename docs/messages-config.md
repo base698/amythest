@@ -74,3 +74,7 @@ configuration. Telegram's CLI uses `--settings` for this shared file and
 Repository files contain only generic code, deployment units and examples.
 Personal hostnames, phone numbers, selected contacts, API credentials and tokens
 must not be copied into those files.
+
+For multiple Gmail mailboxes and Microsoft 365/Outlook, see
+[Mail connectors](mail.md). Each mailbox uses a separate private OAuth file and
+state directory under `connectors.mail.accounts`.

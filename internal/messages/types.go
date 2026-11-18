@@ -183,6 +183,9 @@ func AccountDisplay(c Conversation) string {
 	return Plain(c.Service + " / " + c.Account)
 }
 func Destination(c Conversation) string {
+	if mailProvider(c.Route.Provider) {
+		return Plain(c.Service + " / " + c.Account + " → " + c.Name)
+	}
 	if c.Route.Provider == "telegram" || c.Route.Provider == "signal" || c.Route.Provider == "imessage" {
 		name := c.Name
 		if name == "" {

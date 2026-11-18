@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Mac-only iMessage feeder for a central Amythest gateway. Requires imsg 0.4+."""
 import argparse
+from contextlib import ExitStack
 import datetime as dt
 import asyncio
 import fcntl
@@ -227,44 +228,49 @@ def options(argv=None):
 async def main(args,cfg):
     os.umask(0o077)
     state=Path(cfg['state_dir']);state.mkdir(mode=0o700,parents=True,exist_ok=True)
-    lock=(state/'session.lock').open('a')
-    try:
-        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-    except BlockingIOError:
-        raise ValueError('The iMessage feeder already owns this state directory')
-    try:
-        source=Source(cfg['database'],cfg['services'])
-        source.high_watermark()
-    except sqlite3.Error:
-        raise ValueError('macOS denied Messages database access. Grant Full Disk Access to the host terminal/core.')
-    if args.command=='doctor':
-        print('Messages database readable; iMessage conversations available:',len(source.chats()))
-        source.db.close();return
-    if args.command=='chats':
-        for chat in source.chats():
-            print(chat['guid']+'\t'+''.join(c for c in (chat['name'] or chat['identifier']) if c.isprintable()))
-        source.db.close();return
-    if not cfg['all_chats'] and not cfg['chats']:
-        raise ValueError('Select chats or enable all_chats in private iMessage settings')
-    subprocess.run([cfg['amy_binary'],'messages','tunnel','-config',str(Path(args.settings).expanduser())],check=True)
-    journal=Journal(state/'bridge.db')
-    connector=Connector(None,source,Gateway(cfg['gateway'],cfg['token_file']),journal,cfg['account'],cfg['chats'],cfg['all_chats'],cfg['send'])
-    rpc=RPC([cfg['binary'],'rpc','--db',cfg['database']],connector.notify);connector.rpc=rpc
-    await rpc.start()
-    try:
-        high=source.high_watermark();checkpoint=journal.checkpoint('watch')
-        if checkpoint>high:
-            raise ValueError('Messages database was replaced; use a new feeder state directory')
-        await connector.heartbeat()
-        await rpc.call('watch.subscribe',{'since_rowid':checkpoint or high,'attachments':True})
-        await connector.backfill(cfg['initial'],cfg['initial_days'])
-        if not checkpoint:
-            journal.advance('watch',high)
-        await connector.flush()
-        print('iMessage feeder ready; central gateway connected',flush=True)
-        await connector.loop()
-    finally:
-        await rpc.close();source.db.close();journal.db.close();lock.close()
+    # Every attempt owns its resources, including failures before RPC starts.
+    # Retained exception tracebacks must not retain the flock across retries.
+    with ExitStack() as resources:
+        lock=resources.enter_context((state/'session.lock').open('a'))
+        try:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError('The iMessage feeder already owns this state directory')
+        try:
+            source=Source(cfg['database'],cfg['services'])
+            resources.callback(source.db.close)
+            source.high_watermark()
+        except sqlite3.Error:
+            raise ValueError('macOS denied Messages database access. Grant Full Disk Access to the host terminal/core.')
+        if args.command=='doctor':
+            print('Messages database readable; iMessage conversations available:',len(source.chats()))
+            return
+        if args.command=='chats':
+            for chat in source.chats():
+                print(chat['guid']+'\t'+''.join(c for c in (chat['name'] or chat['identifier']) if c.isprintable()))
+            return
+        if not cfg['all_chats'] and not cfg['chats']:
+            raise ValueError('Select chats or enable all_chats in private iMessage settings')
+        subprocess.run([cfg['amy_binary'],'messages','tunnel','-config',str(Path(args.settings).expanduser())],check=True)
+        journal=Journal(state/'bridge.db')
+        resources.callback(journal.db.close)
+        connector=Connector(None,source,Gateway(cfg['gateway'],cfg['token_file']),journal,cfg['account'],cfg['chats'],cfg['all_chats'],cfg['send'])
+        rpc=RPC([cfg['binary'],'rpc','--db',cfg['database']],connector.notify);connector.rpc=rpc
+        await rpc.start()
+        try:
+            high=source.high_watermark();checkpoint=journal.checkpoint('watch')
+            if checkpoint>high:
+                raise ValueError('Messages database was replaced; use a new feeder state directory')
+            await connector.heartbeat()
+            await rpc.call('watch.subscribe',{'since_rowid':checkpoint or high,'attachments':True})
+            await connector.backfill(cfg['initial'],cfg['initial_days'])
+            if not checkpoint:
+                journal.advance('watch',high)
+            await connector.flush()
+            print('iMessage feeder ready; central gateway connected',flush=True)
+            await connector.loop()
+        finally:
+            await rpc.close()
 
 
 if __name__=='__main__':

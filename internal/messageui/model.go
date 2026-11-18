@@ -91,6 +91,19 @@ func New(api API, o Options) *Model {
 	t.CharLimit = 20000
 	t.ShowLineNumbers = false
 	t.SetHeight(5)
+	// Pair text and background explicitly. A terminal's ANSI black can be
+	// gray (or white in a light palette); textarea's defaults only set one
+	// side of the pair, making the focused line and placeholder unreadable.
+	fg := lipgloss.AdaptiveColor{Light: "#20242b", Dark: "#f1f3f5"}
+	bg := lipgloss.AdaptiveColor{Light: "#edf0f4", Dark: "#252a33"}
+	muted := lipgloss.AdaptiveColor{Light: "#515b6b", Dark: "#b8c2d1"}
+	base := lipgloss.NewStyle().Foreground(fg).Background(bg)
+	for _, style := range []*textarea.Style{&t.FocusedStyle, &t.BlurredStyle} {
+		style.Base, style.Text, style.CursorLine = base, base, base
+		style.Placeholder = base.Foreground(muted)
+		style.Prompt = base.Foreground(muted)
+		style.EndOfBuffer = base.Foreground(bg)
+	}
 	return &Model{api: api, opts: o, mode: "focus", loading: true, input: t, all: o.All, provider: o.Service, trash: o.Trash}
 }
 func (m *Model) Init() tea.Cmd { return tea.Batch(m.load(), tick()) }
@@ -162,6 +175,23 @@ func (m *Model) startCompose() {
 		return
 	}
 	copy := *it
+	// Mail replies need an incoming parent, even when All shows our own
+	// newer message as the conversation's latest activity.
+	if copy.Message.Outgoing && (copy.Conversation.Route.Provider == "gmail" || copy.Conversation.Route.Provider == "outlook") {
+		var parent messages.Message
+		if m.thread.Conversation.ID == copy.Conversation.ID {
+			for _, msg := range m.thread.Messages {
+				if !msg.Outgoing && msg.ID != "" && (parent.ID == "" || msg.At.After(parent.At)) {
+					parent = msg
+				}
+			}
+		}
+		if parent.ID == "" {
+			m.status = "No incoming email loaded to reply to yet."
+			return
+		}
+		copy.Message = parent
+	}
 	m.target = &copy
 	m.selected = append([]messages.Attachment{}, m.opts.Attachments...)
 	m.input.SetValue("")
@@ -378,7 +408,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			case "p":
-				providers := []string{"", "Signal", "Telegram", "Messages"}
+				providers := []string{"", "Signal", "Telegram", "Messages", "Gmail", "Outlook"}
 				next := 0
 				for i, p := range providers {
 					if p == m.provider {
@@ -473,7 +503,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "p":
-			providers := []string{"", "Signal", "Telegram", "Messages"}
+			providers := []string{"", "Signal", "Telegram", "Messages", "Gmail", "Outlook"}
 			next := 0
 			for i, p := range providers {
 				if p == m.provider {
