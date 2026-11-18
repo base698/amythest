@@ -18,6 +18,9 @@ do, at a fraction of the memory.
   inline fields, checkboxes, chroma-highlighted code, lazy-loaded mermaid.
   Frontmatter parsing **never fails the page** — malformed legacy YAML is
   preserved raw instead of crashing the renderer.
+- **Shared canvases** ([docs/canvas.md](docs/canvas.md)): draw with an agent
+  in Excalidraw or a native Herdr pane; agents read what changed and push
+  Mermaid back, and canvas links render as live drawings in notes and cards.
 - **Graph view**: d3-force on canvas. Local BFS neighbourhood on every page,
   global graph in a modal, drag/zoom/pan, visited-node tinting.
 - **Search**: server-side SQLite FTS5 with snippet highlighting behind a
