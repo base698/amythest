@@ -1,6 +1,7 @@
 // Interactive task checkboxes: check/uncheck writes back to the vault file
 // through /api/tasks/toggle (recurring tasks roll forward server-side),
 // then the page refreshes in place to show the result.
+import { mutate } from "./csrf"
 import { refreshCurrent } from "./spa"
 import { buildTaskTogglePayload } from "./taskToggle"
 import {
@@ -164,7 +165,7 @@ async function throwIfFailed(res: Response, fallback: string) {
 }
 
 async function postTaskAction(endpoint: string, payload: unknown) {
-  const res = await fetch(`${baseURL()}${endpoint}`, {
+  const res = await mutate(`${baseURL()}${endpoint}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
@@ -327,7 +328,7 @@ async function hideFileFromTasks(button: HTMLButtonElement) {
   try {
     const payload = buildFileHidePayload(panel.dataset.fileSlug || "", panel.dataset.fileVersion || "")
     allButtons.forEach((el) => { el.disabled = true })
-    const res = await fetch(`${baseURL()}api/tasks/file/hide`, {
+    const res = await mutate(`${baseURL()}api/tasks/file/hide`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
@@ -357,7 +358,7 @@ async function disposeFile(button: HTMLButtonElement) {
       panel.dataset.fileVersion || "",
     )
     allButtons.forEach((el) => { el.disabled = true })
-    const res = await fetch(`${baseURL()}api/tasks/file`, {
+    const res = await mutate(`${baseURL()}api/tasks/file`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
@@ -395,7 +396,7 @@ async function triageFile(button: HTMLButtonElement) {
       expectedText,
     }))
     allButtons.forEach((el) => { el.disabled = true })
-    const res = await fetch(`${baseURL()}api/tasks/triage`, {
+    const res = await mutate(`${baseURL()}api/tasks/triage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
@@ -427,7 +428,7 @@ async function triage(button: HTMLButtonElement) {
       expectedText: card.dataset.text || "",
     }, action, due)
     card.querySelectorAll<HTMLButtonElement>("button").forEach((el) => { el.disabled = true })
-    const res = await fetch(`${baseURL()}api/tasks/triage`, {
+    const res = await mutate(`${baseURL()}api/tasks/triage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
@@ -448,7 +449,7 @@ async function toggle(box: HTMLInputElement) {
   box.disabled = true
   try {
     const payload = buildTaskTogglePayload(slug || "", line, box.dataset.version || "", done)
-    const res = await fetch(`${baseURL()}api/tasks/toggle`, {
+    const res = await mutate(`${baseURL()}api/tasks/toggle`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
@@ -484,7 +485,7 @@ async function updateDueDate(button: HTMLButtonElement, clear: boolean) {
       expectedVersion: editor.dataset.expectedVersion || "",
     }, clear ? "" : input.value)
     controls.forEach((el) => { el.disabled = true })
-    const res = await fetch(`${baseURL()}${taskDueEndpoint}`, {
+    const res = await mutate(`${baseURL()}${taskDueEndpoint}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
@@ -517,7 +518,7 @@ async function moveTaskToBoard(button: HTMLButtonElement) {
       expectedVersion: editor.dataset.expectedVersion || "",
     })
     controls.forEach((el) => { el.disabled = true })
-    const res = await fetch(`${baseURL()}api/tasks/move-to-board`, {
+    const res = await mutate(`${baseURL()}api/tasks/move-to-board`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",

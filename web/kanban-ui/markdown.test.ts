@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { canvasImage, parseInline, parseMarkdown, safeHref, toggleTaskLine, type Block } from './markdown.ts'
+import { canvasImage, canvasImagesIn, parseInline, parseMarkdown, safeHref, toggleTaskLine, type Block } from './markdown.ts'
 
 test('headings, paragraphs, and rules', () => {
   const blocks = parseMarkdown('# Title\n\nFirst line\nsecond line\n\n---\n\nAfter')
@@ -126,4 +126,11 @@ test('canvas links resolve to their live drawing on this site only', () => {
   assert.equal(canvasImage('https://evil.example.net/notes/canvas/abcdefghij23', here), null)
   assert.equal(canvasImage('/notes/canvas/ABC', here), null)
   assert.equal(canvasImage('/notes/canvases/abcdefghij23', here), null)
+})
+
+test('canvas links in plain comment text become thumbnails', () => {
+  const here = 'https://notes.example.com/notes/kanban/plants'
+  const found = canvasImagesIn('Canvas: [Flow](https://notes.example.com/notes/canvas/abcdefghij23) and again /notes/canvas/abcdefghij23 plus https://evil.example.net/notes/canvas/abcdefghij24', here)
+  assert.deepEqual(found, [{ href: 'https://notes.example.com/notes/canvas/abcdefghij23', src: 'https://notes.example.com/notes/api/canvas/abcdefghij23/drawing.png' }])
+  assert.deepEqual(canvasImagesIn('no links here', here), [])
 })

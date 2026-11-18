@@ -25,7 +25,9 @@ export function setupSPA(onNav: () => void) {
     if (url.origin !== location.origin) return
     const base = document.body.dataset.base || "/"
     const prefix = base.endsWith("/") ? base : base + "/"
-    if (url.pathname.startsWith(prefix + "assets/") || url.pathname.startsWith("/kanban") || url.pathname.startsWith(prefix + "kanban")) return
+    // Pages with their own app shell (kanban, the canvas editor) need a real
+    // page load: morphing only <body> leaves their stylesheets and scripts out.
+    if (url.pathname.startsWith(prefix + "assets/") || url.pathname.startsWith("/kanban") || url.pathname.startsWith(prefix + "kanban") || url.pathname.startsWith(prefix + "canvas")) return
     if (url.pathname === location.pathname && url.hash) return // in-page anchor
     e.preventDefault()
     void go(url, true, onNav)

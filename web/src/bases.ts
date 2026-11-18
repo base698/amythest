@@ -1,3 +1,4 @@
+import { mutate } from "./csrf"
 // In-place editing of note frontmatter properties from base table cells.
 // Cells rendered with data-slug/data-key (plain note.* columns on
 // notes-source bases) become editable on double-click; Enter saves via
@@ -44,7 +45,7 @@ export function setupBaseEditing() {
       saving = true
       input.disabled = true
       try {
-        const res = await fetch(`${baseURL()}api/notes/property`, {
+        const res = await mutate(`${baseURL()}api/notes/property`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ slug, key, value }),

@@ -15,7 +15,7 @@ import {
 import { searchCards } from './cardSearch'
 import { FocusSearch } from './FocusSearch.ts'
 import { Markdown } from './MarkdownView'
-import { toggleTaskLine } from './markdown'
+import { canvasImagesIn, toggleTaskLine } from './markdown'
 import { KANBAN_MOUNT, NOTES_BASE, cardIdFromHash } from './mount.ts'
 import { boardFocusCandidate, boardLabel, organizeBoards, selectedFocusCard } from './boardOrganization.ts'
 import { applyFavoriteMutation, boardSummaryFromData, shouldLeaveAfterSettingsSave } from './boardUpdates.ts'
@@ -1266,6 +1266,7 @@ function CardEditor({ card, board, workspace, busy, agents, readOnly = false, op
           </form>}
           {newestComments.length === 0 ? <p className="muted">No comments yet.</p> : newestComments.slice(0, visibleCommentCount).map((item) => <article key={item.id}>
             <strong>{item.author}</strong><time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString()}</time><p>{item.body}</p>
+            {canvasImagesIn(item.body, location.href).map((c) => <a className="md-canvas" href={c.href} key={c.src} rel="noreferrer" target="_blank"><img src={c.src} alt="Canvas" loading="lazy" /></a>)}
           </article>)}
           {visibleCommentCount < newestComments.length && <button className="quiet comments-load-more" type="button" onClick={() => setVisibleCommentCount((count) => count + COMMENT_PAGE_SIZE)}>Load more comments ({newestComments.length - visibleCommentCount} remaining)</button>}
         </section>}

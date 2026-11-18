@@ -35,7 +35,7 @@ func TestCanvasLinksEmbedTheLiveDrawing(t *testing.T) {
 		"image syntax":             "See ![Flow](https://notes.example.com/notes/canvas/abcdefghij23/) here\n",
 	} {
 		html := renderOne(t, body)
-		if !strings.Contains(html, img) || !strings.Contains(html, `class="canvas-embed" href="/notes/canvas/abcdefghij23"`) {
+		if !strings.Contains(html, img) || !strings.Contains(html, `class="canvas-embed" data-no-spa href="/notes/canvas/abcdefghij23"`) {
 			t.Errorf("%s: no embed in\n%s", name, html)
 		}
 	}

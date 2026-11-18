@@ -37,7 +37,7 @@ func (e *Engine) canvasEmbedHTML(id, label string) string {
 		label = "Canvas"
 	}
 	l := template.HTMLEscapeString(label)
-	return fmt.Sprintf(`<a class="canvas-embed" href="%s"><img src="%s" alt="%s" loading="lazy"><span class="canvas-embed-label">%s · open canvas</span></a>`,
+	return fmt.Sprintf(`<a class="canvas-embed" data-no-spa href="%s"><img src="%s" alt="%s" loading="lazy"><span class="canvas-embed-label">%s · open canvas</span></a>`,
 		template.HTMLEscapeString(page), template.HTMLEscapeString(img), l, l)
 }
 

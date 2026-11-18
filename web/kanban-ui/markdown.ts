@@ -257,3 +257,18 @@ export function canvasImage(href: string, here: string): string | null {
   const m = /^(.*\/)canvas\/([a-z2-7]{12})\/?$/.exec(url.pathname)
   return m ? `${url.origin}${m[1]}api/canvas/${m[2]}/drawing.png` : null
 }
+
+// canvasImagesIn finds this site's canvas links in plain text (a comment)
+// and returns each one's link and live drawing, at most once per canvas.
+export function canvasImagesIn(text: string, here: string): { href: string; src: string }[] {
+  const out: { href: string; src: string }[] = []
+  const seen = new Set<string>()
+  for (const m of text.matchAll(/(?:https?:\/\/[^\s<>()\]]+|\/[^\s<>()\]]*)canvas\/[a-z2-7]{12}\/?/g)) {
+    const src = canvasImage(m[0], here)
+    if (src && !seen.has(src)) {
+      seen.add(src)
+      out.push({ href: new URL(m[0], here).href, src })
+    }
+  }
+  return out
+}
