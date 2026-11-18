@@ -18,6 +18,7 @@ import (
 func runWorkspace(args []string) {
 	fs := flag.NewFlagSet("workspace", flag.ExitOnError)
 	name := fs.String("workspace", "", "workspace name (defaults to the current Herdr space)")
+	images := fs.String("images", "auto", "how to draw images: auto, kitty, blocks or off")
 	endpoint := fs.String("endpoint", "", "amythest server base URL")
 	config := fs.String("config", "", "path to private cli.yaml")
 	fs.Parse(args)
@@ -57,6 +58,11 @@ func runWorkspace(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 	}
 	options := tui.WorkspaceOptions{Scope: scope, AllSources: configuredSources(client, cfg), Wall: wall.Options{Open: openURL, OpenCanvas: openCanvasPane, Share: func(it wall.Item) tea.Cmd { return shareWallItem(client, it) }}}
+	out := &serialOut{File: os.Stdout}
+	if err := configureWallGraphics(*images, &options.Wall, out); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 	options.Open = func(c *find.Choice) tea.Cmd {
 		return func() tea.Msg {
 			var err error
@@ -68,7 +74,9 @@ func runWorkspace(args []string) {
 			return tui.WorkspaceOpened{Err: err}
 		}
 	}
-	_, err = tea.NewProgram(tui.NewWorkspace(client, options), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	dashboard := tui.NewWorkspace(client, options)
+	_, err = tea.NewProgram(dashboard, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithOutput(out)).Run()
+	dashboard.Close()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

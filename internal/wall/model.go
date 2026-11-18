@@ -576,17 +576,25 @@ func (m *model) say(text string) tea.Cmd {
 	return tea.Tick(4*time.Second, func(time.Time) tea.Msg { return flashMsg{text} })
 }
 
-// quit frees the images this wall uploaded so they do not outlive the pane.
-func (m *model) quit() tea.Cmd {
+// Close frees uploaded images, also when an embedding dashboard replaces the
+// wall or exits from a different panel. Repeated closes are harmless.
+func (m *model) Close() error {
 	var b strings.Builder
 	for _, p := range m.pics {
 		for _, id := range p.placed {
 			b.WriteString(kittyDelete(id))
 		}
+		clear(p.placed)
 	}
 	if b.Len() > 0 {
-		io.WriteString(m.o.Out, b.String())
+		_, err := io.WriteString(m.o.Out, b.String())
+		return err
 	}
+	return nil
+}
+
+func (m *model) quit() tea.Cmd {
+	m.Close()
 	return tea.Quit
 }
 

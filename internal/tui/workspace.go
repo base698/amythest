@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"io"
 	"reflect"
 	"strings"
 
@@ -47,8 +48,8 @@ func NewWorkspace(client *apiclient.Client, o WorkspaceOptions) *Workspace {
 	w.resetApp()
 	o.Wall.Project = o.Scope.Project
 	o.Wall.CanvasWorkspace = o.Scope.Name
-	// Embedded images use cell blocks, which stay inside their panel when resized.
-	o.Wall.Graphics = "blocks"
+	// Kitty's Unicode placeholders are ordinary cells: box clips them with
+	// their panel, including when the terminal switches to a single column.
 	w.o.Wall = o.Wall
 	w.wall = wall.New(client, o.Wall)
 	return w
@@ -183,6 +184,7 @@ func (w *Workspace) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					o.CanvasWorkspace = ""
 				}
 				o.Show = &wall.Want{Kind: v.Kind, Title: v.Title, Ref: v.Ref}
+				w.Close()
 				w.wall = wall.New(w.allClient, o)
 				w.wallGeneration++
 				w.wallFocus = true
@@ -270,6 +272,16 @@ func (w *Workspace) deliver(panel string, msg tea.Msg) tea.Cmd {
 	}
 	return w.command(panel, cmd)
 }
+
+// Close releases terminal images on every exit, including quitting from the
+// navigation panel, and before replacing the wall with a search result.
+func (w *Workspace) Close() error {
+	if closer, ok := w.wall.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
 func box(frame string, width, height int) string {
 	lines := strings.Split(frame, "\n")
 	if len(lines) > height {
@@ -299,9 +311,9 @@ func (w *Workspace) View() string {
 	if w.searching && !w.wallFocus {
 		active = "search"
 	}
-	header := headerStyle.Render(ansi.Truncate(" amy · "+label+" · keyboard: "+active, w.width, "…"))
+	header := headerStyle.Width(w.width).Render(ansi.Truncate(" amy · "+label+" · keyboard: "+active, w.width, "…"))
 	left, right, h := w.sizes()
-	frame := w.app.View()
+	frame := w.app.view(true)
 	if w.searching && w.search != nil {
 		frame = w.search.View()
 	}
@@ -318,6 +330,6 @@ func (w *Workspace) View() string {
 	} else if w.tabSwitchesPanels() {
 		hint = " Tab/Ctrl+W wall · F1 Focus F2 Tasks F3 Boards F4 Notes F7 Search F9 Scope"
 	}
-	footer := statusStyle.Render(ansi.Truncate(hint, w.width, "…"))
+	footer := statusStyle.Width(w.width).Render(ansi.Truncate(hint, w.width, "…"))
 	return header + "\n" + body + "\n" + footer
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/canvas"
@@ -501,6 +502,38 @@ func TestWallShowsTheWorkspacesProjectWithInlineImages(t *testing.T) {
 	m.quit()
 	if strings.Count(out.String(), "a=d,d=I")-before != 2 {
 		t.Errorf("uploads not freed on quit: %q", out.String()[len(out.String())-80:])
+	}
+}
+
+func TestKittyImagesResizeAndCloseWithTheirPanel(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	api := &fakeAPI{overview: snapshot(), project: snapshot(), media: map[string][]byte{hash: picture(t)}}
+	m, out := newWall(t, api, Options{Graphics: "kitty", Project: "Robot"})
+	m.summary = false
+	for _, width := range []int{28, 80, 40, 120, 28} {
+		drive(t, m, tea.WindowSizeMsg{Width: width, Height: 30})
+		frame := m.View()
+		if !strings.ContainsRune(frame, placeholder) {
+			t.Fatal("resizing lost image placeholders")
+		}
+		for _, line := range strings.Split(frame, "\n") {
+			if ansi.StringWidth(line) > width {
+				t.Fatalf("image overflow at %d columns", width)
+			}
+		}
+	}
+	remaining := len(m.pics[hash].placed)
+	before := strings.Count(out.String(), "a=d,d=I")
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(out.String(), "a=d,d=I") - before; remaining == 0 || got != remaining {
+		t.Fatalf("close released %d images, want %d", got, remaining)
+	}
+	before = out.Len()
+	m.Close()
+	if out.Len() != before {
+		t.Fatal("repeated close deleted images twice")
 	}
 }
 

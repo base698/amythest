@@ -6,6 +6,7 @@ import (
 
 	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/find"
+	"github.com/base698/amythest/internal/wall"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -63,9 +64,12 @@ func TestWorkspaceLayoutFitsAndWallGeneration(t *testing.T) {
 				t.Fatalf("height: got %d want %d", len(lines), size.Height)
 			}
 			for _, line := range lines {
-				if ansi.StringWidth(line) > size.Width {
-					t.Fatalf("line wider than %d: %s", size.Width, line)
+				if ansi.StringWidth(line) != size.Width {
+					t.Fatalf("line does not fill %d columns: %q", size.Width, line)
 				}
+			}
+			if strings.Count(w.View(), " amy · ") != 1 {
+				t.Fatal("dashboard repeats the app header")
 			}
 		}
 	}
@@ -76,6 +80,54 @@ func TestWorkspaceLayoutFitsAndWallGeneration(t *testing.T) {
 	_, cmd := w.Update(workspaceMsg{"wall", 0, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}}})
 	if cmd != nil {
 		t.Fatal("old wall response affected new wall")
+	}
+}
+
+// Kitty placeholders consist of one cell plus combining row/column marks.
+// Cropping and joining panels must preserve those marks and their colour.
+type workspaceImagePanel struct{ workspacePanelRecorder }
+
+func (p *workspaceImagePanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { return p, nil }
+
+func (*workspaceImagePanel) View() string {
+	row := "\x1b[38;2;1;2;3m" + strings.Repeat("\U0010EEEE\u0305\u030d", 200) + "\x1b[39m"
+	return strings.Repeat(row+"\n", 50)
+}
+
+func TestWorkspaceClipsImageCellsToVisiblePanel(t *testing.T) {
+	w := NewWorkspace(apiclient.New(apiclient.Config{Endpoint: "https://example.test"}), WorkspaceOptions{
+		Scope: apiclient.Config{}.Workspace("Garden"), Wall: wall.Options{Graphics: "kitty"},
+	})
+	if w.o.Wall.Graphics != "kitty" {
+		t.Fatal("dashboard disabled sharp images")
+	}
+	w.wall = &workspaceImagePanel{}
+	for _, width := range []int{140, 105, 80, 160} {
+		w.Update(tea.WindowSizeMsg{Width: width, Height: 24})
+		left, right, h := w.sizes()
+		for _, focus := range []bool{false, true} {
+			w.wallFocus = focus
+			frame := w.View()
+			visible := width >= 105 || focus
+			for y, line := range strings.Split(frame, "\n") {
+				if ansi.StringWidth(line) != width {
+					t.Fatalf("image overflow at width %d, row %d", width, y)
+				}
+				n := strings.Count(line, "\U0010EEEE\u0305\u030d")
+				want := 0
+				if visible && y > 0 && y <= h {
+					want = right
+				}
+				if n != want {
+					t.Fatalf("row %d: %d intact image cells, want %d; %q", y, n, want, line)
+				}
+				if visible && width >= 105 && y > 0 && y <= h {
+					if strings.ContainsRune(ansi.Truncate(line, left+1, ""), '\U0010EEEE') {
+						t.Fatal("image crossed the divider into navigation")
+					}
+				}
+			}
+		}
 	}
 }
 

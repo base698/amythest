@@ -47,6 +47,12 @@ first. Press **c** to toggle canvases only, or **f** to cycle all/media/commits/
 canvases. **Enter** on a canvas opens its native Herdr pane; **o** explicitly
 opens its browser editor. The list refreshes with the wall (**r** immediately).
 
+Image previews use pixel graphics in Herdr App and other
+compatible terminals, including inside the dashboard. They clip and resize
+with the wall panel. Other terminals fall back to coloured blocks. Override
+the choice with `amy workspace -images kitty|blocks|off`, or set
+`AMY_WALL_IMAGES` to the same value; `auto` is the default.
+
 ## Private workspace mapping
 
 Defaults match boards by name, display name or Workspace metadata; notes and

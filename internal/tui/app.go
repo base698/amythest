@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/kanban/board"
@@ -394,6 +395,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (a *App) View() string {
+	return a.view(false)
+}
+
+func (a *App) view(embedded bool) string {
 	if a.width == 0 {
 		return "loading…"
 	}
@@ -409,7 +414,11 @@ func (a *App) View() string {
 	for i, v := range a.stack {
 		crumbs[i] = v.Title()
 	}
-	header := headerStyle.Width(a.width).Render(" amy · " + strings.Join(crumbs, " › "))
+	title := strings.Join(crumbs, " › ")
+	header := headerStyle.Width(a.width).Render(ansi.Truncate(" amy · "+title, a.width, "…"))
+	if embedded {
+		header = groupHeaderStyle.Render(ansi.Truncate(" "+title, a.width, "…"))
+	}
 
 	status := a.status
 	if status == "" {
@@ -422,7 +431,10 @@ func (a *App) View() string {
 	if a.busy() {
 		status = a.spin.View() + " " + status
 	}
-	bar := statusStyle.Width(a.width).Render(" " + status)
+	bar := statusStyle.Width(a.width).Render(ansi.Truncate(" "+status, a.width, "…"))
+	if embedded {
+		bar = dimStyle.Render(ansi.Truncate(" "+status, a.width, "…"))
+	}
 
 	lines := strings.Split(body, "\n")
 	max := a.height - 2

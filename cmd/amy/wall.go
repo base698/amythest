@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -85,31 +86,42 @@ func runWall(args []string) {
 // showWall runs the wall on this terminal until the person quits it, then
 // closes pane, the Herdr App pane it owns, if any.
 func showWall(client *apiclient.Client, images string, opts wall.Options, pane string) error {
-	graphics := images
-	if graphics == "" || graphics == "auto" {
-		graphics = wall.DetectGraphics(os.Getenv, terminalAnswersGraphicsQuery)
-	}
-	if graphics != "kitty" && graphics != "blocks" && graphics != "off" {
-		return fmt.Errorf("wall: -images must be auto, kitty, blocks or off")
+	out := &serialOut{File: os.Stdout}
+	if err := configureWallGraphics(images, &opts, out); err != nil {
+		return err
 	}
 	if opts.Share == nil {
 		opts.Share = func(it wall.Item) tea.Cmd { return shareWallItem(client, it) }
 	}
-	out := &serialOut{File: os.Stdout}
-	opts.Graphics, opts.Out, opts.Open = graphics, out, openURL
-	opts.OpenCanvas = openCanvasPane
-	// The terminal reports its size in cells and in pixels; together they give
-	// the shape of a cell, which decides how many rows an image needs.
-	if ws, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 && ws.Row > 0 && ws.Xpixel > 0 && ws.Ypixel > 0 {
-		opts.CellW = int(ws.Xpixel) / int(ws.Col)
-		opts.CellAspect = (float64(ws.Xpixel) / float64(ws.Col)) / (float64(ws.Ypixel) / float64(ws.Row))
-	}
-	program := tea.NewProgram(wall.New(client, opts), tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithOutput(out))
+	opts.Open, opts.OpenCanvas = openURL, openCanvasPane
+	model := wall.New(client, opts)
+	defer model.(io.Closer).Close()
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithOutput(out))
 	if _, err := program.Run(); err != nil {
 		return err
 	}
 	if pane != "" {
 		wall.ClosePane(pane, nil)
+	}
+	return nil
+}
+
+// Both the standalone wall and the dashboard use the same detection, image
+// override and cell geometry, with uploads serialized against screen redraws.
+func configureWallGraphics(images string, opts *wall.Options, out io.Writer) error {
+	graphics := images
+	if graphics == "" || graphics == "auto" {
+		graphics = wall.DetectGraphics(os.Getenv, terminalAnswersGraphicsQuery)
+	}
+	if graphics != "kitty" && graphics != "blocks" && graphics != "off" {
+		return fmt.Errorf("-images must be auto, kitty, blocks or off")
+	}
+	opts.Graphics, opts.Out = graphics, out
+	// The terminal reports its size in cells and in pixels; together they give
+	// the shape of a cell, which decides how many rows an image needs.
+	if ws, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 && ws.Row > 0 && ws.Xpixel > 0 && ws.Ypixel > 0 {
+		opts.CellW = int(ws.Xpixel) / int(ws.Col)
+		opts.CellAspect = (float64(ws.Xpixel) / float64(ws.Col)) / (float64(ws.Ypixel) / float64(ws.Row))
 	}
 	return nil
 }
