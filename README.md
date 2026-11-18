@@ -87,6 +87,22 @@ rescan interval). Secrets are env-only:
 Amythest binds loopback by default; put Tailscale Serve or any
 TLS-terminating proxy in front.
 
+### One-step Mac setup
+
+```sh
+scripts/setup-mac.sh                        # local server + amy + Herdr shortcuts + collector
+scripts/setup-mac.sh --remote https://host/notes   # use an existing server instead
+scripts/setup-mac.sh --dry-run              # see what it would do
+```
+
+Builds and installs `~/bin/amythest` and `~/bin/amy`; writes
+`~/.config/amythest/{amythest.yaml,env,cli.yaml}` only if missing (private
+login on loopback with a generated password, Work enabled); runs the server as
+the `dev.amythest.server` launchd agent (log: `~/Library/Logs/amythest.log`);
+installs the Herdr App shortcuts and Claude lifecycle integration; then
+registers the Work collector (browser approval) and installs its service.
+Re-running refreshes binaries and services and keeps config and secrets.
+
 ### Running as a managed service
 
 Three opt-in capabilities support container/orchestrator deployments; all
