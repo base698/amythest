@@ -119,6 +119,24 @@ func fxTick() tea.Cmd {
 	return tea.Tick(40*time.Millisecond, func(time.Time) tea.Msg { return shimmerMsg{} })
 }
 
+// Navigate switches primary views even when the previous view has an input.
+func (a *App) Navigate(section string) tea.Cmd {
+	switch section {
+	case "1":
+		a.stack = []view{newTodayView(a.client, a.reg)}
+	case "2":
+		a.stack = []view{newTasksView(a.client)}
+	case "3":
+		a.stack = []view{newBoardsView(a.client, a.azSource())}
+	case "4":
+		a.stack = []view{newNotesView(a.client)}
+	default:
+		return nil
+	}
+	a.help, a.status, a.alert = false, "", nil
+	return tea.Batch(a.top().Init(), a.restartShimmer())
+}
+
 func (a *App) Init() tea.Cmd {
 	return tea.Batch(a.stack[0].Init(), a.spin.Tick, shimmerTick())
 }

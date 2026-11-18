@@ -442,7 +442,14 @@ func (s *Server) writeJSON(w http.ResponseWriter, v any) {
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	includeArchived := parseBoolParam(r.URL.Query().Get("include_archived"))
-	results, err := s.db.SearchWithOptions(q, index.SearchOptions{Limit: 10, IncludeArchived: includeArchived, StartDate: r.URL.Query().Get("start_date"), EndDate: r.URL.Query().Get("end_date"), Kind: r.URL.Query().Get("kind")})
+	options := index.SearchOptions{Limit: 10, IncludeArchived: includeArchived, StartDate: r.URL.Query().Get("start_date"), EndDate: r.URL.Query().Get("end_date"), Kind: r.URL.Query().Get("kind")}
+	if r.URL.Query().Has("scope_slugs") {
+		if err := json.Unmarshal([]byte(r.URL.Query().Get("scope_slugs")), &options.Slugs); err != nil || options.Slugs == nil || len(options.Slugs) > 10000 {
+			http.Error(w, "Invalid search scope", http.StatusBadRequest)
+			return
+		}
+	}
+	results, err := s.db.SearchWithOptions(q, options)
 	if err != nil {
 		slog.Warn("search", "err", err)
 		http.Error(w, "Search failed: check date and source filters", http.StatusBadRequest)

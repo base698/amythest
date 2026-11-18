@@ -121,6 +121,10 @@ workstation settings and SSH forwarding remain consistent. It waits for Herdr
 to register the terminal before displaying and focusing it. Other bindings are
 preserved. Personal absolute paths are generated outside the checkout.
 
+The same installer adds **Cmd+Shift+A** for the [workspace dashboard](workspace-dashboard.md)
+and **Ctrl+B, a** for quick task capture. It clones a compatible existing prefix
+mod, preserving its other commands.
+
 The older `terminal.open` binding with
 `argv: ["/absolute/path/to/amy", "messages", "-pane"]` remains available for
 splits in a local tab. Its toggle is scoped to that tab.

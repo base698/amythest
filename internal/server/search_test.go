@@ -2,8 +2,10 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,6 +23,59 @@ func writeSearchFixture(t *testing.T, root, rel, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSearchScopePrecedesLimitAndValidatesInput(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 20; i++ {
+		writeSearchFixture(t, root, fmt.Sprintf("Other/%02d.md", i), "---\ntitle: Beacon\n---\nbeacon\n")
+	}
+	writeSearchFixture(t, root, "Garden/Plan.md", "---\ntitle: Garden plan\n---\nPlant a beacon beside the seedlings.\n- [ ] Check the beacon\n")
+	v, err := vault.Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.Reconcile(v, markdown.New("/")); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{db: db}
+	for _, tc := range []struct {
+		scope         string
+		status, count int
+	}{
+		{`["Garden/Plan"]`, http.StatusOK, 2},
+		{`[]`, http.StatusOK, 0},
+		{`["missing"]`, http.StatusOK, 0},
+		{`null`, http.StatusBadRequest, 0},
+		{`"Garden/Plan"`, http.StatusBadRequest, 0},
+		{`[`, http.StatusBadRequest, 0},
+	} {
+		r := httptest.NewRecorder()
+		s.handleSearch(r, httptest.NewRequest(http.MethodGet, "/api/search?q=beacon&scope_slugs="+url.QueryEscape(tc.scope), nil))
+		if r.Code != tc.status {
+			t.Fatalf("scope %s: status %d", tc.scope, r.Code)
+		}
+		if r.Code != http.StatusOK {
+			continue
+		}
+		var results []index.SearchResult
+		if err := json.Unmarshal(r.Body.Bytes(), &results); err != nil {
+			t.Fatal(err)
+		}
+		if len(results) != tc.count {
+			t.Fatalf("scope %s: %+v", tc.scope, results)
+		}
+		for _, result := range results {
+			if result.Slug != "Garden/Plan" {
+				t.Fatalf("outside scope: %+v", result)
+			}
+		}
 	}
 }
 

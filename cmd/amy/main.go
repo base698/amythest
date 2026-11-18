@@ -25,6 +25,7 @@ import (
 
 func main() {
 	args := os.Args[1:]
+	initial := ""
 	if len(args) > 0 {
 		switch args[0] {
 		case "messages":
@@ -36,7 +37,7 @@ func main() {
 		case "source":
 			runSource(args[1:])
 			return
-		case "capture":
+		case "capture", "add":
 			runCapture(args[1:])
 			return
 		case "herdr":
@@ -45,6 +46,12 @@ func main() {
 		case "wall":
 			runWall(args[1:])
 			return
+		case "workspace", "board":
+			runWorkspace(args[1:])
+			return
+		case "tasks", "focus", "boards", "notes":
+			initial = map[string]string{"tasks": "2", "focus": "1", "boards": "3", "notes": "4"}[args[0]]
+			args = args[1:]
 		case "find":
 			runFind(args[1:])
 			return
@@ -72,6 +79,24 @@ func main() {
 		return
 	}
 
+	registry := configuredSources(client, cfg)
+
+	if err := tui.LoadThemes(cfg.File); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: theme config:", err)
+	}
+
+	app := tui.NewApp(client, registry)
+	if initial != "" {
+		app.Navigate(initial)
+	}
+	program := tea.NewProgram(app, tea.WithAltScreen())
+	if _, err := program.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func configuredSources(client *apiclient.Client, cfg apiclient.Config) *source.Registry {
 	sources := []source.Source{amythest.New(client)}
 	if jcfg, ok, jerr := jira.LoadConfig(cfg.File); jerr != nil {
 		fmt.Fprintln(os.Stderr, "warning: sources config:", jerr)
@@ -84,15 +109,7 @@ func main() {
 		sources = append(sources, azboards.New(acfg))
 	}
 
-	if err := tui.LoadThemes(cfg.File); err != nil {
-		fmt.Fprintln(os.Stderr, "warning: theme config:", err)
-	}
-
-	program := tea.NewProgram(tui.NewApp(client, source.NewRegistry(sources...)), tea.WithAltScreen())
-	if _, err := program.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+	return source.NewRegistry(sources...)
 }
 
 // runCheck is a non-TTY smoke: login, list boards and tasks, exit 0. Used by

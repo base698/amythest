@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // ---------------------------------------------------------------------- work
@@ -173,8 +174,20 @@ type WorkHit struct {
 func (c *Client) WorkSearch(ctx context.Context, query string, limit int) ([]WorkHit, error) {
 	var out []WorkHit
 	path := fmt.Sprintf("/api/work/search?q=%s&limit=%d", url.QueryEscape(query), limit)
+	if c.scope != nil {
+		path += "&project=" + url.QueryEscape(c.scope.Project)
+	}
 	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
 		return nil, err
+	}
+	if c.scope != nil {
+		filtered := make([]WorkHit, 0)
+		for _, hit := range out {
+			if strings.EqualFold(hit.Project, c.scope.Project) {
+				filtered = append(filtered, hit)
+			}
+		}
+		out = filtered
 	}
 	return out, nil
 }
@@ -193,10 +206,14 @@ type VaultHit struct {
 // VaultSearch searches notes, cards and tasks.
 func (c *Client) VaultSearch(ctx context.Context, query string) ([]VaultHit, error) {
 	var out []VaultHit
-	if err := c.do(ctx, http.MethodGet, "/api/search?q="+url.QueryEscape(query), nil, &out); err != nil {
+	path, err := c.searchPath(ctx, query)
+	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return c.scopeVault(ctx, out)
 }
 
 // CardTitles finds the titles of cards by id across the boards. Cards that

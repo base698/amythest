@@ -67,6 +67,8 @@ func (e *APIError) Is(target error) bool {
 }
 
 type Client struct {
+	scope *Scope
+
 	cfg  Config
 	http *http.Client
 	now  func() time.Time
@@ -193,9 +195,49 @@ type TaskGroup struct {
 // e.g. "not done;sort by due") against the vault index.
 func (c *Client) ListTasks(ctx context.Context, query string) ([]TaskGroup, error) {
 	var groups []TaskGroup
-	path := "/api/tasks?query=" + url.QueryEscape(query)
+	serverQuery := query
+	var localQuery *tasks.Query
+	if c.scope != nil {
+		// Apply limits after workspace membership, otherwise recent tasks in
+		// unrelated workspaces can fill the entire completed-task page.
+		lines := strings.Split(strings.ReplaceAll(query, ";", "\n"), "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "limit ") {
+				localQuery = tasks.ParseQuery(strings.Join(lines, "\n"))
+				if err := localQuery.Err(); err != nil {
+					return nil, err
+				}
+				break
+			}
+		}
+		if localQuery != nil {
+			kept := []string{}
+			for _, line := range lines {
+				lower := strings.ToLower(strings.TrimSpace(line))
+				if !strings.HasPrefix(lower, "limit ") && !strings.HasPrefix(lower, "group by ") {
+					kept = append(kept, line)
+				}
+			}
+			serverQuery = strings.Join(kept, "\n")
+		}
+	}
+	path := "/api/tasks?query=" + url.QueryEscape(serverQuery)
 	if err := c.do(ctx, http.MethodGet, path, nil, &groups); err != nil {
 		return nil, err
+	}
+	groups, err := c.scopeTasks(ctx, groups)
+	if err != nil {
+		return nil, err
+	}
+	if localQuery != nil {
+		var flat []tasks.Task
+		for _, group := range groups {
+			flat = append(flat, group.Tasks...)
+		}
+		groups = []TaskGroup{}
+		for _, group := range localQuery.Run(flat) {
+			groups = append(groups, TaskGroup{Name: group.Name, Tasks: group.Tasks})
+		}
 	}
 	return groups, nil
 }
@@ -335,7 +377,7 @@ func (c *Client) ListNotes(ctx context.Context) ([]NoteEntry, error) {
 	if err := c.do(ctx, http.MethodGet, "/api/notes", nil, &notes); err != nil {
 		return nil, err
 	}
-	return notes, nil
+	return c.scopeNotes(ctx, notes)
 }
 
 // ContentEntry mirrors /api/contentIndex: per-note outgoing links and tags.
@@ -449,11 +491,14 @@ type SearchResult struct {
 // SearchNotes runs the server-side FTS query over the vault.
 func (c *Client) SearchNotes(ctx context.Context, query string) ([]SearchResult, error) {
 	var results []SearchResult
-	path := "/api/search?q=" + url.QueryEscape(query)
+	path, err := c.searchPath(ctx, query)
+	if err != nil {
+		return nil, err
+	}
 	if err := c.do(ctx, http.MethodGet, path, nil, &results); err != nil {
 		return nil, err
 	}
-	return results, nil
+	return c.scopeSearch(ctx, results)
 }
 
 type NoteProperty struct {
@@ -490,7 +535,7 @@ func (c *Client) ListBoards(ctx context.Context) ([]board.BoardSummary, error) {
 	if err := c.do(ctx, http.MethodGet, "/kanban/api/boards", nil, &boards); err != nil {
 		return nil, err
 	}
-	return boards, nil
+	return c.scopeBoards(boards), nil
 }
 
 // GetBoard returns a board with its active cards. Done cards live in the

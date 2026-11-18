@@ -18,6 +18,8 @@ type SearchOptions struct {
 	Limit                    int
 	IncludeArchived          bool
 	StartDate, EndDate, Kind string
+	// nil searches the vault; an explicit empty slice searches no notes.
+	Slugs []string
 }
 
 var dateInName = regexp.MustCompile(`(?:^|[/ _-])(\d{4}-\d{2}-\d{2})(?:$|[^0-9])`)
@@ -220,6 +222,15 @@ func (d *DB) SearchWithOptions(q string, o SearchOptions) ([]SearchResult, error
 	if o.Kind != "" {
 		where = append(where, "kind=?")
 		args = append(args, o.Kind)
+	}
+	if o.Slugs != nil {
+		if len(o.Slugs) == 0 {
+			return []SearchResult{}, nil
+		}
+		where = append(where, "parent_slug IN ("+strings.TrimSuffix(strings.Repeat("?,", len(o.Slugs)), ",")+")")
+		for _, slug := range o.Slugs {
+			args = append(args, slug)
+		}
 	}
 	if query != "" {
 		// A title lookup should find that document before short task mentions

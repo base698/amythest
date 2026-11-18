@@ -21,6 +21,8 @@ import (
 const defaultEndpoint = "http://127.0.0.1:8639"
 
 type Config struct {
+	Workspaces map[string]Scope
+
 	// Endpoint is the base URL of the amythest server, including any
 	// public prefix (e.g. https://host/notes). No trailing slash.
 	Endpoint string
@@ -37,6 +39,8 @@ type Config struct {
 }
 
 type fileConfig struct {
+	Workspaces map[string]Scope `yaml:"workspaces"`
+
 	Endpoint string `yaml:"endpoint"`
 }
 
@@ -70,6 +74,7 @@ func LoadConfig(args []string) (Config, error) {
 			cfg.Endpoint = fc.Endpoint
 		}
 		cfg.File = path
+		cfg.Workspaces = fc.Workspaces
 	} else if *configPath != "" {
 		// An explicitly named config file must exist.
 		return Config{}, fmt.Errorf("read config: %w", err)

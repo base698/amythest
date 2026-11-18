@@ -14,6 +14,9 @@ import (
 
 // Options configure a search.
 type Options struct {
+	// Finish embeds search in another UI; nil closes the standalone program.
+	Finish func(*Choice) tea.Cmd
+
 	Query   string          // start with this query
 	Screens func() []Screen // reads open terminals; nil: that source is off
 	Tickets func() []Ticket // lists external trackers' tickets; nil: none configured
@@ -134,6 +137,15 @@ func (m *model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+func (m *model) finish() tea.Cmd {
+	if m.o.Finish != nil {
+		choice := m.choice
+		m.choice = nil // an embedded search may reopen; Escape must only cancel
+		return m.o.Finish(choice)
+	}
+	return tea.Quit
+}
+
 func (m *model) query() string { return strings.TrimSpace(m.input.Value()) }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -225,7 +237,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc":
-			return m, tea.Quit
+			return m, m.finish()
 		case "up", "ctrl+p":
 			m.move(-1)
 			return m, nil
@@ -251,7 +263,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+o":
 			if m.cursor < len(m.rows) && m.rows[m.cursor].URL != "" {
 				m.choice = &Choice{URL: m.rows[m.cursor].URL}
-				return m, tea.Quit
+				return m, m.finish()
 			}
 			m.note = "this result has no web page"
 			return m, nil
@@ -284,15 +296,15 @@ func (m *model) choose(r Result, looked bool) (tea.Model, tea.Cmd) {
 	switch {
 	case r.Viewable():
 		m.choice = &Choice{View: &View{Project: r.Project, Kind: r.Kind, Title: r.Title, Ref: r.Ref}}
-		return m, tea.Quit
+		return m, m.finish()
 	case r.Pane != "":
 		m.choice = &Choice{Pane: r.Pane}
-		return m, tea.Quit
+		return m, m.finish()
 	case r.Group == "agents" && !looked && m.places != nil && !m.places.Known(r.Run):
 		return m, m.lookUp(r.Run, false)
 	case r.URL != "":
 		m.choice = &Choice{URL: r.URL}
-		return m, tea.Quit
+		return m, m.finish()
 	}
 	m.note = "nowhere to go for this result"
 	return m, nil
@@ -303,7 +315,7 @@ func (m *model) toPane(r Result, looked bool) (tea.Model, tea.Cmd) {
 	switch {
 	case r.Pane != "":
 		m.choice = &Choice{Pane: r.Pane}
-		return m, tea.Quit
+		return m, m.finish()
 	case r.Group == "agents" && !looked && m.places != nil && !m.places.Known(r.Run):
 		return m, m.lookUp(r.Run, true)
 	case r.Group == "agents":

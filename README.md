@@ -153,7 +153,10 @@ notes or cards to a running herdr agent as context.
 
 ```sh
 make install-amy          # builds and installs to ~/bin/amy
-amy                       # tasks view; 2 = boards, ? = help
+amy                       # Today/Focus; 2 Tasks, 3 Boards, 4 Notes, ? help
+amy tasks                 # open the general vault task list directly
+amy add "Water seedlings" # append a task to today's daily note
+amy workspace -workspace Garden # workspace dashboard with the wall beside it
 amy -check                # non-interactive login + connectivity smoke
 ```
 
@@ -162,6 +165,11 @@ The endpoint comes from `-endpoint`, `AMYTHEST_ENDPOINT`, or
 come from `KANBAN_USERNAME`/`KANBAN_PASSWORD` or `~/.config/amythest/env`.
 Sessions are cached in `~/.cache/amythest-kanban/session.json`, shared with
 the kanban.py skill client.
+
+For **Cmd+Shift+A** (workspace dashboard) and **Ctrl+B, a** (quick add) in
+Herdr App, see [Workspace dashboard](docs/workspace-dashboard.md). The dashboard
+keeps Focus, Tasks, Boards, Notes and Search beside the workspace's wall, with
+an explicit workspace/All toggle. Workspace mappings live in private `cli.yaml`.
 
 amy can also aggregate external ticketing sources (Jira today, Azure DevOps
 planned) behind `internal/source`: issues merge into the Today view tagged

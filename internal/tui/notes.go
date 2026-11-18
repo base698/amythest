@@ -117,7 +117,11 @@ func (v *notesView) browseLoadCmd() tea.Cmd {
 		if err != nil {
 			return fail(err)
 		}
-		return browseLoadedMsg{notes: notes, index: index}
+		visibleIndex := make(map[string]apiclient.ContentEntry, len(notes))
+		for _, note := range notes {
+			visibleIndex[note.Slug] = index[note.Slug]
+		}
+		return browseLoadedMsg{notes: notes, index: visibleIndex}
 	}
 }
 

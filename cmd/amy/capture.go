@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -28,8 +29,22 @@ func runCapture(args []string) {
 	// `amy capture -endpoint URL call the vet` captures "call the vet".
 	valueFlags := map[string]bool{"-config": true, "--config": true, "-endpoint": true, "--endpoint": true}
 	var text, flags []string
+	workspace := ""
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if arg == "-workspace" || arg == "--workspace" {
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "-workspace requires a name")
+				os.Exit(2)
+			}
+			i++
+			workspace = args[i]
+			continue
+		}
+		if key, value, ok := strings.Cut(arg, "="); ok && (key == "-workspace" || key == "--workspace") {
+			workspace = value
+			continue
+		}
 		if !strings.HasPrefix(arg, "-") {
 			text = append(text, arg)
 			continue
@@ -47,9 +62,16 @@ func runCapture(args []string) {
 		os.Exit(2)
 	}
 	client := apiclient.New(cfg)
+	tag := ""
+	if workspace != "" {
+		scope := cfg.Workspace(workspace)
+		if len(scope.Tags) > 0 && regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_/-]*$`).MatchString(scope.Tags[0]) {
+			tag = scope.Tags[0]
+		}
+	}
 
 	if line := strings.TrimSpace(strings.Join(text, " ")); line != "" {
-		path, err := addCaptured(client, line)
+		path, err := addCaptured(client, captureText(line, tag))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "capture:", err)
 			os.Exit(1)
@@ -58,7 +80,11 @@ func runCapture(args []string) {
 		return
 	}
 
-	model := captureModel{client: client, where: herdrContext()}
+	where := herdrContext()
+	if workspace != "" {
+		where = workspace
+	}
+	model := captureModel{client: client, where: where, tag: tag}
 	input := textinput.New()
 	input.Prompt = "› "
 	input.CharLimit = 2000
@@ -77,6 +103,18 @@ func runCapture(args []string) {
 	}
 }
 
+func captureText(text, tag string) string {
+	if tag == "" {
+		return text
+	}
+	for _, word := range strings.Fields(text) {
+		if strings.EqualFold(word, "#"+tag) {
+			return text
+		}
+	}
+	return text + " #" + tag
+}
+
 func addCaptured(client *apiclient.Client, text string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -86,6 +124,7 @@ func addCaptured(client *apiclient.Client, text string) (string, error) {
 type captureModel struct {
 	client *apiclient.Client
 	input  textinput.Model
+	tag    string
 	where  string // herdr workspace/cwd, shown for orientation
 	saving bool
 	saved  string
@@ -99,6 +138,9 @@ func (m captureModel) Init() tea.Cmd { return textinput.Blink }
 
 func (m captureModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.input.Width = max(1, msg.Width-6)
+		return m, nil
 	case captureSavedMsg:
 		m.saving = false
 		m.saved = msg.path
@@ -126,7 +168,7 @@ func (m captureModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.saving, m.err = true, nil
 			client := m.client
 			return m, func() tea.Msg {
-				path, err := addCaptured(client, line)
+				path, err := addCaptured(client, captureText(line, m.tag))
 				if err != nil {
 					return captureErrMsg{err}
 				}
@@ -148,9 +190,12 @@ var (
 
 func (m captureModel) View() string {
 	var b strings.Builder
-	b.WriteString("\n  " + captureTitle.Render("capture") + "  " + captureDim.Render("→ today's daily note"))
+	b.WriteString("\n  " + captureTitle.Render("add a task") + "  " + captureDim.Render("→ today's daily note"))
 	if m.where != "" {
 		b.WriteString(captureDim.Render("  ·  " + m.where))
+	}
+	if m.tag != "" {
+		b.WriteString(captureDim.Render("  ·  #" + m.tag))
 	}
 	b.WriteString("\n\n  " + m.input.View() + "\n\n")
 	switch {

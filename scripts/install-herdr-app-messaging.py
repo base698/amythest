@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Install personal Herdr app mods and Find/Messages toggle keys."""
+"""Install personal Herdr workspace, quick-add, Find and Messages shortcuts."""
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -20,7 +21,7 @@ def main():
     home = Path(os.getenv("HERDR_APP_HOME", Path.home() / ".config/herdr-app"))
     keys = home / "keys.json"
     value = json.loads(keys.read_text())
-    for command in ("find", "messages"):
+    for command in ("find", "messages", "workspace", "add"):
         folder = home / "mods" / ("amythest-" + command)
         folder.mkdir(parents=True, exist_ok=True)
         shutil.copy2(root / "integrations/herdr-app/launcher.js", folder / "main.js")
@@ -36,11 +37,34 @@ def main():
     value.setdefault("global", {}).update({
         "cmd-shift-f": "mod.open:amythest-find",
         "cmd-shift-m": "mod.open:amythest-messages",
+        "cmd-shift-a": "mod.open:amythest-workspace",
     })
+    # Preserve the user's prefix commands in a personal clone. Shipped mods
+    # can be replaced on upgrade, so never edit the source mod in place.
+    prefix = value.get("global", {}).get("ctrl-b", "")
+    if isinstance(prefix, str) and prefix.startswith("mod.open:"):
+        original = prefix.split(":", 1)[1]
+        target = home / "mods/amythest-prefix"
+        if original != "amythest-prefix" and not target.exists():
+            subprocess.run(["herdr-app", "do", "mod.clone", json.dumps({"name": original, "as": "amythest-prefix"})], check=True)
+        source = target / "main.js"
+        if source.is_file():
+            text = source.read_text()
+            if "const KEYS = {" in text and "const SHEET = [" in text:
+                for key, mod in (("a", "add"), ("A", "workspace"), ("f", "find")):
+                    text = re.sub(r"^  " + key + r":.*\n", "", text, flags=re.M)
+                    text = text.replace("const KEYS = {", "const KEYS = {\n  " + key + ': () => run("mod.open", { name: "amythest-' + mod + '" }),', 1)
+                text = re.sub(r'^  \["Amythest",.*\n', "", text, flags=re.M)
+                text = text.replace("const SHEET = [", 'const SHEET = [\n  ["Amythest", 36, [["a", "add task"], ["A", "workspace"], ["f", "find"]]],', 1)
+                source.write_text(text)
+                subprocess.run(["herdr-app", "check", str(target)], check=True)
+                value["global"]["ctrl-b"] = "mod.open:amythest-prefix"
+            else:
+                print("Prefix mod uses a different key format; bind its add action to mod.open:amythest-add.")
     temporary = keys.with_name("keys.json.amythest-next")
     temporary.write_text(json.dumps(value, indent=2) + "\n")
     temporary.replace(keys)
-    print("Installed Cmd+Shift+F and Cmd+Shift+M toggles. Local settings also work over remote tabs.")
+    print("Installed Amythest workspace, Find, Messages, and quick-add shortcuts.")
 
 
 if __name__ == "__main__":

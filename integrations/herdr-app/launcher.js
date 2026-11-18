@@ -1,5 +1,5 @@
 import { View, div } from "gpui-kit";
-import { checking, hc, run, terminals, panes, closeOverlay, props, theme } from "herdr";
+import { checking, hc, run, terminals, panes, closeOverlay, props, theme, focused, spaces } from "herdr";
 import { command, binary } from "./command.js";
 
 // Start locally even when the selected tab belongs to another computer.
@@ -11,11 +11,20 @@ export default class Launcher extends View {
     this.handedOff = false;
     this.adopting = false;
     if (checking()) return;
+    const context = focused();
+    const space = spaces().find(s => s.id === context?.space);
+    this.workspace = space?.name || "";
+    this.scopeKey = space?.id || "";
+    this.title = {workspace: "Amythest", add: "Add task", find: "Find", messages: "Messages"}[command] || "Amythest";
     this.deadline = Date.now() + 15000;
     cx.timer.every(100, (cx) => this.attach(cx));
     cx.spawn(async (cx) => {
       try {
-        const name = `amythest-ui-${command}`;
+        const scoped = command === "workspace";
+        // hc names are limited to 32 lowercase characters. The space ID's
+        // random suffix keeps one dashboard per workspace within that limit.
+        if (scoped && !this.workspace) throw new Error("Select a Herdr workspace first.");
+        const name = scoped ? `amy-workspace-${this.scopeKey.slice(-18)}` : `amythest-ui-${command}`;
         const previous = await hc(["get", name, "--json"]);
         if (previous.code === 0) {
           const terminal = JSON.parse(previous.stdout);
@@ -30,7 +39,10 @@ export default class Launcher extends View {
             return;
           }
         }
-        const result = await hc(["run", "--bg", "--no-parent", "--no-notify", "--rm", "--name", name, "--", binary, command]);
+        const args = [binary, command];
+        if ((scoped || command === "add") && this.workspace) args.push("-workspace", this.workspace);
+        const labels = scoped ? ["--label", "amythest.workspace=" + this.scopeKey] : [];
+        const result = await hc(["run", "--bg", "--no-parent", "--no-notify", "--rm", "--name", name, ...labels, "--", ...args]);
         if (result.code !== 0) throw new Error("Could not start Amythest. Check its configured executable.");
         this.started = JSON.parse(result.stdout).address;
         if (!this.started) throw new Error("Herdr did not return the new terminal address.");
@@ -49,7 +61,7 @@ export default class Launcher extends View {
     const pane = panes().find(p => p.terminal === this.started);
     if (pane) {
       this.handedOff = true;
-      run("tab.rename", { id: pane.tab, name: command === "find" ? "Find" : "Messages" });
+      run("tab.rename", { id: pane.tab, name: command === "workspace" ? this.title + " · " + this.workspace : this.title });
       closeOverlay(props().overlay);
       run("pane.focus", { pane: pane.pane });
     } else if (Date.now() > this.deadline) {
