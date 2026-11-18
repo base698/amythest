@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/base698/amythest/internal/canvas"
 	"github.com/base698/amythest/internal/config"
 )
 
@@ -24,6 +25,55 @@ func newCanvasServer(t *testing.T) *Server {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+func TestCanvasDeleteRequiresAuthAndRemovesOnlyTarget(t *testing.T) {
+	s := newCanvasServer(t)
+	auth := withSessionCSRF(t, s)
+	m, err := s.canvases.Create("Discard sketch", canvas.Placement{}, canvas.InboxItem{Kind: "text", Data: "pending"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept, err := s.canvases.Create("Keep sketch", canvas.Placement{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/canvas/" + m.ID
+	for _, tc := range []struct {
+		stamp func(*http.Request) *http.Request
+		code  int
+	}{{nil, http.StatusUnauthorized}, {withSession(t, s), http.StatusForbidden}} {
+		if w := canvasDo(s, tc.stamp, "DELETE", path, ""); w.Code != tc.code {
+			t.Fatalf("delete without authorization: %d, want %d", w.Code, tc.code)
+		}
+		if _, err := s.canvases.Meta(m.ID); err != nil {
+			t.Fatalf("unauthorized delete changed canvas: %v", err)
+		}
+	}
+	if w := canvasDo(s, auth, "DELETE", "/api/canvas/..%2foutside", ""); w.Code != http.StatusNotFound {
+		t.Fatalf("invalid id: %d", w.Code)
+	}
+	if w := canvasDo(s, auth, "DELETE", path, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", w.Code, w.Body)
+	}
+	for _, suffix := range []string{"", "/meta", "/inbox", "/drawing.png", "/summary"} {
+		if w := canvasDo(s, auth, "GET", path+suffix, ""); w.Code != http.StatusNotFound {
+			t.Errorf("deleted canvas %s: %d", suffix, w.Code)
+		}
+	}
+	if w := canvasDo(s, auth, "PUT", path, `{"base_rev":0,"scene":{"elements":[]}}`); w.Code != http.StatusNotFound {
+		t.Fatalf("autosave resurrected deleted canvas: %d", w.Code)
+	}
+	if w := canvasDo(s, auth, "POST", path+"/push", `{"kind":"text","data":"late"}`); w.Code != http.StatusNotFound {
+		t.Fatalf("late push: %d", w.Code)
+	}
+	if w := canvasDo(s, auth, "DELETE", path, ""); w.Code != http.StatusNotFound {
+		t.Fatalf("repeat delete: %d", w.Code)
+	}
+	list, err := s.canvases.List()
+	if err != nil || len(list) != 1 || list[0].ID != kept.ID {
+		t.Fatalf("remaining canvases: %+v %v", list, err)
+	}
 }
 
 func canvasDo(s *Server, stamp func(*http.Request) *http.Request, method, path, body string) *httptest.ResponseRecorder {

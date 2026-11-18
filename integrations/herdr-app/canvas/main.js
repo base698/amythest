@@ -15,6 +15,7 @@ import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { exec, props, theme, appHome, checking, closeOverlay, run, spaces, focused, writeTextFile } from "herdr";
 import { binary } from "./config.js";
 import { drawElement, fit, bounds } from "./draw.js";
+import { pngDocument } from "./png.js";
 import { TOOLS, toScene, hit, shapeAt, makeShape, makeArrow, makeStroke, makeText, textSize, centerLabel, labelOf, setPoints, absPoints, wire } from "./edit.js";
 
 const MOD = "amythest-canvas";
@@ -112,6 +113,8 @@ export default class Canvas extends View {
   }
 
   create(cx, browser) {
+    if (this.creating) return;
+    this.creating = true;
     cx.spawn(async (cx) => {
       try {
         const args = ["new", "-json"];
@@ -122,12 +125,14 @@ export default class Canvas extends View {
       } catch (e) {
         this.error = String(e.message || e);
         cx.notify();
+      } finally {
+        this.creating = false;
       }
     });
   }
 
   pick(cx, browser) {
-    if (this.at === 0) return this.create(cx, true);
+    if (this.at === 0) return this.create(cx, browser);
     const m = this.items?.[this.at - 1];
     if (!m) return;
     if (browser) {
@@ -159,7 +164,7 @@ export default class Canvas extends View {
         return el
           .child(div().w(18).text_color(ACCENT).font_bold().child("+"))
           .child(div().flex_1().text_color(t.foreground).child(`New canvas${this.all ? "" : ` in ${where}`}`))
-          .child(div().text_size(11).text_color(t.dim).child("opens the editor too"));
+          .child(div().text_size(11).text_color(t.dim).child("opens here"));
       }
       const m = r.m;
       const tag = [m.workspace, m.board && m.board !== m.workspace ? m.board : ""].filter(Boolean).join(" / ");
@@ -282,6 +287,36 @@ export default class Canvas extends View {
   }
 
   // ----------------------------------------------------------- editing
+
+  copyPNG(cx) {
+    if (!this.snap || this.copying) return;
+    this.commitText(cx);
+    // Freeze the drawing at the click, including local edits still being saved.
+    // The server's PNG may predate native edits or may not exist at all.
+    let drawing;
+    try {
+      drawing = pngDocument(this.snap, appHome());
+    } catch (e) {
+      this.flash(cx, `Could not copy PNG: ${String(e.message || e)}`);
+      return;
+    }
+    this.copying = true;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        const file = `${cacheDir()}/copy-${Date.now()}-${this.opsCount++}.json`;
+        await writeTextFile(file, JSON.stringify(drawing), null);
+        const result = await exec(`${appHome()}/mods/${MOD}/copy-png`, [file], { timeout: 20000 });
+        if (result.code !== 0) throw new Error((result.stderr || "PNG copy failed").trim());
+        this.flash(cx, "PNG copied");
+      } catch (e) {
+        this.flash(cx, `Could not copy PNG: ${String(e.message || e)}`);
+      } finally {
+        this.copying = false;
+        cx.notify();
+      }
+    });
+  }
 
   els() {
     return this.snap?.elements ?? [];
@@ -721,6 +756,7 @@ export default class Canvas extends View {
 
     const header = h_flex()
       .flex_none()
+      .flex_wrap()
       .gap(6)
       .px(10)
       .py(6)
@@ -737,7 +773,8 @@ export default class Canvas extends View {
         this.userMoved = false;
         cx.notify();
       }))
-      .child(this.button(t, "edit", "Edit ↗", (cx) => s?.url && cx.open_url(s.url)))
+      .child(this.button(t, "edit", "Browser ↗", (cx) => s?.url && cx.open_url(s.url)))
+      .when(!!s, (d) => d.child(this.button(t, "copy-png", this.copying ? "Copying…" : "Copy PNG", (cx) => this.copyPNG(cx))))
       .when(!!s?.png, (d) =>
         d.child(this.button(t, "png", "PNG ⇲", null, (b) => b.drag_paths([s.png]).on_click((_e, cx) => this.flash(cx, "Drag this onto a terminal, Finder or Messages")))),
       )
@@ -798,7 +835,7 @@ export default class Canvas extends View {
     }
 
     const footer = [];
-    if (s?.pending > 0) footer.push(`${s.pending} pushed item${s.pending > 1 ? "s" : ""} waiting — they appear once the editor is open (Edit ↗)`);
+    if (s?.pending > 0) footer.push(`${s.pending} pushed item${s.pending > 1 ? "s" : ""} waiting — they appear once the editor is open (Browser ↗)`);
     if (this.note) footer.push(this.note);
     else if (this.error && s) footer.push(this.error);
 

@@ -21,6 +21,7 @@ func (s *Server) mountCanvas() {
 	s.mux.HandleFunc("POST /api/canvas", s.handleCanvasCreate)
 	s.mux.HandleFunc("GET /api/canvas/{id}", s.handleCanvasGet)
 	s.mux.HandleFunc("PUT /api/canvas/{id}", s.handleCanvasSave)
+	s.mux.HandleFunc("DELETE /api/canvas/{id}", s.handleCanvasDelete)
 	s.mux.HandleFunc("GET /api/canvas/{id}/meta", s.handleCanvasMeta)
 	s.mux.HandleFunc("GET /api/canvas/{id}/summary", s.handleCanvasSummary)
 	s.mux.HandleFunc("GET /api/canvas/{id}/inbox", s.handleCanvasInbox)
@@ -156,6 +157,18 @@ func (s *Server) handleCanvasGet(w http.ResponseWriter, r *http.Request) {
 		Meta  canvasMetaOut   `json:"meta"`
 		Scene json.RawMessage `json:"scene"`
 	}{s.canvasOut(m), scene})
+}
+
+func (s *Server) handleCanvasDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.requireKanbanSessionCSRF(w, r, "delete canvases") {
+		return
+	}
+	if err := s.canvases.Delete(r.PathValue("id")); err != nil {
+		canvasError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleCanvasMeta(w http.ResponseWriter, r *http.Request) {

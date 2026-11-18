@@ -253,6 +253,21 @@ func (s *Store) Meta(id string) (Meta, error) {
 	return readMeta(dir)
 }
 
+// Delete removes a canvas and its drawings/inbox. Serialize it with writes so
+// an editor's in-flight autosave cannot recreate a deleted canvas.
+func (s *Store) Delete(id string) error {
+	dir, err := s.dir(id)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := readMeta(dir); err != nil {
+		return err
+	}
+	return os.RemoveAll(dir)
+}
+
 func readMeta(dir string) (Meta, error) {
 	b, err := os.ReadFile(filepath.Join(dir, "meta.json"))
 	if errors.Is(err, os.ErrNotExist) {

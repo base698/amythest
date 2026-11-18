@@ -205,6 +205,8 @@ function fitLabels(els: ExcalidrawElement[]): ExcalidrawElement[] {
 function CanvasList() {
   const [items, setItems] = useState<Meta[] | null>(null)
   const [error, setError] = useState("")
+  const [deleting, setDeleting] = useState<string | null>(null)
+  const deletePending = useRef(false)
   useEffect(() => {
     api<Meta[]>("GET", "").then(setItems, (e) => setError(e.message))
   }, [])
@@ -214,6 +216,21 @@ function CanvasList() {
       location.href = m.url
     } catch (e: any) {
       setError(e.message)
+    }
+  }
+  const remove = async (canvas: Meta) => {
+    if (deletePending.current || !window.confirm(`Delete “${canvas.title}”?\n\nThis permanently deletes the canvas and its drawing. Links to it will stop working.`)) return
+    deletePending.current = true
+    setDeleting(canvas.id)
+    setError("")
+    try {
+      await api<void>("DELETE", `/${canvas.id}`)
+      setItems((current) => current?.filter((item) => item.id !== canvas.id) ?? null)
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      deletePending.current = false
+      setDeleting(null)
     }
   }
   return (
@@ -234,6 +251,9 @@ function CanvasList() {
               <span className="title">{m.title}</span>
               <span className="muted">{new Date(m.updated).toLocaleString()}</span>
             </a>
+            <button className="canvas-delete" aria-label={`Delete ${m.title}`} disabled={deleting !== null} onClick={() => remove(m)}>
+              {deleting === m.id ? "Deleting…" : "Delete"}
+            </button>
           </li>
         ))}
       </ul>

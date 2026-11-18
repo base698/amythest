@@ -1,7 +1,7 @@
 # Canvas
 
 A canvas is a drawing a person and an agent work on together. The person draws
-in the browser (Excalidraw) or watches it in a native Herdr pane; the agent
+in the browser (Excalidraw) or in a native Herdr pane; the agent
 reads a plain-language summary of what is drawn and what changed, and pushes
 Mermaid, images or text back.
 
@@ -9,10 +9,13 @@ Mermaid, images or text back.
 
 - **Herdr App:** Cmd+Shift+C lists the current workspace's canvases. Enter
   shows one natively in a pane beside you, B opens the browser editor, Tab
-  switches to every workspace. "New canvas" starts one in this workspace.
+  switches to every workspace. "New canvas" starts one here without opening
+  a browser; **Browser ↗** in the pane opens the browser editor when wanted.
 - **Terminal:** `amy canvas new -title "Sketch" -open` (add `-pane` for the
   Herdr pane, `-mermaid file.mmd` to start from a diagram).
 - **Browser:** `/canvas/` lists every canvas with thumbnails.
+  Each has a **Delete** button; confirmation permanently removes that canvas,
+  its drawing and pending inputs. Existing links to it will stop working.
 
 Inside a Herdr space a new canvas belongs to that workspace, and to its board
 (the `cli.yaml` workspace mapping, else a board named after the workspace).
@@ -41,6 +44,10 @@ editor, next to what is already drawn.
 - `amy canvas export ID [-svg] [-o path]`, `amy canvas attach ID` (Messages).
 - In the Herdr pane, drag the PNG chip onto a terminal, Finder or Messages;
   drop images onto the pane to add them.
+- **Copy PNG** in the Herdr pane (macOS) copies the whole current drawing,
+  including edits still being saved. It works without opening the browser.
+  The installer builds its native helper with the Xcode command line tools;
+  no compiler is needed when copying.
 
 ## Storage and access
 

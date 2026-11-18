@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import time
 
 
@@ -40,8 +41,12 @@ def main():
     # The canvas mod: Cmd+Shift+C picker, and native canvas panes beside terminals.
     canvas = home / "mods" / "amythest-canvas"
     canvas.mkdir(parents=True, exist_ok=True)
-    for name in ("main.js", "draw.js", "edit.js", "mod.json"):
+    for name in ("main.js", "draw.js", "edit.js", "geometry.js", "png.js", "copy-png.swift", "mod.json"):
         shutil.copy2(root / "integrations/herdr-app/canvas" / name, canvas / name)
+    if sys.platform == "darwin":
+        helper = canvas / ".copy-png-next"
+        subprocess.run(["xcrun", "swiftc", "-O", str(canvas / "copy-png.swift"), "-o", str(helper)], check=True)
+        helper.replace(canvas / "copy-png")
     (canvas / "config.js").write_text("export const binary = " + json.dumps(str(binary)) + ";\n")
     subprocess.run(["herdr-app", "check", str(canvas)], check=True)
     shutil.copy2(keys, keys.with_name("keys.json.before-amythest-" + str(time.time_ns())))

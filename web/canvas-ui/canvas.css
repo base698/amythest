@@ -287,16 +287,34 @@ body {
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 12px;
 }
+.canvas-list li {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 8px;
+  border: 1px solid var(--cv-border);
+  border-radius: 12px;
+  background: var(--cv-panel);
+}
 .canvas-list li a {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 4px;
   padding: 8px;
   border-radius: 12px;
-  border: 1px solid var(--cv-border);
   background: var(--cv-panel);
   color: inherit;
   text-decoration: none;
+}
+.canvas-list .canvas-delete {
+  align-self: flex-end;
+  margin-top: 8px;
+  color: var(--cv-danger);
+}
+.canvas-list button:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }
 .canvas-list li img,
 .canvas-list li .blank {
