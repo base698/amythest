@@ -55,6 +55,9 @@ func main() {
 		case "find":
 			runFind(args[1:])
 			return
+		case "canvas", "draw":
+			runCanvas(args[1:])
+			return
 		}
 	}
 	check := false

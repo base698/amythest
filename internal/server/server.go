@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/base698/amythest/internal/bases"
+	"github.com/base698/amythest/internal/canvas"
 	"github.com/base698/amythest/internal/config"
 	"github.com/base698/amythest/internal/index"
 	"github.com/base698/amythest/internal/kanban/auth"
@@ -68,6 +69,7 @@ type Server struct {
 	catalog       *bases.Catalog // sqlite tabular data store
 	share         *share.Store
 	presentations *presentation.Store
+	canvases      *canvas.Store
 	metrics       serverMetrics
 }
 
@@ -129,6 +131,10 @@ func New(cfg config.Config) (*Server, error) {
 
 	s.share = share.New(cfg.Vault, cfg.SharePlugins)
 	s.presentations, err = presentation.New(filepath.Join(cfg.DataDir, "presentations"), cfg.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	s.canvases, err = canvas.New(filepath.Join(cfg.DataDir, "canvases"))
 	if err != nil {
 		return nil, err
 	}
@@ -212,6 +218,7 @@ func New(cfg config.Config) (*Server, error) {
 
 	s.mux.HandleFunc("GET /assets/", s.handleAsset)
 	s.mux.Handle("GET /presentations/", s.presentations)
+	s.mountCanvas()
 	s.mux.HandleFunc("GET /tags/", s.handleTags)
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {

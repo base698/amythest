@@ -213,3 +213,6 @@ func (c *Client) scopeVault(ctx context.Context, results []VaultHit) ([]VaultHit
 	}
 	return out, nil
 }
+
+// MatchesBoard reports whether a board belongs to this workspace.
+func (s Scope) MatchesBoard(b board.BoardSummary) bool { return s.board(b) }

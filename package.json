@@ -4,10 +4,12 @@
   "type": "module",
   "scripts": {
     "build": "node web/build.mjs",
-    "test:web": "node --experimental-strip-types --test web/kanban-ui/*.test.ts web/src/*.test.ts",
+    "test:web": "node --experimental-strip-types --test web/kanban-ui/*.test.ts web/src/*.test.ts web/canvas-ui/*.test.ts",
     "watch": "node web/build.mjs --watch"
   },
   "devDependencies": {
+    "@excalidraw/excalidraw": "0.18.1",
+    "@excalidraw/mermaid-to-excalidraw": "2.2.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "d3-force": "^3.0.0",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install personal Herdr workspace, quick-add, Find and Messages shortcuts."""
+"""Install personal Herdr workspace, quick-add, Find, Messages and Canvas shortcuts."""
 import argparse
 import json
 import os
@@ -37,8 +37,16 @@ def main():
                 "overlay": {"kind": "popup", "width": 480, "height": 90}}
         (folder / "mod.json").write_text(json.dumps(spec, indent=2) + "\n")
         subprocess.run(["herdr-app", "check", str(folder)], check=True)
+    # The canvas mod: Cmd+Shift+C picker, and native canvas panes beside terminals.
+    canvas = home / "mods" / "amythest-canvas"
+    canvas.mkdir(parents=True, exist_ok=True)
+    for name in ("main.js", "draw.js", "mod.json"):
+        shutil.copy2(root / "integrations/herdr-app/canvas" / name, canvas / name)
+    (canvas / "config.js").write_text("export const binary = " + json.dumps(str(binary)) + ";\n")
+    subprocess.run(["herdr-app", "check", str(canvas)], check=True)
     shutil.copy2(keys, keys.with_name("keys.json.before-amythest-" + str(time.time_ns())))
     value.setdefault("global", {}).update({
+        "cmd-shift-c": "mod.open:amythest-canvas",
         "cmd-shift-f": "mod.open:amythest-find",
         "cmd-shift-m": "mod.open:amythest-messages",
         "cmd-shift-a": "mod.open:amythest-workspace",
@@ -68,7 +76,7 @@ def main():
     temporary = keys.with_name("keys.json.amythest-next")
     temporary.write_text(json.dumps(value, indent=2) + "\n")
     temporary.replace(keys)
-    print("Installed Amythest workspace, Find, Messages, and quick-add shortcuts.")
+    print("Installed Amythest workspace, Find, Messages, Canvas, and quick-add shortcuts.")
 
 
 if __name__ == "__main__":

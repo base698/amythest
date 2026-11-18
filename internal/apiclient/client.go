@@ -145,7 +145,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
-		if method != http.MethodGet && (strings.HasPrefix(path, "/kanban/") || path == "/api/notes/property") {
+		if method != http.MethodGet && (strings.HasPrefix(path, "/kanban/") || strings.HasPrefix(path, "/api/canvas") || path == "/api/notes/property") {
 			req.Header.Set("X-CSRF-Token", sess.CSRF)
 		}
 		resp, err := c.http.Do(req)
