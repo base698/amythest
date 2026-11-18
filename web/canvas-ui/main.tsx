@@ -32,6 +32,7 @@ interface Meta {
   updated: string
   url: string
   drawing: boolean
+  stale?: boolean
 }
 
 interface InboxItem {
@@ -274,6 +275,9 @@ function Editor({ id }: { id: string }) {
   const appliedRef = useRef(0)
   const savedKeyRef = useRef("")
   const titleDirtyRef = useRef(false)
+  // The scene was edited elsewhere without new renderings (the Herdr pane):
+  // re-render and save so notes and the PNG catch up.
+  const staleRef = useRef(false)
   const savingRef = useRef(false)
   const applyingRef = useRef(false)
   const timerRef = useRef<number | undefined>(undefined)
@@ -291,6 +295,7 @@ function Editor({ id }: { id: string }) {
         const restored = ex.restore(scene, null, null)
         revRef.current = meta.rev
         appliedRef.current = meta.applied
+        staleRef.current = !!meta.stale
         savedKeyRef.current = sceneKey(restored.elements, restored.files)
         setMeta(meta)
         setTitle(meta.title)
@@ -369,6 +374,9 @@ function Editor({ id }: { id: string }) {
     },
     [id],
   )
+
+  const saveRef = useRef(save)
+  saveRef.current = save
 
   const titleInputRef = useRef("")
   titleInputRef.current = title
@@ -502,6 +510,7 @@ function Editor({ id }: { id: string }) {
     setMeta(meta)
     setTitle(meta.title)
     setStatus("saved")
+    if (meta.stale) window.setTimeout(() => void saveRef.current(true), 300)
   }
 
   const keepMine = async () => {
@@ -676,7 +685,11 @@ function Editor({ id }: { id: string }) {
           window.setTimeout(() => {
             const els = a.getSceneElements()
             if (els.length) a.scrollToContent(els, { fitToContent: true, animate: false })
-          }, 60)
+            if (staleRef.current) {
+              staleRef.current = false
+              void saveRef.current(true)
+            }
+          }, 300)
         }}
         initialData={initial}
         onChange={onChange as any}

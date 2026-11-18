@@ -99,7 +99,19 @@ type snapshotElement struct {
 	EndArrowhead    string      `json:"endArrowhead,omitempty"`
 	Name            string      `json:"name,omitempty"`
 	Roundness       bool        `json:"roundness,omitempty"`
+	BoundElements   []boundRef  `json:"boundElements,omitempty"`
+	StartBinding    *bindingRef `json:"startBinding,omitempty"`
+	EndBinding      *bindingRef `json:"endBinding,omitempty"`
 	IsDeleted       bool        `json:"-"`
+}
+
+type boundRef struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+}
+
+type bindingRef struct {
+	ElementID string `json:"elementId"`
 }
 
 func (e *snapshotElement) UnmarshalJSON(b []byte) error {

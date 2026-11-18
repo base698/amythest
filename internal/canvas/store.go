@@ -74,6 +74,9 @@ type Meta struct {
 	Drawing bool `json:"drawing"`
 	// Where the canvas belongs: a Herdr workspace, an Amythest board, and
 	// optionally one card on it. Browsing filters, not access control.
+	// Stale: the scene changed without new renderings (an ops edit); the
+	// next editor to open it re-renders and saves.
+	Stale     bool   `json:"stale,omitempty"`
 	Workspace string `json:"workspace,omitempty"`
 	Board     string `json:"board,omitempty"`
 	Card      string `json:"card,omitempty"`
@@ -346,6 +349,9 @@ func (s *Store) Save(id string, in SaveInput) (Meta, error) {
 		}
 		m.Drawing = true
 	}
+	if len(in.PNG) > 0 || len(in.SVG) > 0 {
+		m.Stale = false
+	}
 	if in.Title != nil {
 		m.Title = cleanTitle(*in.Title)
 	}
@@ -502,4 +508,150 @@ func FileName(title string) string {
 		return name
 	}
 	return "canvas"
+}
+
+// Ops are element-level edits from a client that does not hold the whole
+// scene (the Herdr pane): upserts merge fields into the element with that id
+// (or add it), deletes mark elements deleted the way Excalidraw does. Each
+// touched element gets a new version so open editors reconcile it.
+type Ops struct {
+	Upsert []map[string]any `json:"upsert"`
+	Delete []string         `json:"delete"`
+}
+
+const maxOpsElements = 2000
+
+// ApplyOps edits the stored scene in place and bumps the revision. The
+// renderings go stale until an editor next saves (Meta.Stale).
+func (s *Store) ApplyOps(id string, ops Ops) (Meta, error) {
+	dir, err := s.dir(id)
+	if err != nil {
+		return Meta{}, err
+	}
+	if len(ops.Upsert)+len(ops.Delete) == 0 {
+		return Meta{}, fmt.Errorf("%w: no operations", ErrInvalid)
+	}
+	if len(ops.Upsert)+len(ops.Delete) > maxOpsElements {
+		return Meta{}, fmt.Errorf("%w: too many operations", ErrInvalid)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, err := readMeta(dir)
+	if err != nil {
+		return Meta{}, err
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "scene.json"))
+	if err != nil {
+		return Meta{}, err
+	}
+	var scene map[string]any
+	if err := json.Unmarshal(raw, &scene); err != nil {
+		return Meta{}, err
+	}
+	elements, _ := scene["elements"].([]any)
+	index := map[string]map[string]any{}
+	for _, e := range elements {
+		if el, ok := e.(map[string]any); ok {
+			if eid, _ := el["id"].(string); eid != "" {
+				index[eid] = el
+			}
+		}
+	}
+	now := float64(s.now().UnixMilli())
+	touch := func(el map[string]any) {
+		v, _ := el["version"].(float64)
+		el["version"] = v + 1
+		el["versionNonce"] = float64(randInt31())
+		el["updated"] = now
+	}
+	for _, up := range ops.Upsert {
+		eid, _ := up["id"].(string)
+		if eid == "" || len(eid) > 64 {
+			return Meta{}, fmt.Errorf("%w: element without a valid id", ErrInvalid)
+		}
+		if t, ok := up["type"].(string); ok && !editableTypes[t] {
+			return Meta{}, fmt.Errorf("%w: cannot add %q elements", ErrInvalid, t)
+		}
+		el, exists := index[eid]
+		if !exists {
+			if _, ok := up["type"].(string); !ok {
+				return Meta{}, fmt.Errorf("%w: new element %s needs a type", ErrInvalid, eid)
+			}
+			el = newElementDefaults(up["type"].(string))
+			elements = append(elements, el)
+			index[eid] = el
+		}
+		for k, v := range up {
+			if k == "version" || k == "versionNonce" {
+				continue
+			}
+			el[k] = v
+		}
+		touch(el)
+	}
+	for _, eid := range ops.Delete {
+		if el, ok := index[eid]; ok {
+			el["isDeleted"] = true
+			touch(el)
+		}
+	}
+	scene["elements"] = elements
+	b, err := json.Marshal(scene)
+	if err != nil {
+		return Meta{}, err
+	}
+	if len(b) > MaxSceneBytes {
+		return Meta{}, fmt.Errorf("%w: scene too large", ErrInvalid)
+	}
+	if err := writeAtomic(filepath.Join(dir, "scene.json"), b); err != nil {
+		return Meta{}, err
+	}
+	m.Rev++
+	m.Stale = true
+	m.Updated = s.now().UTC()
+	return m, s.writeMeta(dir, m)
+}
+
+var editableTypes = map[string]bool{"rectangle": true, "ellipse": true, "diamond": true, "arrow": true, "line": true, "freedraw": true, "text": true}
+
+// newElementDefaults are the fields Excalidraw expects on every element;
+// the editor's restore() fills anything else.
+func newElementDefaults(kind string) map[string]any {
+	el := map[string]any{
+		"type": kind, "angle": 0.0, "strokeColor": "#1e1e1e", "backgroundColor": "transparent",
+		"fillStyle": "solid", "strokeWidth": 2.0, "strokeStyle": "solid", "roughness": 1.0, "opacity": 100.0,
+		"groupIds": []any{}, "frameId": nil, "roundness": nil, "seed": float64(randInt31()), "version": 0.0,
+		"isDeleted": false, "boundElements": []any{}, "link": nil, "locked": false,
+	}
+	switch kind {
+	case "rectangle", "diamond", "ellipse":
+		el["roundness"] = map[string]any{"type": 3.0}
+	case "arrow":
+		el["roundness"] = map[string]any{"type": 2.0}
+		el["startArrowhead"] = nil
+		el["endArrowhead"] = "arrow"
+		el["startBinding"] = nil
+		el["endBinding"] = nil
+		el["elbowed"] = false
+	case "text":
+		el["fontSize"] = 20.0
+		el["fontFamily"] = 5.0
+		el["textAlign"] = "left"
+		el["verticalAlign"] = "top"
+		el["containerId"] = nil
+		el["lineHeight"] = 1.25
+		el["autoResize"] = true
+	case "freedraw":
+		el["pressures"] = []any{}
+		el["simulatePressure"] = true
+	}
+	return el
+}
+
+func randInt31() int32 {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	return int32(uint32(b[0])<<23 | uint32(b[1])<<15 | uint32(b[2])<<7 | uint32(b[3])>>1)
 }

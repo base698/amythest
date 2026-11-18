@@ -27,6 +27,7 @@ func (s *Server) mountCanvas() {
 	s.mux.HandleFunc("POST /api/canvas/{id}/push", s.handleCanvasPush)
 	s.mux.HandleFunc("POST /api/canvas/{id}/send", s.handleCanvasSend)
 	s.mux.HandleFunc("POST /api/canvas/{id}/link", s.handleCanvasLink)
+	s.mux.HandleFunc("POST /api/canvas/{id}/ops", s.handleCanvasOps)
 	s.mux.HandleFunc("GET /api/canvas/{id}/{file}", s.handleCanvasDrawing)
 }
 
@@ -290,6 +291,23 @@ func (s *Server) handleCanvasLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m, err := s.canvases.SetLink(r.PathValue("id"), in)
+	if err != nil {
+		canvasError(w, err)
+		return
+	}
+	writeCanvasJSON(w, http.StatusOK, s.canvasOut(m))
+}
+
+func (s *Server) handleCanvasOps(w http.ResponseWriter, r *http.Request) {
+	if !s.requireKanbanSessionCSRF(w, r, "use canvases") {
+		return
+	}
+	var in canvas.Ops
+	if err := jsonDecodeLimit(r, &in, canvas.MaxInboxBytes); err != nil {
+		writeCanvasJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid or oversized operations"})
+		return
+	}
+	m, err := s.canvases.ApplyOps(r.PathValue("id"), in)
 	if err != nil {
 		canvasError(w, err)
 		return

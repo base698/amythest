@@ -82,6 +82,8 @@ func canvasCommand(args []string) error {
 	all := fs.Bool("all", false, "list: every workspace")
 	pane := fs.Bool("pane", false, "new: show it in a Herdr pane")
 	dir := fs.String("dir", "", "snapshot: cache folder")
+	opsFile := fs.String("file", "", "ops: JSON file of element edits")
+	rmFile := fs.Bool("rm", false, "ops: remove -file after reading it")
 	since := fs.Int64("since", -1, "snapshot: skip when the canvas is still at this revision")
 	// Accept flags after positional arguments too: `amy canvas read ID -png x`.
 	var positional []string
@@ -224,6 +226,34 @@ func canvasCommand(args []string) error {
 		}
 		fmt.Printf("%s  %s  workspace=%q board=%q card=%q\n", m.ID, m.Title, m.Workspace, m.Board, m.Card)
 		return nil
+
+	case "ops":
+		// Element edits as JSON {"upsert": [...], "delete": [...]} from -file
+		// (removed afterwards with -rm) or stdin. Used by the Herdr pane.
+		id, err := needID()
+		if err != nil {
+			return err
+		}
+		src := *opsFile
+		if src == "" {
+			src = "-"
+		}
+		raw, err := readMaybeStdin(src)
+		if err != nil {
+			return err
+		}
+		if *rmFile && *opsFile != "" {
+			os.Remove(*opsFile)
+		}
+		var ops canvas.Ops
+		if err := json.Unmarshal([]byte(raw), &ops); err != nil {
+			return fmt.Errorf("ops: %w", err)
+		}
+		m, err := client.CanvasOps(ctx, id, ops)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]int64{"rev": m.Rev})
 
 	case "snapshot":
 		id, err := needID()

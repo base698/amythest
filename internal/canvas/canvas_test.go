@@ -149,3 +149,36 @@ func TestLooseSelfLoopIsAMark(t *testing.T) {
 		t.Fatalf("links %+v ink %+v", s.Links, s.Ink)
 	}
 }
+
+func TestApplyOps(t *testing.T) {
+	s, _ := New(t.TempDir())
+	m, _ := s.Create("ops", Placement{})
+	if _, err := s.Save(m.ID, SaveInput{BaseRev: 0, Scene: []byte(sceneV1), PNG: []byte("\x89PNG\r\n\x1a\nx")}); err != nil {
+		t.Fatal(err)
+	}
+	m2, err := s.ApplyOps(m.ID, Ops{
+		Upsert: []map[string]any{
+			{"id": "new1", "type": "rectangle", "x": 10.0, "y": 300.0, "width": 80.0, "height": 40.0},
+			{"id": "web1", "x": 5.0},
+		},
+		Delete: []string{"note1"},
+	})
+	if err != nil || m2.Rev != 2 || !m2.Stale {
+		t.Fatalf("ops %+v %v", m2, err)
+	}
+	_, scene, _ := s.Scene(m.ID)
+	sum, _ := Summarize(scene)
+	if len(sum.Shapes) != 3 || len(sum.Notes) != 0 {
+		t.Fatalf("after ops %+v", sum)
+	}
+	if !strings.Contains(string(scene), `"roughness":1`) {
+		t.Fatal("new element lacks defaults")
+	}
+	if _, err := s.ApplyOps(m.ID, Ops{Upsert: []map[string]any{{"id": "x", "type": "image"}}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("image upsert: %v", err)
+	}
+	m3, _ := s.Save(m.ID, SaveInput{BaseRev: 2, Scene: scene, PNG: []byte("\x89PNG\r\n\x1a\nx")})
+	if m3.Stale {
+		t.Fatal("render did not clear stale")
+	}
+}

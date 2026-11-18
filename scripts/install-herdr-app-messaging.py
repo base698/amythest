@@ -40,7 +40,7 @@ def main():
     # The canvas mod: Cmd+Shift+C picker, and native canvas panes beside terminals.
     canvas = home / "mods" / "amythest-canvas"
     canvas.mkdir(parents=True, exist_ok=True)
-    for name in ("main.js", "draw.js", "mod.json"):
+    for name in ("main.js", "draw.js", "edit.js", "mod.json"):
         shutil.copy2(root / "integrations/herdr-app/canvas" / name, canvas / name)
     (canvas / "config.js").write_text("export const binary = " + json.dumps(str(binary)) + ";\n")
     subprocess.run(["herdr-app", "check", str(canvas)], check=True)

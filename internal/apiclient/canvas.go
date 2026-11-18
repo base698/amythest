@@ -139,3 +139,10 @@ func (c *Client) CanvasSend(ctx context.Context, id, message string) (CanvasMeta
 	err := c.do(ctx, http.MethodPost, canvasPath(id, "/send"), map[string]string{"message": message}, &out)
 	return out, err
 }
+
+// CanvasOps applies element-level edits (see canvas.Ops).
+func (c *Client) CanvasOps(ctx context.Context, id string, ops canvas.Ops) (CanvasMeta, error) {
+	var out CanvasMeta
+	err := c.do(ctx, http.MethodPost, canvasPath(id, "/ops"), ops, &out)
+	return out, err
+}
