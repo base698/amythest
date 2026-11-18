@@ -25,9 +25,13 @@ def main():
         folder = home / "mods" / ("amythest-" + command)
         folder.mkdir(parents=True, exist_ok=True)
         shutil.copy2(root / "integrations/herdr-app/launcher.js", folder / "main.js")
+        helper = folder / "return-to-origin.py"
+        shutil.copy2(root / "integrations/herdr-app/return-to-origin.py", helper)
+        helper.chmod(0o755)
         (folder / "command.js").write_text(
             "export const command = " + json.dumps(command) + ";\n"
             "export const binary = " + json.dumps(str(binary)) + ";\n"
+            "export const helper = " + json.dumps(str(helper)) + ";\n"
         )
         spec = {"place": "none", "title": command.title(),
                 "overlay": {"kind": "popup", "width": 480, "height": 90}}

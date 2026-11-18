@@ -1,6 +1,10 @@
 import { View, div } from "gpui-kit";
 import { checking, hc, run, terminals, panes, closeOverlay, props, theme, focused, spaces } from "herdr";
-import { command, binary } from "./command.js";
+import * as config from "./command.js";
+
+const { command, binary } = config;
+// Optional: wraps amy so quitting it returns to the launching pane instead of the neighbouring tab.
+const helper = config.helper || "";
 
 // Start locally even when the selected tab belongs to another computer.
 // Wait for Herdr's live model before adopting and focusing the terminal.
@@ -39,8 +43,11 @@ export default class Launcher extends View {
             return;
           }
         }
-        const args = [binary, command];
+        let args = [binary, command];
         if ((scoped || command === "add") && this.workspace) args.push("-workspace", this.workspace);
+        if (helper && (context?.pane || context?.tab)) {
+          args = ["python3", helper, "--origin-pane", context?.pane || "", "--origin-tab", context?.tab || "", "--", ...args];
+        }
         const labels = scoped ? ["--label", "amythest.workspace=" + this.scopeKey] : [];
         const result = await hc(["run", "--bg", "--no-parent", "--no-notify", "--rm", "--name", name, ...labels, "--", ...args]);
         if (result.code !== 0) throw new Error("Could not start Amythest. Check its configured executable.");
