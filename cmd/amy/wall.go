@@ -97,6 +97,7 @@ func showWall(client *apiclient.Client, images string, opts wall.Options, pane s
 	}
 	out := &serialOut{File: os.Stdout}
 	opts.Graphics, opts.Out, opts.Open = graphics, out, openURL
+	opts.OpenCanvas = openCanvasPane
 	// The terminal reports its size in cells and in pixels; together they give
 	// the shape of a cell, which decides how many rows an image needs.
 	if ws, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 && ws.Row > 0 && ws.Xpixel > 0 && ws.Ypixel > 0 {

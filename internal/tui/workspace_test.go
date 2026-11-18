@@ -92,3 +92,77 @@ func TestWorkspaceCommandsTagBatchResults(t *testing.T) {
 		}
 	}
 }
+
+type workspacePanelRecorder struct{ messages []tea.Msg }
+
+func (p *workspacePanelRecorder) Init() tea.Cmd { return nil }
+func (p *workspacePanelRecorder) View() string  { return "side wall" }
+func (p *workspacePanelRecorder) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	p.messages = append(p.messages, msg)
+	return p, nil
+}
+
+func TestWorkspacePanelNavigationPreservesInputs(t *testing.T) {
+	w := workspaceFixture()
+	w.Update(tea.WindowSizeMsg{Width: 140, Height: 35})
+	wall := &workspacePanelRecorder{}
+	w.wall = wall
+	w.Update(tea.KeyMsg{Type: tea.KeyTab})
+	w.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if !w.wallFocus || len(wall.messages) != 1 || wall.messages[0].(tea.KeyMsg).Type != tea.KeyDown {
+		t.Fatal("Tab did not give the wall the navigation keys")
+	}
+	w.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if w.wallFocus {
+		t.Fatal("Shift+Tab did not return to navigation")
+	}
+	w.Update(tea.KeyMsg{Type: tea.KeyF4})
+	notes := w.app.top().(*notesView)
+	notes.input.SetValue("unfinished search")
+	w.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+	if !w.wallFocus {
+		t.Fatal("Ctrl+W failed while Notes had keyboard focus")
+	}
+	w.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+	if w.wallFocus || notes.input.Value() != "unfinished search" {
+		t.Fatal("switching panels discarded the input")
+	}
+	w.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if w.wallFocus || notes.typing {
+		t.Fatal("Notes lost its existing Tab-to-browse key")
+	}
+	if !strings.Contains(w.View(), "Ctrl+W") {
+		t.Fatal("panel switch hidden from the footer")
+	}
+}
+
+func TestWorkspaceMouseFocusAndCoordinates(t *testing.T) {
+	w := workspaceFixture()
+	w.Update(tea.WindowSizeMsg{Width: 140, Height: 35})
+	wall := &workspacePanelRecorder{}
+	w.wall = wall
+	left, _, _ := w.sizes()
+	w.Update(tea.MouseMsg{X: left + 5, Y: 7, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	if !w.wallFocus || len(wall.messages) != 1 {
+		t.Fatal("clicking the side wall did not focus it")
+	}
+	local := wall.messages[0].(tea.MouseMsg)
+	if local.X != 4 || local.Y != 6 {
+		t.Fatalf("wall received wrong coordinates: %+v", local)
+	}
+	w.Update(tea.MouseMsg{X: 5, Y: 7, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	if w.wallFocus {
+		t.Fatal("clicking navigation did not return focus")
+	}
+	w.Update(tea.MouseMsg{X: left + 5, Y: 7, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	if len(wall.messages) != 2 || w.wallFocus {
+		t.Fatal("wheel must scroll its hovered panel without taking typing focus")
+	}
+	w.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	w.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+	w.Update(tea.MouseMsg{X: 7, Y: 8, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	local = wall.messages[len(wall.messages)-1].(tea.MouseMsg)
+	if local.X != 7 || local.Y != 7 {
+		t.Fatalf("narrow wall coordinates: %+v", local)
+	}
+}

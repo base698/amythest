@@ -56,7 +56,7 @@ func runWorkspace(args []string) {
 	if err := tui.LoadThemes(cfg.File); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
-	options := tui.WorkspaceOptions{Scope: scope, AllSources: configuredSources(client, cfg), Wall: wall.Options{Open: openURL, Share: func(it wall.Item) tea.Cmd { return shareWallItem(client, it) }}}
+	options := tui.WorkspaceOptions{Scope: scope, AllSources: configuredSources(client, cfg), Wall: wall.Options{Open: openURL, OpenCanvas: openCanvasPane, Share: func(it wall.Item) tea.Cmd { return shareWallItem(client, it) }}}
 	options.Open = func(c *find.Choice) tea.Cmd {
 		return func() tea.Msg {
 			var err error
@@ -68,7 +68,7 @@ func runWorkspace(args []string) {
 			return tui.WorkspaceOpened{Err: err}
 		}
 	}
-	_, err = tea.NewProgram(tui.NewWorkspace(client, options), tea.WithAltScreen()).Run()
+	_, err = tea.NewProgram(tui.NewWorkspace(client, options), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

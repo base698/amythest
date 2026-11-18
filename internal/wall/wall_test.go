@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/base698/amythest/internal/apiclient"
+	"github.com/base698/amythest/internal/canvas"
 )
 
 func TestBoxForKeepsProportionsWithinLimits(t *testing.T) {
@@ -345,6 +346,14 @@ type fakeAPI struct {
 	asked             []string
 	cards             map[string]string
 	cardsAsked        []string
+	canvases          []apiclient.CanvasMeta
+	canvasAsked       []string
+	canvasErr         error
+}
+
+func (f *fakeAPI) CanvasList(_ context.Context, workspace string) ([]apiclient.CanvasMeta, error) {
+	f.canvasAsked = append(f.canvasAsked, workspace)
+	return f.canvases, f.canvasErr
 }
 
 func (f *fakeAPI) WorkOverview(context.Context) (*apiclient.WorkSnapshot, error) {
@@ -517,8 +526,73 @@ func TestWallFiltersAndHandlesKeysTypedTogether(t *testing.T) {
 	}
 	// With images off, a picture says how to see it.
 	drive(t, m, keys("f")[0])
+	if m.filter != "canvas" {
+		t.Fatal("canvas filter missing")
+	}
+	drive(t, m, keys("f")[0])
 	if !strings.Contains(m.View(), "press o to open in the browser") {
 		t.Errorf("no hint for an image that is not drawn:\n%s", m.View())
+	}
+}
+
+func TestWallListsWorkspaceCanvasesAndOpensNatively(t *testing.T) {
+	api := &fakeAPI{overview: snapshot(), project: snapshot(), canvases: []apiclient.CanvasMeta{
+		{Meta: canvas.Meta{ID: "aaaaaaaaaaaa", Title: "Current sketch", Updated: time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)}},
+	}}
+	opened, browser := "", ""
+	m, _ := newWall(t, api, Options{Project: "Robot", CanvasWorkspace: "Garden", Graphics: "off", OpenCanvas: func(id string) error { opened = id; return nil }, Open: func(url string) error { browser = url; return nil }})
+	if strings.Join(api.canvasAsked, ",") != "Garden" || len(m.items) != 5 || m.items[0].Title != "Current sketch" {
+		t.Fatalf("canvas load: scopes=%v items=%+v", api.canvasAsked, m.items)
+	}
+	drive(t, m, keys("c")[0])
+	if m.filter != "canvas" || len(m.items) != 1 || !strings.Contains(m.View(), "Current sketch") {
+		t.Fatal("canvas not reachable through its filter")
+	}
+	_, cmd := m.Update(keys("enter")[0])
+	result := cmd().(canvasOpenedMsg)
+	if result.err != nil || opened != "aaaaaaaaaaaa" || browser != "" {
+		t.Fatalf("Enter did not open only the native pane: %s %s %v", opened, browser, result.err)
+	}
+	m.Update(keys("o")[0])
+	if browser != "https://h/notes/canvas/aaaaaaaaaaaa" {
+		t.Fatal("explicit browser action missing")
+	}
+	drive(t, m, keys("c")[0])
+	if m.filter != "all" || len(m.items) != 5 {
+		t.Fatal("canvas toggle did not return to all items")
+	}
+	m.feedCmd("Other")()
+	if api.canvasAsked[len(api.canvasAsked)-1] != "Other" {
+		t.Fatal("changing projects retained the original canvas workspace")
+	}
+	api.canvases = nil
+	drive(t, m, m.feedCmd("Robot")())
+	if len(m.items) != 4 {
+		t.Fatal("deleted canvas remained after refresh")
+	}
+	api.canvasErr = errors.New("unavailable")
+	drive(t, m, m.feedCmd("Robot")())
+	if len(m.items) != 4 || m.canvasErr == nil {
+		t.Fatal("canvas failure must be visible without hiding other work")
+	}
+}
+
+func TestWallMouseSelectsVisibleListAndGalleryItems(t *testing.T) {
+	api := &fakeAPI{overview: snapshot(), project: snapshot()}
+	m, _ := newWall(t, api, Options{Project: "Robot", Graphics: "off"})
+	m.summary = false
+	m.relayout()
+	m.Update(tea.MouseMsg{X: 4, Y: 2 + m.start[2], Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	if m.cursor != 2 {
+		t.Fatalf("clicked list item: cursor=%d", m.cursor)
+	}
+	m.o.Graphics = "blocks"
+	m.filter = "media"
+	m.applyFilter("")
+	m.relayout()
+	m.Update(tea.MouseMsg{X: 45, Y: 2 + m.start[0] - m.top, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	if m.cursor != 1 {
+		t.Fatalf("clicked right gallery tile: cursor=%d", m.cursor)
 	}
 }
 

@@ -28,16 +28,24 @@ Omitting `-workspace` uses the current Herdr context when available.
 | F3 | Boards and their cards |
 | F4 | Notes; type to search, Tab to browse |
 | F7 | Search notes, cards, tasks and recorded agent work |
-| F8 | Move keyboard focus between navigation and the wall |
+| Ctrl+W or F8 | Move keyboard focus between navigation and the wall |
+| Tab / Shift+Tab | Switch panels, except where Notes/search use Tab locally |
 | F9 | Switch between this workspace and All workspaces |
 | Ctrl+C | Close the dashboard |
 
 Numbers **1–4** and **7** also navigate while no input has focus. Function keys
 leave search fields directly; cancel an editing prompt before navigating.
-Below 105 terminal columns, F8 switches between full-width panels. At wider
+Click either panel to focus it; click a wall item to select it. Arrow keys or
+**j/k** move through items, and the mouse wheel scrolls the panel under it.
+Below 105 terminal columns, Ctrl+W/F8 switches between full-width panels. At wider
 sizes both panels remain visible. The wall retains its project when F9 expands
 browsing to All. Its own **p** picker can switch projects. Enter on a search
 artifact opens it in the wall; Escape closes search without closing Amythest.
+
+The wall includes this workspace's **canvases** alongside recorded work, newest
+first. Press **c** to toggle canvases only, or **f** to cycle all/media/commits/
+canvases. **Enter** on a canvas opens its native Herdr pane; **o** explicitly
+opens its browser editor. The list refreshes with the wall (**r** immediately).
 
 ## Private workspace mapping
 

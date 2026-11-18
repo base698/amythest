@@ -46,6 +46,7 @@ func NewWorkspace(client *apiclient.Client, o WorkspaceOptions) *Workspace {
 	w := &Workspace{allClient: client, scopedClient: client.Scoped(o.Scope), o: o}
 	w.resetApp()
 	o.Wall.Project = o.Scope.Project
+	o.Wall.CanvasWorkspace = o.Scope.Name
 	// Embedded images use cell blocks, which stay inside their panel when resized.
 	o.Wall.Graphics = "blocks"
 	w.o.Wall = o.Wall
@@ -140,6 +141,32 @@ func (w *Workspace) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		w.width, w.height = m.Width, m.Height
 		return w, w.resize()
+	case tea.MouseMsg:
+		if m.Y < 1 || m.Y >= w.height-1 {
+			return w, nil
+		}
+		left, _, _ := w.sizes()
+		inWall := w.wallFocus
+		if w.width >= 105 {
+			if m.X == left {
+				return w, nil
+			}
+			inWall = m.X > left
+			if inWall {
+				m.X -= left + 1
+			}
+		}
+		m.Y-- // the dashboard header is outside both child panels
+		if m.Button == tea.MouseButtonLeft && m.Action == tea.MouseActionPress {
+			w.wallFocus = inWall
+		}
+		if inWall {
+			return w, w.deliver("wall", m)
+		}
+		if w.searching {
+			return w, w.deliver("search", m)
+		}
+		return w, w.deliver("app", m)
 	case workspaceMsg:
 		if (m.panel == "wall" && m.generation != w.wallGeneration) || (m.panel != "wall" && m.generation != w.generation) {
 			return w, nil
@@ -152,6 +179,9 @@ func (w *Workspace) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if v := choice.choice.View; v != nil {
 				o := w.o.Wall
 				o.Project = v.Project
+				if !strings.EqualFold(v.Project, w.o.Scope.Project) {
+					o.CanvasWorkspace = ""
+				}
 				o.Show = &wall.Want{Kind: v.Kind, Title: v.Title, Ref: v.Ref}
 				w.wall = wall.New(w.allClient, o)
 				w.wallGeneration++
@@ -169,7 +199,7 @@ func (w *Workspace) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key == "ctrl+c" {
 			return w, tea.Quit
 		}
-		if key == "f8" {
+		if key == "f8" || key == "ctrl+w" || ((key == "tab" || key == "shift+tab") && w.tabSwitchesPanels()) {
 			w.wallFocus = !w.wallFocus
 			return w, nil
 		}
@@ -209,6 +239,22 @@ func (w *Workspace) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	// Results from Bubble Tea-managed editor/process callbacks go to the main UI.
 	return w, w.deliver("app", msg)
+}
+
+// Notes and search already use Tab for their own navigation. Keep that key
+// there, and keep every editing prompt intact; Ctrl+W/F8 always switch panels.
+func (w *Workspace) tabSwitchesPanels() bool {
+	if w.wallFocus {
+		return true
+	}
+	if w.searching || w.app.top().Capturing() {
+		return false
+	}
+	switch w.app.top().(type) {
+	case *notesView, *noteView:
+		return false
+	}
+	return true
 }
 func (w *Workspace) deliver(panel string, msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
@@ -266,6 +312,12 @@ func (w *Workspace) View() string {
 	} else if w.wallFocus {
 		body = box(w.wall.View(), right, h)
 	}
-	footer := statusStyle.Render(ansi.Truncate(" F1 Focus  F2 Tasks  F3 Boards  F4 Notes  F7 Search · F8 Wall  F9 Scope", w.width, "…"))
+	hint := " Ctrl+W/F8 switch panel · F1 Focus F2 Tasks F3 Boards F4 Notes F7 Search F9 Scope"
+	if w.wallFocus {
+		hint = " Ctrl+W/Tab return · ↑↓ move · Enter view · c canvases · o browser · F9 Scope"
+	} else if w.tabSwitchesPanels() {
+		hint = " Tab/Ctrl+W wall · F1 Focus F2 Tasks F3 Boards F4 Notes F7 Search F9 Scope"
+	}
+	footer := statusStyle.Render(ansi.Truncate(hint, w.width, "…"))
 	return header + "\n" + body + "\n" + footer
 }

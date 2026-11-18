@@ -2,6 +2,7 @@ package wall
 
 import (
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -10,12 +11,24 @@ import (
 
 // Item is one entry of the feed.
 type Item struct {
-	Art   apiclient.WorkArtifact
-	Kind  string // commit, pr, image, video or file
-	Title string
-	Tab   string // the tab (or session) that produced it
-	Agent string
-	When  time.Time
+	Art    apiclient.WorkArtifact
+	Kind   string // commit, pr, image, video, file or canvas
+	Title  string
+	Tab    string // the tab (or session) that produced it
+	Agent  string
+	When   time.Time
+	Canvas *apiclient.CanvasMeta
+}
+
+func withCanvases(items []Item, canvases []apiclient.CanvasMeta) []Item {
+	for _, c := range canvases {
+		items = append(items, Item{
+			Art:  apiclient.WorkArtifact{ID: "canvas:" + c.ID, Kind: "canvas", Ref: c.ID, Title: c.Title},
+			Kind: "canvas", Title: c.Title, When: c.Updated, Canvas: &c,
+		})
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].When.After(items[j].When) })
+	return items
 }
 
 // buildFeed turns a project snapshot into feed items, newest first. An
@@ -98,13 +111,15 @@ func shortRef(ref string) string {
 	return ref
 }
 
-// matches reports whether an item passes a filter: "all", "media" or "code".
+// matches reports whether an item passes an all/media/code/canvas filter.
 func (it Item) matches(filter string) bool {
 	switch filter {
 	case "media":
 		return it.Kind == "image" || it.Kind == "video"
 	case "code":
 		return it.Kind == "commit" || it.Kind == "pr"
+	case "canvas":
+		return it.Kind == "canvas"
 	}
 	return true
 }
@@ -113,6 +128,9 @@ func (it Item) matches(filter string) bool {
 // repository is there, otherwise the uploaded file on the Amythest server.
 func (it Item) webURL(endpoint string) string {
 	a := it.Art
+	if it.Canvas != nil {
+		return strings.TrimRight(endpoint, "/") + "/canvas/" + it.Canvas.ID
+	}
 	if a.Kind == "pr" && strings.HasPrefix(a.Ref, "http") {
 		return a.Ref
 	}

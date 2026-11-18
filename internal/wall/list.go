@@ -61,6 +61,11 @@ func List(ctx context.Context, w io.Writer, api API, project string, locate func
 		return err
 	}
 	items := buildFeed(s)
+	canvases, err := api.CanvasList(ctx, project)
+	if err != nil {
+		return fmt.Errorf("load canvases: %w", err)
+	}
+	items = withCanvases(items, canvases)
 	fmt.Fprintf(w, "%s: %d items\n", project, len(items))
 	now := time.Now()
 	for _, it := range items {

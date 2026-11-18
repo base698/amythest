@@ -20,6 +20,7 @@ type API interface {
 	WorkProject(ctx context.Context, project string) (*apiclient.WorkSnapshot, error)
 	WorkMedia(ctx context.Context, hash string, limit int64) ([]byte, error)
 	CardTitles(ctx context.Context, ids []string) (map[string]string, error)
+	CanvasList(ctx context.Context, workspace string) ([]apiclient.CanvasMeta, error)
 	Endpoint() string
 }
 
@@ -28,15 +29,17 @@ type Options struct {
 	// Share opens the message reply picker with a snapshot of the selected item.
 	Share func(Item) tea.Cmd
 
-	Project    string        // show this project; empty: the current herdr workspace
-	Graphics   string        // "kitty", "blocks" or "off"
-	Refresh    time.Duration // how often to look for new items
-	Out        io.Writer     // where image uploads go; must be serialized with the screen
-	CellW      int           // a cell's width in pixels, 0 if unknown
-	CellAspect float64       // a cell's width / height
-	Locate     func() Place
-	Open       func(url string) error
-	Now        func() time.Time
+	Project         string        // show this project; empty: the current herdr workspace
+	Graphics        string        // "kitty", "blocks" or "off"
+	Refresh         time.Duration // how often to look for new items
+	Out             io.Writer     // where image uploads go; must be serialized with the screen
+	CellW           int           // a cell's width in pixels, 0 if unknown
+	CellAspect      float64       // a cell's width / height
+	Locate          func() Place
+	Open            func(url string) error
+	OpenCanvas      func(id string) error
+	CanvasWorkspace string // current Herdr workspace when it differs from the Work project
+	Now             func() time.Time
 	// Show opens the wall on one item, enlarged (an image) or as its diff (a
 	// commit), for callers that already know what the person wants to see.
 	Show *Want
@@ -109,17 +112,18 @@ type model struct {
 	pics  map[string]*pic
 	next  int // next Kitty image id
 
-	view     string // "feed", "pick", "zoom" or "diff"
-	zoom     []string
-	pick     int
-	diff     []string
-	diffTop  int
-	loading  bool
-	synced   time.Time
-	showing  string // media hash of an image to enlarge once it has loaded
-	flash    string
-	err      error
-	fetching int
+	view      string // "feed", "pick", "zoom" or "diff"
+	zoom      []string
+	pick      int
+	diff      []string
+	diffTop   int
+	loading   bool
+	synced    time.Time
+	showing   string // media hash of an image to enlarge once it has loaded
+	flash     string
+	err       error
+	canvasErr error
+	fetching  int
 }
 
 type (
@@ -129,11 +133,14 @@ type (
 		err      error
 	}
 	feedMsg struct {
-		project string
-		snap    *apiclient.WorkSnapshot
-		err     error
+		project   string
+		snap      *apiclient.WorkSnapshot
+		err       error
+		canvases  []apiclient.CanvasMeta
+		canvasErr error
 	}
-	picMsg struct {
+	canvasOpenedMsg struct{ err error }
+	picMsg          struct {
 		hash string
 		img  image.Image
 		err  error
@@ -183,11 +190,16 @@ func (m *model) startCmd() tea.Cmd {
 }
 
 func (m *model) feedCmd(project string) tea.Cmd {
+	workspace := project
+	if project == m.o.Project && m.o.CanvasWorkspace != "" {
+		workspace = m.o.CanvasWorkspace
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		s, err := m.api.WorkProject(ctx, project)
-		return feedMsg{project: project, snap: s, err: err}
+		canvases, canvasErr := m.api.CanvasList(ctx, workspace)
+		return feedMsg{project: project, snap: s, err: err, canvases: canvases, canvasErr: canvasErr}
 	}
 }
 
@@ -260,6 +272,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.say("share: " + msg.Err.Error())
 		}
 		return m, m.relayout()
+	case canvasOpenedMsg:
+		if msg.err != nil {
+			return m, m.say("canvas: " + msg.err.Error())
+		}
+		return m, m.say("opened in Herdr")
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		return m, m.relayout()
@@ -279,10 +296,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.feedCmd(m.project)
 	case feedMsg:
-		m.loading = false
 		if msg.project != m.project {
 			return m, nil // an answer for a project since switched away from
 		}
+		m.loading = false
 		if msg.err != nil {
 			m.err = msg.err
 			return m, nil
@@ -295,7 +312,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cursor < len(m.items) {
 			keep = m.items[m.cursor].Art.ID
 		}
-		m.all, m.snap = buildFeed(msg.snap), msg.snap
+		m.canvasErr = msg.canvasErr
+		m.all, m.snap = withCanvases(buildFeed(msg.snap), msg.canvases), msg.snap
 		m.applyFilter(keep)
 		titles := m.cardsCmd()
 		if want := m.o.Show; want != nil {
@@ -344,6 +362,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.MouseMsg:
+		if m.view == "feed" && msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+			return m, m.selectAt(msg.X, msg.Y)
+		}
 		if m.view == "feed" || m.view == "diff" {
 			switch msg.Button {
 			case tea.MouseButtonWheelUp:
@@ -371,6 +392,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	s := k.String()
 	if s == "S" && m.o.Share != nil && m.view != "pick" && m.cursor < len(m.items) {
+		if m.items[m.cursor].Canvas != nil {
+			return m, m.say("Open the canvas and use Copy PNG to share it")
+		}
 		return m, m.o.Share(m.items[m.cursor])
 	}
 	if s == "ctrl+c" {
@@ -447,13 +471,20 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "G", "end":
 		m.cursor = max(0, len(m.items)-1)
 		return m, m.reveal()
-	case "f":
-		next := map[string]string{"all": "media", "media": "code", "code": "all"}
+	case "f", "c":
+		next := map[string]string{"all": "media", "media": "code", "code": "canvas", "canvas": "all"}
+		wasCanvas := m.filter == "canvas"
 		keep := ""
 		if m.cursor < len(m.items) {
 			keep = m.items[m.cursor].Art.ID
 		}
 		m.filter = next[m.filter]
+		if s == "c" {
+			m.filter = "canvas"
+			if wasCanvas {
+				m.filter = "all"
+			}
+		}
 		m.applyFilter(keep)
 		return m, m.relayout()
 	case "p":
@@ -475,6 +506,11 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		it := m.items[m.cursor]
 		switch {
+		case it.Canvas != nil:
+			if m.o.OpenCanvas == nil {
+				return m, m.say("press o to open this canvas in the browser")
+			}
+			return m, func() tea.Msg { return canvasOpenedMsg{m.o.OpenCanvas(it.Canvas.ID)} }
 		case it.Kind == "commit" && it.Art.MediaHash != "" && it.Art.Available:
 			return m, m.diffCmd(it)
 		case it.Kind == "image" && m.picOf(it) != nil && m.picOf(it).state == picReady:
@@ -575,6 +611,28 @@ func (m *model) body() int { return max(1, m.h-3) }
 func (m *model) move(d int) tea.Cmd {
 	m.cursor = max(0, min(m.cursor+d, len(m.items)-1))
 	return m.reveal()
+}
+
+func (m *model) selectAt(x, y int) tea.Cmd {
+	if x < 0 || x >= m.w || y < 2 || y >= 2+m.body() {
+		return nil
+	}
+	line := m.top + y - 2
+	columns := m.columns()
+	for row := 0; row < len(m.start); row += columns {
+		first, last := m.span(row)
+		if line < first || line >= last {
+			continue
+		}
+		col := 0
+		if columns > 1 {
+			tileWidth := (m.w - 2 - 2*(columns-1)) / columns
+			col = max(0, min(columns-1, (x-2)/(tileWidth+2)))
+		}
+		m.cursor = min(row+col, len(m.items)-1)
+		return m.relayout()
+	}
+	return nil
 }
 
 // span is the lines an item occupies: in the gallery, its whole row of tiles.
@@ -828,6 +886,9 @@ func (m *model) build() {
 	if m.summary && m.snap != nil {
 		m.lines = append(m.lines, summaryLines(m.snap, m.all, m.cards, now, m.w)...)
 	}
+	if m.canvasErr != nil {
+		m.lines = append(m.lines, "  "+bad.Render(clip("Canvases unavailable · r to retry", width)), "")
+	}
 	if n := m.columns(); n > 1 {
 		m.buildGrid(n)
 		return
@@ -851,7 +912,10 @@ func (m *model) build() {
 			m.lines = append(m.lines, "  "+dim.Render(clip(strings.TrimPrefix(githubOrRepo(it.Art.Repo)+" · "+metaText, " · "), width)), "")
 			continue
 		}
-		icon := map[string]string{"image": "▣", "video": "▶", "pr": "⇄", "file": "□"}[it.Kind]
+		icon := map[string]string{"image": "▣", "video": "▶", "pr": "⇄", "file": "□", "canvas": "◇"}[it.Kind]
+		if it.Kind == "canvas" {
+			metaText = "canvas · " + metaText + " · enter draw"
+		}
 		m.lines = append(m.lines, mark+accent.Render(icon)+" "+strong.Render(clip(it.Title, width-2)))
 		m.lines = append(m.lines, "  "+dim.Render(clip(metaText, width)))
 		p := m.picOf(it)
@@ -956,16 +1020,16 @@ func (m *model) View() string {
 	case m.loading:
 		right = dim.Render("loading…")
 	case m.view == "feed":
-		right = dim.Render(fmt.Sprintf("%d %s · %s", len(m.items), map[string]string{"all": "items", "media": "media", "code": "commits"}[m.filter], ago(m.synced, m.o.Now())))
+		right = dim.Render(fmt.Sprintf("%d %s · %s", len(m.items), map[string]string{"all": "items", "media": "media", "code": "commits", "canvas": "canvases"}[m.filter], ago(m.synced, m.o.Now())))
 	}
 	gap := max(1, m.w-lipgloss.Width(title)-lipgloss.Width(right)-2)
 	b.WriteString(" " + strong.Render(clip(title, m.w-2)) + strings.Repeat(" ", gap) + right + "\n")
 	b.WriteString(dim.Render(strings.Repeat("─", m.w)) + "\n")
 
 	body := make([]string, 0, m.body())
-	hint := "enter view · o open · f filter · s summary · p project · q close"
+	hint := "↑↓ move · enter view · c canvases · f filter · o browser · s summary · p project · q close"
 	if m.o.Share != nil {
-		hint = "enter view · S reply with item · f filter · s summary · p project · q close"
+		hint = "↑↓ move · enter view · c canvases · S reply · f filter · s summary · p project · q close"
 	}
 	switch m.view {
 	case "pick":
