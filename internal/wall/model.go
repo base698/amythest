@@ -38,6 +38,7 @@ type Options struct {
 	CellAspect      float64       // a cell's width / height
 	Locate          func() Place
 	Open            func(url string) error
+	OpenFile        func(FileTarget) tea.Cmd
 	OpenCanvas      func(id string) error
 	CanvasWorkspace string // current Herdr workspace when it differs from the Work project
 	Now             func() time.Time
@@ -89,6 +90,16 @@ const (
 )
 
 type ShareDone struct{ Err error }
+
+// FileTarget opens the working copy of a diff's file on this computer.
+type FileTarget struct {
+	Repo string
+	Path string
+	Line int
+}
+
+// FileOpened is returned when the local editor exits (or could not open).
+type FileOpened struct{ Err error }
 
 type model struct {
 	api  API
@@ -281,6 +292,11 @@ func (m *model) diffCmd(it Item) tea.Cmd {
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case FileOpened:
+		if msg.Err != nil {
+			return m, m.say("open file: " + msg.Err.Error())
+		}
+		return m, nil
 	case redrawMsg:
 		return m, m.relayout()
 	case ShareDone:
@@ -1156,7 +1172,7 @@ func (m *model) View() string {
 			"Enter           open selection; Esc backs out",
 			"c canvases · f filter · s summary · r refresh",
 			"o browser · p project · S reply · q close",
-			"Diffs: o open file · [/] previous/next file",
+			"Diffs: o Vim · [/] previous/next file",
 			"Diffs: h/l horizontal scroll · 0 reset · Esc back",
 			"Dashboard: Ctrl+W/F8 or click to switch panels.",
 			"* Herdr uses Ctrl+B; use b or PgUp there.",
@@ -1178,7 +1194,7 @@ func (m *model) View() string {
 			}
 		}
 	case "diff":
-		hint = "Esc back · o open file · [/] files · j/k scroll · Space/b page · h/l sideways · ? keys"
+		hint = "Esc back · o Vim · [/] files · j/k scroll · Space/b page · h/l sideways · ? keys"
 		for i := min(m.diffTop, len(m.diff)); i < len(m.diff); i++ {
 			if len(body) == m.body() {
 				break

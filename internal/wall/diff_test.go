@@ -1,6 +1,7 @@
 package wall
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -30,8 +31,8 @@ rename to new.png
 `
 
 func TestDiffLineNumbersFilesAndOpen(t *testing.T) {
-	opened := ""
-	m := New(&fakeAPI{}, Options{Open: func(u string) error { opened = u; return nil }}).(*model)
+	var opened FileTarget
+	m := New(&fakeAPI{}, Options{OpenFile: func(file FileTarget) tea.Cmd { opened = file; return nil }}).(*model)
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 14})
 	it := Item{Art: apiclient.WorkArtifact{Repo: "git@github.com:example/demo.git", Ref: "abc123"}}
 	m.Update(diffMsg{item: it, title: "abc123  Example change", text: testPatch})
@@ -46,28 +47,36 @@ func TestDiffLineNumbersFilesAndOpen(t *testing.T) {
 			t.Fatalf("diff overflow: %q", row)
 		}
 	}
-	// Opening a deletion uses the old file and line at the parent revision.
+	// Removed lines open the working copy at the next surviving line.
 	m.diffTop = 8
 	m.openDiffFile()
-	if opened != "https://github.com/example/demo/blob/abc123%5E/first.go#L11" {
-		t.Fatalf("old line URL: %s", opened)
+	if opened.Path != "first.go" || opened.Line != 21 || opened.Repo != it.Art.Repo {
+		t.Fatalf("removed line target: %+v", opened)
 	}
 	m.diffTop = 9
 	m.openDiffFile()
-	if opened != "https://github.com/example/demo/blob/abc123/first.go#L21" {
-		t.Fatalf("new line URL: %s", opened)
+	if opened.Path != "first.go" || opened.Line != 21 {
+		t.Fatalf("new line target: %+v", opened)
 	}
 	m.jumpFile(1)
 	m.openDiffFile()
-	if opened != "https://github.com/example/demo/blob/abc123%5E/a%20space%20%23.go" {
-		t.Fatalf("deleted file URL: %s", opened)
+	if opened.Path != "a space #.go" || opened.Line != 1 {
+		t.Fatalf("deleted file target: %+v", opened)
 	}
 	m.jumpFile(1)
 	m.openDiffFile()
-	if opened != "https://github.com/example/demo/blob/abc123/new.png" {
-		t.Fatalf("renamed binary URL: %s", opened)
+	if opened.Path != "new.png" {
+		t.Fatalf("renamed binary target: %+v", opened)
 	}
 	last := m.diffTop
+	m.Update(FileOpened{})
+	if m.diffTop != last || !m.Fullscreen() {
+		t.Fatal("editor return lost the diff")
+	}
+	m.Update(FileOpened{Err: errors.New("no local checkout")})
+	if m.diffTop != last || !m.Fullscreen() || !strings.Contains(m.View(), "no local checkout") {
+		t.Fatal("opening error did not stay in the diff")
+	}
 	m.jumpFile(-1)
 	if m.diffTop >= last {
 		t.Fatal("previous file did not move back")

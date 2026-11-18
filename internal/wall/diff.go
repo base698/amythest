@@ -2,7 +2,6 @@ package wall
 
 import (
 	"fmt"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,10 +15,10 @@ import (
 func (m *model) Fullscreen() bool { return m.view == "diff" }
 
 type diffLine struct {
-	text, file, oldFile string
-	kind                byte
-	old, new            int
-	start, deleted      bool
+	text, file string
+	kind       byte
+	old, new   int
+	start      bool
 }
 
 var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
@@ -30,10 +29,10 @@ func parseDiff(lines []string) []diffLine {
 	rows := make([]diffLine, len(lines))
 	start, old, next := -1, 0, 0
 	file, oldFile := "", ""
-	deleted, inHunk := false, false
+	inHunk := false
 	finish := func(end int) {
 		for i := max(0, start); start >= 0 && i < end; i++ {
-			rows[i].file, rows[i].oldFile, rows[i].deleted = file, oldFile, deleted
+			rows[i].file = file
 		}
 	}
 	for i, line := range lines {
@@ -41,7 +40,7 @@ func parseDiff(lines []string) []diffLine {
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
 			finish(i)
-			start, inHunk, deleted = i, false, false
+			start, inHunk = i, false
 			oldFile, file = diffPaths(strings.TrimPrefix(line, "diff --git "))
 			row.start, row.kind = true, 'f'
 		case !inHunk && strings.HasPrefix(line, "--- "):
@@ -52,13 +51,12 @@ func parseDiff(lines []string) []diffLine {
 			row.kind = 'm'
 		case !inHunk && strings.HasPrefix(line, "+++ "):
 			file = patchPath(strings.TrimPrefix(line, "+++ "))
-			deleted = file == "/dev/null"
-			if deleted {
+			if file == "/dev/null" {
 				file = oldFile
 			}
 			row.kind = 'm'
 		case strings.HasPrefix(line, "deleted file mode "):
-			deleted, file, row.kind = true, oldFile, 'm'
+			file, row.kind = oldFile, 'm'
 		case hunkHeader.MatchString(line):
 			match := hunkHeader.FindStringSubmatch(line)
 			old, _ = strconv.Atoi(match[1])
@@ -188,28 +186,23 @@ func (m *model) openDiffFile() tea.Cmd {
 	if row == nil {
 		return m.say("Scroll to a file or press ] for the next file")
 	}
-	repo := githubRepo(m.diffItem.Art.Repo)
-	ref := m.diffItem.Art.Ref
-	if repo == "" || ref == "" {
-		return m.say("No GitHub address recorded for this repository")
+	if m.o.OpenFile == nil {
+		return m.say("Local file opening is unavailable")
 	}
-	file, line := row.file, row.new
-	if row.deleted || row.kind == '-' {
-		file, line, ref = row.oldFile, row.old, ref+"^"
+	line := row.new
+	if line == 0 {
+		// On a removed line, use the next surviving line in the working
+		// copy. File/hunk headers naturally start at their first new line.
+		for i := m.diffTop; i < len(m.patch); i++ {
+			candidate := m.patch[i]
+			if candidate.file != row.file && candidate.file != "" {
+				break
+			}
+			if candidate.new > 0 {
+				line = candidate.new
+				break
+			}
+		}
 	}
-	parts := strings.Split(file, "/")
-	for i := range parts {
-		parts[i] = url.PathEscape(parts[i])
-	}
-	address := "https://github.com/" + repo + "/blob/" + url.PathEscape(ref) + "/" + strings.Join(parts, "/")
-	if line > 0 {
-		address += fmt.Sprintf("#L%d", line)
-	}
-	if m.o.Open == nil {
-		return m.say(address)
-	}
-	if err := m.o.Open(address); err != nil {
-		return m.say("Could not open file: " + err.Error())
-	}
-	return m.say("Opened " + file + " in browser")
+	return m.o.OpenFile(FileTarget{Repo: m.diffItem.Art.Repo, Path: row.file, Line: max(1, line)})
 }

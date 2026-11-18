@@ -94,6 +94,7 @@ func showWall(client *apiclient.Client, images string, opts wall.Options, pane s
 		opts.Share = func(it wall.Item) tea.Cmd { return shareWallItem(client, it) }
 	}
 	opts.Open, opts.OpenCanvas = openURL, openCanvasPane
+	opts.OpenFile = openWallFile
 	model := wall.New(client, opts)
 	defer model.(io.Closer).Close()
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithOutput(out))

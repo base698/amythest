@@ -72,9 +72,12 @@ selects checklist items; Space reveals a hidden selection before toggling it.
 removed lines have colour and old/new line numbers. **Esc** returns to the
 split wall at the selected item. **[ / ]** jumps between files; **h/l** scrolls
 long lines sideways and **0** resets that offset. **o** opens the file named
-in the diff header on GitHub, at the recorded commit and visible line; removed
-lines/files open at its parent revision. This requires a recorded GitHub repo
-address. Switching panels with Ctrl+W keeps the diff open for your return.
+in the diff header in **local Vim**, near the visible line. Quit Vim with
+`:q` (or save and quit with `:wq`) to return to the same diff. This opens the
+current working copy, so edits stay in your checkout. Amy matches the recorded
+repository to the current directory, nearby checkouts, or local Herdr terminal
+directories. A missing checkout or deleted file shows a message. Switching
+panels with Ctrl+W keeps the diff open for your return.
 
 The wall includes this workspace's **canvases** alongside recorded work, newest
 first. Press **c** to toggle canvases only, or **f** to cycle all/media/commits/

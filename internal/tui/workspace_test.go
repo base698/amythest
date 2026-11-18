@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -189,6 +190,11 @@ func TestWorkspaceDiffExpandsAndReturnsWithoutLosingNavigation(t *testing.T) {
 	w.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if p.width != 160 || !w.wallExpanded() || strings.Contains(w.View(), "water the ferns") {
 		t.Fatal("diff did not take both panels")
+	}
+	finished := wall.FileOpened{Err: errors.New("Vim could not start")}
+	w.Update(finished)
+	if got, ok := p.messages[len(p.messages)-1].(wall.FileOpened); !ok || got.Err != finished.Err || !w.wallExpanded() {
+		t.Fatal("editor completion did not return to the expanded wall")
 	}
 	w.Update(tea.MouseMsg{X: 7, Y: 5, Button: tea.MouseButtonWheelDown})
 	if got := p.messages[len(p.messages)-1].(tea.MouseMsg); got.X != 7 || got.Y != 4 {

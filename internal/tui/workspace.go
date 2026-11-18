@@ -139,6 +139,10 @@ func (w *Workspace) navigate(key string) tea.Cmd {
 }
 func (w *Workspace) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
+	case wall.FileOpened:
+		// ExecProcess callbacks arrive directly from Bubble Tea, outside
+		// the command wrapper. Keep editor completion with its wall.
+		return w, w.deliver("wall", m)
 	case WorkspaceOpened:
 		if m.Err != nil {
 			return w, w.deliver("app", errMsg{m.Err})
@@ -349,7 +353,7 @@ func (w *Workspace) View() string {
 	if w.wallFocus {
 		hint = " Ctrl+W/Tab return · j/k ↑↓ move · Space/b page · ? keys · Enter view · c canvases"
 		if w.wallExpanded() {
-			hint = " Esc back to wall · o open file · [ / ] previous / next file · j/k scroll · Space/b page · Ctrl+W switch panel"
+			hint = " Esc back to wall · o Vim · [ / ] previous / next file · j/k scroll · Space/b page · Ctrl+W switch panel"
 		}
 	} else if w.tabSwitchesPanels() {
 		hint = " Tab/Ctrl+W wall · F1 Focus F2 Tasks F3 Boards F4 Notes F7 Search F9 Scope"
