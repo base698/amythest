@@ -12,6 +12,7 @@ import (
 	"github.com/base698/amythest/internal/tasks"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type taskReviewDone struct {
@@ -42,7 +43,7 @@ func (v *taskReviewView) Title() string {
 	return fmt.Sprintf("review %d marked tasks", len(v.selected))
 }
 func (v *taskReviewView) Busy() bool      { return v.step == 2 }
-func (v *taskReviewView) Capturing() bool { return true }
+func (v *taskReviewView) Capturing() bool { return v.step != 3 }
 func (v *taskReviewView) Init() tea.Cmd   { return v.input.Focus() }
 func (v *taskReviewView) Cancel() {
 	if v.cancel != nil {
@@ -109,17 +110,24 @@ func (v *taskReviewView) Update(msg tea.Msg) (view, tea.Cmd) {
 	return v, nil
 }
 func (v *taskReviewView) View(w, h int) string {
+	if h <= 0 {
+		return ""
+	}
 	v.input.Width = max(20, w-20)
 	var lines []string
 	lines = append(lines, "Investigate selected tasks and save evidence below each task.", "Task status stays unchanged.", "")
+	hint := "Enter continue · Esc back"
 	switch v.step {
 	case 0:
-		lines = append(lines, v.input.View(), "Enter: continue with this prompt (blank uses the default)", "Esc: back")
+		lines = append(lines, v.input.View(), "A blank prompt uses the default.")
 	case 1:
-		lines = append(lines, "Agent: "+v.provider, "Tab: Claude / Codex · Enter: investigate · Esc: back")
+		lines = append(lines, "Agent: "+v.provider)
+		hint = "Esc back · Tab Claude/Codex · Enter investigate"
 	case 2:
-		lines = append(lines, "Investigating with "+v.provider+"…", "Esc: cancel; no automatic task completion")
+		lines = append(lines, "Investigating with "+v.provider+"…")
+		hint = "Esc cancel · Task status stays unchanged"
 	case 3:
+		hint = "Esc tasks · j/k scroll · PgUp/PgDn page"
 		lines = append(lines, fmt.Sprintf("Saved context for %d tasks.", v.result.Saved))
 		if v.err != nil {
 			lines = append(lines, v.err.Error())
@@ -132,12 +140,18 @@ func (v *taskReviewView) View(w, h int) string {
 			lines = append(lines, "", v.selected[f.ID].Text, f.Summary)
 			lines = append(lines, f.Sources...)
 		}
-		lines = append(lines, "", "Esc: return to tasks · D: cancel/delete there")
 	}
 	var wrapped []string
 	for _, line := range lines {
-		wrapped = append(wrapped, wrapLine(messages.Plain(line), max(20, w-4))...)
+		wrapped = append(wrapped, wrapLine(messages.Plain(line), max(1, w-4))...)
 	}
-	v.scroll = min(v.scroll, max(0, len(wrapped)-max(1, h-2)))
-	return "\n " + strings.Join(wrapped[v.scroll:min(len(wrapped), v.scroll+max(1, h-2))], "\n ")
+	// Keep the escape route visible even in a long, scrolled review.
+	bodyHeight := h - 1
+	v.scroll = min(v.scroll, max(0, len(wrapped)-bodyHeight))
+	rows := make([]string, bodyHeight, h)
+	for i, line := range wrapped[v.scroll:min(len(wrapped), v.scroll+bodyHeight)] {
+		rows[i] = " " + line
+	}
+	rows = append(rows, dimStyle.Render(ansi.Truncate(" "+hint, max(1, w), "…")))
+	return strings.Join(rows, "\n")
 }
