@@ -2,17 +2,20 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/base698/amythest/internal/chatui"
 	"github.com/base698/amythest/internal/find"
 	"github.com/base698/amythest/internal/messageconfig"
 	"github.com/base698/amythest/internal/messages"
 	"github.com/base698/amythest/internal/messageui"
 	"github.com/base698/amythest/internal/wall"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // parseGoto reads where `-goto` points:
@@ -92,7 +95,22 @@ func openMessagesAt(ref *find.MessageRef, pane string) error {
 		}
 		return err
 	}
+	if cfg, err := messageconfig.Load(""); err == nil && cfg.Client.View == "chat" {
+		return showChat(client, chatui.Options{Goto: &res.Jump, Listener: messageListener(pane), EventsAfter: res.Seq}, pane)
+	}
 	return showMessages(client, messageui.Options{Goto: &res.Jump, Listener: messageListener(pane), EventsAfter: res.Seq}, pane)
+}
+
+// showChat runs the irssi-style client, closing its own pane on exit.
+func showChat(client *messages.Client, opts chatui.Options, pane string) error {
+	_, e := tea.NewProgram(chatui.New(client, opts), tea.WithAltScreen()).Run()
+	if e == nil && pane != "" {
+		return wall.ClosePane(pane, nil)
+	}
+	if errors.Is(e, tea.ErrProgramKilled) {
+		return nil
+	}
+	return e
 }
 
 // messageSearch is amy find's Messages source, or nil when messaging is not

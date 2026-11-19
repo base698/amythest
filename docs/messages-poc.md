@@ -70,6 +70,27 @@ message content is sent to an LLM. Ingesting and opening a message do not mark
 it handled. A successful simulated reply or live delivery receipt handles its original parent; a newer
 incoming message remains in focus.
 
+## Chat client (irssi-style)
+
+`amy messages chat` is an irssi-style client over the same gateway. Set
+`"view": "chat"` under `client` in `messages.json` to make plain `amy messages`
+(and so Cmd+Shift+M) open it; `amy messages focus` still opens the queue view.
+
+- Window 1 (`amy`) shows notices and the attention queue. Each conversation
+  waiting on you gets a window, newest first. New messages elsewhere open one.
+- The status bar's `[Act: 2,3!,5]` lists windows with unread activity: plain
+  for chatter, bold for a question or direct message, `!` for Don't miss.
+- Alt+1…9 switch windows, Alt+A goes to the busiest, Ctrl+N/Ctrl+P cycle,
+  PgUp/PgDn scroll (PgUp at the top loads older messages).
+- Text replies to the newest message from someone else. Each message has a
+  short `[ref]`: `/reply REF text` answers that one. In Slack, `/thread REF text`
+  replies in its thread (starting it), and `/thread REF` opens the thread window.
+- `/search WORDS` opens a results window; type a number to open that message.
+  `/lastlog WORDS` searches the current conversation.
+- `/query NAME` opens a conversation (Tab completes), `/done` and `/snooze`
+  set attention, `/win N` and `/close` manage windows, `/help` lists commands.
+- Jumps from amy find land here when this is the configured view.
+
 ## Search and jumps
 
 The gateway keeps a full-text index of message text and senders. It is built

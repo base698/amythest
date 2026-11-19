@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/base698/amythest/internal/apiclient"
+	"github.com/base698/amythest/internal/chatui"
 	"github.com/base698/amythest/internal/find"
 	"github.com/base698/amythest/internal/messageconfig"
 	"github.com/base698/amythest/internal/messages"
@@ -37,7 +38,8 @@ func runMessages(args []string) {
 }
 func messageCommand(args []string) error {
 	op := "focus"
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+	named := len(args) > 0 && !strings.HasPrefix(args[0], "-")
+	if named {
 		op = args[0]
 		args = args[1:]
 	}
@@ -75,7 +77,7 @@ func messageCommand(args []string) error {
 		return e
 	}
 	owned := ""
-	if *ownPane && op == "focus" {
+	if *ownPane && (op == "focus" || op == "chat") {
 		var closed bool
 		var e error
 		owned, closed, e = wall.ToggleAppPane(os.Getenv("HC_TERMINAL_ID"), "messages", nil)
@@ -86,6 +88,9 @@ func messageCommand(args []string) error {
 	cfg, e := messageconfig.Load(*configFile)
 	if e != nil {
 		return e
+	}
+	if !named && cfg.Client.View == "chat" {
+		op = "chat"
 	}
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
@@ -231,6 +236,12 @@ func messageCommand(args []string) error {
 			opts.FocusPane = func() error { return find.Focus(target, nil) }
 		}
 		return showMessages(client, opts, owned)
+	case "chat":
+		opts := chatui.Options{Listener: messageListener(thisPane())}
+		if opts.Goto, e = parseGoto(*gotoTarget); e != nil {
+			return e
+		}
+		return showChat(client, opts, owned)
 	case "jump":
 		j, e := parseGoto(*gotoTarget)
 		if e != nil {
