@@ -94,6 +94,10 @@ incoming message remains in focus.
   opens the thread window. The input line's hint says where text will go.
 - A chat with no messages yet opens but cannot be written to: Amy only answers
   existing messages so far.
+- Pasting or dropping file paths in a chat (copypasta's ⇧⌘⏎, a Finder drag,
+  `file://` links) attaches those files instead of typing the text; Ctrl+V
+  attaches the picture on the clipboard, or files copied in Finder. They show
+  above the input: Enter sends them with what you typed, Ctrl+X clears them.
 - `/attach [REF] PATH... [text]` sends files (up to 8, 5 MB each) with optional
   text, as a reply like plain text or to REF; Tab completes paths. Files on
   messages show as `[file TAG] name`: `/open TAG` saves to ~/Downloads and

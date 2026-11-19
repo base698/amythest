@@ -292,7 +292,11 @@ func (m *Model) attach(w *window, rest string) tea.Cmd {
 		w.note(m.o.Now(), "-!- A message can carry up to %d files.", maxFiles)
 		return nil
 	}
-	body := strings.Join(args, " ")
+	return m.sendFiles(w, target, paths, strings.Join(args, " "))
+}
+
+// sendFiles uploads files and sends them, with body, as a reply to target.
+func (m *Model) sendFiles(w *window, target messages.Message, paths []string, body string) tea.Cmd {
 	conv := w.conv.ID
 	w.note(m.o.Now(), "-!- Sending %d file(s)…", len(paths))
 	return func() tea.Msg {

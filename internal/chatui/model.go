@@ -48,6 +48,7 @@ type Options struct {
 
 	DownloadDir string             // where /open and /save put files (~/Downloads)
 	Open        func(string) error // opens a saved file (the system's open)
+	PasteDir    string             // where Ctrl+V saves clipboard pictures
 }
 
 const (
@@ -132,6 +133,11 @@ func New(api API, o Options) *Model {
 	}
 	if o.Open == nil {
 		o.Open = openWithSystem
+	}
+	if o.PasteDir == "" {
+		if d, e := os.UserCacheDir(); e == nil {
+			o.PasteDir = filepath.Join(d, "amythest", "paste")
+		}
 	}
 	if o.DownloadDir == "" {
 		if h, e := os.UserHomeDir(); e == nil {
@@ -321,6 +327,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			w.note(m.o.Now(), "-!- %s", x.text)
 		}
 		return m, m.poll()
+	case clipMsg:
+		m.onClip(x)
 	case picMsg:
 		m.onPic(x)
 	case fileMsg:
@@ -522,6 +530,26 @@ func (m *Model) key(k tea.KeyMsg) tea.Cmd {
 	s := k.String()
 	if s == "ctrl+c" {
 		return tea.Quit
+	}
+	if m.pasteKey(k) {
+		return nil
+	}
+	if w := m.cur(); w.kind == kindConv && !m.br.open {
+		switch s {
+		case "ctrl+v":
+			return m.pasteClipboard()
+		case "ctrl+x":
+			if len(w.staged) > 0 {
+				w.staged = nil
+				return nil
+			}
+		case "enter":
+			if len(w.staged) > 0 && !strings.HasPrefix(m.input.Value(), "/") {
+				line := m.input.Value()
+				m.input.SetValue("")
+				return m.sendStaged(w, strings.TrimSpace(line))
+			}
+		}
 	}
 	if m.br.open {
 		if cmd, ok := m.browserKey(k); ok {
@@ -769,6 +797,8 @@ func (m *Model) help() {
 		"/reply REF text     reply to a message; REF is its [abc] label (/r)",
 		"/thread REF [text]  open REF's Slack thread, or reply in it, starting it (/t)",
 		"/query NAME         open a conversation (/q; Tab completes; else Ctrl+F filtered)",
+		"Paste or drop file paths to attach them; Ctrl+V attaches the clipboard's picture.",
+		"Enter sends them with what you typed; Ctrl+X clears them.",
 		"/attach [REF] PATH... [text]  send files (Tab completes paths; up to 8, 5 MB each)",
 		"/open TAG  /save TAG [PATH]   open or save a file; TAG is its [file abc] label",
 		"/grant [30m] [files]  let agents read and send here for a while; /revoke ends it",
@@ -896,4 +926,9 @@ func (m *Model) scrollTo(w *window, id string) int {
 	return 0
 }
 
-func (m *Model) bodyHeight() int { return max(1, m.h-3) }
+func (m *Model) bodyHeight() int {
+	if w := m.cur(); len(w.staged) > 0 && !m.br.open {
+		return max(1, m.h-4)
+	}
+	return max(1, m.h-3)
+}

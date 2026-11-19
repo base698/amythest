@@ -215,6 +215,9 @@ func (m *Model) View() string {
 		}
 		b.WriteString(s + "\n")
 	}
+	if len(w.staged) > 0 {
+		b.WriteString(ansi.Truncate(m.stagedLine(w), m.w, "…") + "\n")
+	}
 	b.WriteString(barStyle.Render(m.statusBar()) + "\n")
 	b.WriteString(m.prompt() + m.input.View())
 	return b.String()

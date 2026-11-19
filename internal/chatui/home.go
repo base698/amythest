@@ -574,7 +574,7 @@ func (m *Model) hint() string {
 		return "type a result number to open it · Alt+1 home"
 	}
 	if t, ok := w.replyTarget(); ok && !t.Outgoing {
-		return "message replies to " + messages.Plain(t.Sender) + " · /reply TAG · /thread TAG · /attach FILE · Ctrl+F chats"
+		return "message replies to " + messages.Plain(t.Sender) + " · /reply TAG · /thread TAG · Ctrl+V picture · Ctrl+F chats"
 	}
 	return "message " + w.name() + " · Ctrl+F chats · Alt+1 home"
 }
