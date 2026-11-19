@@ -155,6 +155,24 @@ func (s *Store) Ingest(in Ingress) (Message, error) {
 			}
 			return old, tx.Commit()
 		}
+		// Files fetched after the message was first imported join it once,
+		// from the same connector route; nothing else changes.
+		if len(m.Attachments) > 0 && len(old.Attachments) == 0 && c.Route.Provider != "" {
+			stored, err := getJSON[Conversation](tx, "SELECT payload FROM conversations WHERE id=?", c.ID)
+			if err != nil {
+				return Message{}, err
+			}
+			if stored.Route == c.Route && old.Outgoing == m.Outgoing {
+				old.Attachments = m.Attachments
+				if _, err = tx.Exec("UPDATE messages SET payload=? WHERE id=?", encode(old), old.ID); err != nil {
+					return Message{}, err
+				}
+				if err = tx.Commit(); err != nil {
+					return Message{}, err
+				}
+				return old, nil
+			}
+		}
 		// Profile enrichment must not replace content, attention state or identity.
 		if c.Route.Provider == "slack" && m.SenderID != "" {
 			stored, err := getJSON[Conversation](tx, "SELECT payload FROM conversations WHERE id=?", c.ID)

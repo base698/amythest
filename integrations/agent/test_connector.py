@@ -32,10 +32,10 @@ class ConnectorTests(unittest.TestCase):
     def test_journal_survives_failed_ingest_and_replays(self):
         with tempfile.TemporaryDirectory() as tmp:
             j=c.Journal(Path(tmp)/'state.db');gateway=Mock();events=c.normalize(self.config,self.payload,self.now)
-            gateway.request.side_effect=[{},RuntimeError('offline')]
+            gateway.ingest.side_effect=RuntimeError('offline')
             with self.assertRaises(RuntimeError):c.sync(self.config,gateway,j,lambda cfg,now:events)
             self.assertEqual(len(j.pending_inbox()),1)
-            gateway.request.side_effect=None;c.sync(self.config,gateway,j,lambda cfg,now:events)
+            gateway.ingest.side_effect=None;c.sync(self.config,gateway,j,lambda cfg,now:events)
             self.assertEqual(j.pending_inbox(),[])
             self.assertFalse(any('/claim' in call.args[0] or '/send' in call.args[0] for call in gateway.request.call_args_list));j.db.close()
     def test_claude_argv_is_read_only_and_prompt_on_stdin(self):
@@ -46,6 +46,9 @@ class ConnectorTests(unittest.TestCase):
             self.assertIn('Resolve each distinct author',kwargs['input'])
             kwargs['stdout'].write(json.dumps({'structured_output':self.payload}));return Mock(returncode=0)
         events=c.read_claude(self.config,self.now,runner);self.assertEqual(len(events),1)
+    def test_slack_ts_accepted_as_time(self):
+        event=c.normalize(self.config,dict(self.payload,messages=[dict(self.row,at='1795040000.123456')]),self.now)[0]
+        self.assertTrue(event['message']['at'].startswith('2026-11-18'))
     def test_limit_and_sender_identity(self):
         for value in (0,101,True,'20'):
             with self.assertRaises(ValueError):c.validate_config(dict(self.config,limit=value))
@@ -111,3 +114,49 @@ class RecentQueryTests(unittest.TestCase):
         self.assertEqual(config['query'], 'in:#eng after:2026-10-20')
         self.assertEqual(c.recent_query({'query': 'mentions:me'}, 1, 0, dt.date(2026, 11, 19))['query'], 'mentions:me after:2026-11-18')
         with self.assertRaises(ValueError): c.recent_query(config, 99, 0, dt.date(2026, 11, 19))
+
+class SlackFileImportTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.folder = Path(self.tmp.name) / 'incoming'
+        self.config = {'provider': 'slack', 'account': 'T123:U456', 'read_tools': ['mcp__s__slack_search_public_and_private', 'mcp__s__slack_read_file'],
+                       'query': 'after:2026-11-18', 'state_dir': 'unused', 'token_file': 'unused', 'files_dir': str(self.folder)}
+        import base64 as b64
+        self.png = b'\x89PNG\r\n\x1a\nbytes'
+        self.response = [{'type': 'text', 'text': 'File ID: F0CKJ12NCUU\nTitle: image.png\nMIME Type: image/png\nSize: 1 KB'},
+                         {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': b64.b64encode(self.png).decode()}}]
+    def event(self, response):
+        return {'hook_event_name': 'PostToolUse', 'tool_name': 'mcp__s__slack_read_file', 'tool_input': {'file_id': 'F0CKJ12NCUU'}, 'tool_response': response}
+    def test_hook_keeps_bytes_and_withholds_them_from_claude(self):
+        out = c.file_hook(self.folder, self.event(self.response))
+        self.assertIn('withheld', out['hookSpecificOutput']['updatedMCPToolOutput'])
+        self.assertNotIn('Yn', json.dumps(out))
+        self.assertEqual((self.folder / 'F0CKJ12NCUU.bin').read_bytes(), self.png)
+        self.assertEqual(json.loads((self.folder / 'F0CKJ12NCUU.json').read_text()), {'name': 'image.png', 'mime': 'image/png'})
+        self.assertEqual(c.saved_files(self.folder), ['F0CKJ12NCUU'])
+        text = [{'type': 'text', 'text': 'File ID: F0TEXT00001\nTitle: notes.txt\nMIME Type: text/plain\n<file_content_ab12>\nhello\n</file_content_ab12>'}]
+        c.file_hook(self.folder, dict(self.event(text), tool_input={'file_id': 'F0TEXT00001'}))
+        self.assertEqual((self.folder / 'F0TEXT00001.bin').read_bytes(), b'hello')
+        self.assertEqual(c.file_hook(self.folder, dict(self.event(self.response), tool_name='mcp__s__slack_read_thread')), {})
+    def test_messages_carry_their_saved_files(self):
+        c.file_hook(self.folder, self.event(self.response))
+        row = {'id': '1795040000.123456', 'conversation_id': 'D789', 'thread_id': '', 'name': 'DM', 'sender': 'Casey', 'sender_id': 'U456',
+               'body': '', 'at': '2026-11-18T12:00:00+00:00', 'outgoing': True, 'url': '', 'files': ['F0CKJ12NCUU']}
+        event = c.normalize(self.config, {'available': True, 'account': 'T123:U456', 'messages': [row]}, dt.datetime(2026, 11, 19, tzinfo=dt.timezone.utc))[0]
+        self.assertEqual(event['files'], [{'path': str(self.folder / 'F0CKJ12NCUU.bin'), 'name': 'image.png', 'staged': True}])
+        for bad in (['not-an-id'], 'F0CKJ12NCUU', ['F0CKJ12NCUU'] * 11):
+            with self.assertRaises(ValueError):
+                c.normalize(self.config, {'available': True, 'account': 'T123:U456', 'messages': [dict(row, files=bad)]}, dt.datetime(2026, 11, 19, tzinfo=dt.timezone.utc))
+    def test_claude_gets_the_file_hook_only_with_the_reader(self):
+        seen = {}
+        def runner(args, **kw):
+            seen['settings'] = json.loads(args[args.index('--settings') + 1]); seen['prompt'] = kw['input']
+            kw['stdout'].write(json.dumps({'structured_output': {'available': True, 'account': 'T123:U456', 'user_id': '', 'workspace': '', 'messages': []}}))
+            return Mock(returncode=0)
+        c.read_claude(self.config, dt.datetime(2026, 11, 19, tzinfo=dt.timezone.utc), runner)
+        hook = seen['settings']['hooks']['PostToolUse'][0]
+        self.assertEqual(hook['matcher'], 'mcp__s__slack_read_file'); self.assertIn('file-hook', hook['hooks'][0]['command'])
+        self.assertIn('withheld', seen['prompt'])
+        no_reader = dict(self.config, read_tools=['mcp__s__slack_search_public_and_private'])
+        c.read_claude(no_reader, dt.datetime(2026, 11, 19, tzinfo=dt.timezone.utc), runner)
+        self.assertEqual(seen['settings'], {'disableAllHooks': True})

@@ -49,6 +49,17 @@ func TestConnectorsUploadIncomingFilesBeforeTheMessage(t *testing.T) {
 	if _, e := s.Ingest(in); e == nil {
 		t.Fatal("nine files accepted")
 	}
+	// A replay may add files to a message first imported without them.
+	in.Message.NativeID = "1700000000002/00000000-0000-4000-8000-000000000002"
+	in.Message.Attachments = nil
+	if _, e := s.Ingest(in); e != nil {
+		t.Fatal(e)
+	}
+	in.Message.Attachments = []Attachment{{ID: a.ID}}
+	in.Message.Body = "changed"
+	if m, e := s.Ingest(in); e != nil || len(m.Attachments) != 1 || m.Body != "" {
+		t.Fatalf("late files: %+v %v", m, e)
+	}
 	// Agents cannot upload as a connector.
 	if e := NewClient(srv.URL, strings.Repeat("a", 64)).Do(ctx, "POST", "/connector/attachments", map[string]any{"name": "x", "data": pngHead}, nil); e == nil {
 		t.Fatal("an agent used the connector upload")

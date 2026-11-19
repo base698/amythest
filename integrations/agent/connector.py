@@ -6,6 +6,7 @@ grants an agent access to the messaging owner's token. Only the Slack watch
 worker claims delivery jobs; sync remains an import operation.
 """
 import argparse
+import base64
 import datetime as dt
 import fcntl
 import hashlib
@@ -13,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import uuid
@@ -30,8 +32,70 @@ SCHEMA = {'type': 'object', 'additionalProperties': False,
           'required': ['account', 'available', 'messages', 'user_id', 'workspace'], 'properties': {
               'account': {'type': 'string'}, 'user_id': {'type': 'string'}, 'workspace': {'type': 'string'}, 'available': {'type': 'boolean'},
               'messages': {'type': 'array', 'maxItems': 100, 'items': {
-                  'type': 'object', 'additionalProperties': False, 'required': list(FIELDS),
-                  'properties': {k: {'type': v} for k, v in FIELDS.items()}}}}}
+                  'type': 'object', 'additionalProperties': False, 'required': list(FIELDS) + ['files'],
+                  'properties': dict({k: {'type': v} for k, v in FIELDS.items()},
+                                     files={'type': 'array', 'maxItems': 10, 'items': {'type': 'string'}})}}}}
+FILE_ID = re.compile(r'F[A-Z0-9]{8,}')
+MAX_FILE = 5 << 20
+
+
+def file_tool(config):
+    """The configured Slack file reader, if any: imports then bring files."""
+    if config.get('provider') != 'slack':
+        return ''
+    return next((t for t in config.get('read_tools', []) if t.endswith('slack_read_file')), '')
+
+
+def saved_files(folder):
+    """File IDs already saved (their .json records stay after delivery)."""
+    if not folder or not Path(folder).is_dir():
+        return []
+    return sorted(p.stem for p in Path(folder).glob('F*.json') if FILE_ID.fullmatch(p.stem))
+
+
+def file_hook(folder, event):
+    """PostToolUse hook for the import: keep a Slack file's bytes for Amy and
+    give Claude a short note instead, so the file never enters the model
+    context. Writes FOLDER/<id>.bin and FOLDER/<id>.json (name, mime)."""
+    if event.get('hook_event_name') != 'PostToolUse' or not str(event.get('tool_name', '')).endswith('slack_read_file'):
+        return {}
+    blocks = event.get('tool_response')
+    if isinstance(blocks, dict):
+        blocks = blocks.get('content', [blocks])
+    meta, data = {}, None
+    for b in blocks if isinstance(blocks, list) else []:
+        if not isinstance(b, dict):
+            continue
+        if b.get('type') == 'text':
+            text = str(b.get('text', ''))
+            for line in text.splitlines()[:12]:
+                key, _, value = line.partition(':')
+                if key.strip() in ('File ID', 'Title', 'MIME Type'):
+                    meta.setdefault(key.strip(), value.strip())
+            m = re.search(r'<file_content_[0-9a-f]+>\n?(.*?)\n?</file_content_[0-9a-f]+>', text, re.S)
+            if m and data is None:
+                data = m.group(1).encode()
+        source = b.get('source') if isinstance(b.get('source'), dict) else b
+        if source.get('type') == 'base64' or 'data' in source or 'blob' in source:
+            raw = source.get('data') or source.get('blob')
+            if isinstance(raw, str) and data is None:
+                try:
+                    data = base64.b64decode(raw, validate=True)
+                except ValueError:
+                    data = None
+            meta.setdefault('MIME Type', source.get('media_type') or source.get('mimeType') or '')
+    ident = meta.get('File ID') or str((event.get('tool_input') or {}).get('file_id', ''))
+    note = 'This file was saved for Amy; its content is withheld from you. Do not describe it.'
+    if FILE_ID.fullmatch(ident) and data and len(data) <= MAX_FILE:
+        folder = Path(folder)
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        name = Path(meta.get('Title') or ident).name
+        name = ''.join(ch for ch in name if ch.isprintable())[:200] or ident
+        (folder / (ident + '.bin')).write_bytes(data)
+        (folder / (ident + '.json')).write_text(json.dumps({'name': name, 'mime': meta.get('MIME Type', '')}))
+    else:
+        note = 'This file could not be saved for Amy (too large or unreadable). Do not describe it.'
+    return {'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'updatedMCPToolOutput': note}}
 
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
@@ -99,16 +163,29 @@ def read_claude(config, now, runner=subprocess.run):
               f'Current UTC: {now.isoformat()}. Account: {config["account"]}. '
               f'Provider: {config["provider"]}. Query: {config["query"]}. '
               f'Expected profile: user {config.get("slack_user","")}, workspace {config.get("workspace","")}.')
-    return normalize(config, ask_claude(config, prompt, SCHEMA, config['read_tools'], runner), now)
+    tool, folder = file_tool(config), config.get('files_dir', '')
+    settings = None
+    if tool and folder:
+        have = saved_files(folder)
+        prompt += (' For each message, list the Slack file IDs attached to it in files (an empty list if none). '
+                   'For each listed file of at most 5 MB whose ID is not in this list of files already saved: '
+                   + json.dumps(have[-500:]) + ', call ' + tool + ' once. Its content is saved for Amy and withheld '
+                   'from you; that is expected. Never describe or transcribe file content.')
+        hook = {'type': 'command', 'command': shlex.join([sys.executable, str(Path(__file__).resolve()), 'file-hook', str(folder)]),
+                'timeout': 60, 'onFailure': 'block'}
+        settings = {'disableAllHooks': False, 'hooks': {'PostToolUse': [{'matcher': re.escape(tool), 'hooks': [hook]}]}}
+    else:
+        prompt += ' Return files as an empty list for every message.'
+    return normalize(config, ask_claude(config, prompt, SCHEMA, config['read_tools'], runner, settings), now)
 
-def ask_claude(config, prompt, schema, tools, runner=subprocess.run):
+def ask_claude(config, prompt, schema, tools, runner=subprocess.run, settings=None):
     """Run Claude read-only with exactly these tools and return its structured output."""
     args = ['claude', '-p', '--output-format', 'json', '--json-schema', json.dumps(schema),
             '--no-session-persistence', '--permission-mode', 'dontAsk', '--permission-prompts', 'none',
             '--tools', 'ToolSearch', '--allowedTools', ','.join(['ToolSearch']+tools),
             '--disallowedTools', 'Bash,Edit,Write,NotebookEdit,Agent,Task']
     # No permission bypass, hooks, arbitrary shell, or provider credentials in prompts.
-    args += ['--settings', json.dumps({'disableAllHooks': True})]
+    args += ['--settings', json.dumps(settings or {'disableAllHooks': True})]
     with subprocess_output() as files:
         result = runner(args, input=prompt, text=True, stdout=files[0], stderr=files[1],
                         timeout=240, check=False, cwd=expand(config.get('cwd', '~')))
@@ -145,11 +222,18 @@ def normalize(config, payload, now):
         raise ValueError('Invalid bounded import')
     result = []
     for row in records:
-        if set(row) != set(FIELDS) or any(type(row[k]) is not (bool if v == 'boolean' else str) for k, v in FIELDS.items()):
+        file_ids = row.get('files', [])
+        if set(row) - {'files'} != set(FIELDS) or any(type(row[k]) is not (bool if v == 'boolean' else str) for k, v in FIELDS.items()):
             raise ValueError('Invalid message fields')
+        if not isinstance(file_ids, list) or len(file_ids) > 10 or any(not isinstance(f, str) or not FILE_ID.fullmatch(f) for f in file_ids):
+            raise ValueError('Invalid Slack file IDs')
         if not row['id'] or not row['conversation_id'] or len(row['body'].encode()) > 20000 or len(row['sender'].encode()) > 200 or len(row['name'].encode()) > 300:
             raise ValueError('Invalid message identity or size')
-        at = dt.datetime.fromisoformat(row['at'].replace('Z', '+00:00'))
+        if re.fullmatch(r'\d{10,}(\.\d+)?', row['at']):
+            # A Slack ts in place of a date: it is the same instant.
+            at = dt.datetime.fromtimestamp(float(row['at']), dt.timezone.utc)
+        else:
+            at = dt.datetime.fromisoformat(row['at'].replace('Z', '+00:00'))
         if at.tzinfo is None or at > now + dt.timedelta(minutes=5):
             raise ValueError('Invalid provider timestamp')
         from urllib.parse import urlparse
@@ -173,11 +257,22 @@ def normalize(config, payload, now):
                 raise ValueError('Outlook thread must be empty')
             chat, native = digest(chat), digest(native)
             cid = 'outlook/' + digest(account + '\0' + chat)
-        result.append({'conversation': {'id': cid, 'service': 'Slack' if provider == 'slack' else 'Outlook',
+        files = []
+        folder = Path(config.get('files_dir') or '/nonexistent')
+        for f in file_ids if provider == 'slack' else []:
+            try:
+                info = json.loads((folder / (f + '.json')).read_text())
+            except (OSError, ValueError):
+                info = {}
+            files.append({'path': str(folder / (f + '.bin')), 'name': str(info.get('name') or f), 'staged': True})
+        event = {'conversation': {'id': cid, 'service': 'Slack' if provider == 'slack' else 'Outlook',
                       'account': account, 'name': row['name'], 'recipient': chat, 'thread': thread,
                       'demo': False, 'route': {'provider': provider, 'account': account, 'chat': chat, 'thread': thread}},
                       'message': {'native_id': native, 'sender': row['sender'], 'sender_id': row['sender_id'], 'body': row['body'],
-                                  'at': at.isoformat(), 'outgoing': row['outgoing'], 'source_url': row['url']}})
+                                  'at': at.isoformat(), 'outgoing': row['outgoing'], 'source_url': row['url']}}
+        if files:
+            event['files'] = files
+        result.append(event)
     return result
 
 CHANNEL_FIELDS = {'id': 'string', 'name': 'string', 'type': 'string'}
@@ -279,13 +374,24 @@ def sync(config, gateway, journal, fetch=read_claude):
     for event in events:
         journal.spool(event)
     for key, event in journal.pending_inbox():
-        gateway.request('/connector/ingest', event)
+        gateway.ingest(event)
         journal.acknowledge(key)
     return len(events)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--settings', default=os.environ.get('AMYTHEST_MESSAGES_CONFIG', '~/.config/amythest/messages.json'))
+    if sys.argv[1:2] == ['file-hook']:
+        if len(sys.argv) != 3:
+            raise ValueError('usage: connector.py file-hook FOLDER')
+        try:
+            out = file_hook(sys.argv[2], json.load(sys.stdin))
+        except Exception:
+            # Whatever went wrong, the file's content must not reach Claude.
+            out = {'hookSpecificOutput': {'hookEventName': 'PostToolUse',
+                   'updatedMCPToolOutput': 'This file could not be saved for Amy. Do not describe it.'}}
+        print(json.dumps(out))
+        return
     parser.add_argument('command', choices=('doctor', 'sync', 'channels', 'send-doctor', 'watch'))
     parser.add_argument('--name', required=True)
     parser.add_argument('--bind', action='store_true', help='send-doctor: save the observed current-profile binding privately')
@@ -359,6 +465,7 @@ def main():
             return
         journal = Journal(state / 'journal.db')
         gateway = Gateway(config.get('gateway', settings.get('client', {}).get('url', 'http://127.0.0.1:8642')), expand(config['token_file']))
+        config = dict(config, files_dir=str(state / 'incoming'))
         try:
             count = sync(config, gateway, journal)
         finally:
