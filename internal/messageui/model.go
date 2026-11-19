@@ -577,10 +577,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "pgup":
 			m.scroll = max(0, m.scroll-m.h/2)
 		case "r":
-			if it := m.current(); m.target == nil && it != nil && it.Conversation.Service == "Slack" && !it.Conversation.Demo {
-				m.status = "Slack imports are read-only · m opens a person in Slack · o opens the message"
-				return m, nil
-			}
 			if m.target != nil {
 				m.mode = "compose"
 				m.input.Focus()
@@ -755,7 +751,7 @@ func (m *Model) View() string {
 	}
 	help := "r reply · l link note/task · C contact · / find · f service · Tab all · x trash · T view trash · D drafts · q close"
 	if it := m.current(); it != nil && it.Conversation.Service == "Slack" && !it.Conversation.Demo {
-		help = "m people in Slack · o open message · l link note/task · / find · f service · Tab all · x trash · q close"
+		help = "r reply · m people in Slack · o open message · l link note/task · / find · f service · Tab all · D drafts · q close"
 	}
 	if m.mode == "people" {
 		help = "Type to find · ↑↓ choose · Enter open in Slack · Esc back"
@@ -896,6 +892,13 @@ func (m *Model) composeLines(w int) []string {
 	}
 	out := []string{accent.Bold(true).Render(cut(title, w)), ""}
 	out = append(out, wrap("To: "+messages.Destination(it.Conversation), w)...)
+	if it.Conversation.Service == "Slack" && !it.Conversation.Demo {
+		where := "Posts to this channel or DM."
+		if it.Conversation.Thread != "" {
+			where = "Posts in this Slack thread."
+		}
+		out = append(out, wrap(where+" Text only; the queued message waits if its worker is offline.", w)...)
+	}
 	if it.Conversation.Route.Provider == "imessage" {
 		out = append(out, wrap("Conversation reply; inline quotes are unavailable. Delivery is confirmed in Messages on your Mac.", w)...)
 	}

@@ -40,13 +40,13 @@ func TestSlackPeopleSearchPinsPersonAndOpensOnlyOnEnter(t *testing.T) {
 	}
 }
 
-func TestSlackReplyExplainsReadOnlyAndSourceRejectsUnsafeURL(t *testing.T) {
+func TestSlackReplyPinsThreadAndSourceRejectsUnsafeURL(t *testing.T) {
 	m, _, _ := harness(t)
-	m.items = []messages.Item{{Conversation: messages.Conversation{Service: "Slack"}}}
+	m.items = []messages.Item{{Conversation: messages.Conversation{ID: "slack", Service: "Slack", Route: messages.Route{Provider: "slack", Chat: "C123", Thread: "1795100000.123456"}}, Message: messages.Message{ID: "parent", Conversation: "slack"}}}
 	m.cursor = 0
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
-	if m.mode == "compose" || !strings.Contains(m.status, "read-only") {
-		t.Fatal("offered unsupported Slack send")
+	if m.mode != "compose" || m.target == nil || m.target.Message.ID != "parent" || m.target.Conversation.Route.Thread != "1795100000.123456" {
+		t.Fatal("Slack composer lost the selected destination")
 	}
 	if cmd := m.openSource("file:///etc/passwd"); cmd != nil {
 		t.Fatal("opened non-web source")

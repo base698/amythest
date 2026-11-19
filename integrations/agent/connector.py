@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Read-only Slack/Outlook ingestion through explicitly configured Claude tools.
+"""Slack/Outlook ingestion and explicitly queued Slack delivery via Claude tools.
 
 This runs on the machine with the owner's existing Claude connections. It never
-claims delivery jobs or grants an agent access to the messaging owner's token.
+grants an agent access to the messaging owner's token. Only the Slack watch
+worker claims delivery jobs; sync remains an import operation.
 """
 import argparse
 import datetime as dt
@@ -46,8 +47,11 @@ def validate_config(config):
         raise ValueError('provider must be slack or outlook')
     if config.get('transport', 'agent') != 'agent':
         raise ValueError('Use transport: agent here; direct Outlook accounts use amy-mail')
+    if type(config.get('send', False)) is not bool:
+        raise ValueError('send must be a boolean')
     if config.get('send', False):
-        raise ValueError('Claude imports are read-only; send must be false')
+        import slack_worker
+        slack_worker.validate(config)
     account = config.get('account', '')
     if config['provider'] == 'slack':
         valid = re.fullmatch(r'T[A-Z0-9]+:U[A-Z0-9]+', account)
@@ -184,7 +188,7 @@ def sync(config, gateway, journal, fetch=read_claude):
     journal.bind_account(config['provider'] + '/' + config['account'])
     gateway.request('/connector/heartbeat', {'provider': config['provider'], 'account': config['account'],
                     'worker': str(uuid.uuid4()), 'transport': config.get('transport','agent'), 'chats': config.get('channels', []),
-                    'all_chats': not bool(config.get('channels')), 'send': False})
+                    'all_chats': not bool(config.get('channels')), 'send': config.get('send', False)})
     for event in events:
         journal.spool(event)
     for key, event in journal.pending_inbox():
@@ -195,8 +199,9 @@ def sync(config, gateway, journal, fetch=read_claude):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--settings', default=os.environ.get('AMYTHEST_MESSAGES_CONFIG', '~/.config/amythest/messages.json'))
-    parser.add_argument('command', choices=('doctor', 'sync'))
+    parser.add_argument('command', choices=('doctor', 'sync', 'send-doctor', 'watch'))
     parser.add_argument('--name', required=True)
+    parser.add_argument('--bind', action='store_true', help='send-doctor: save the observed current-profile binding privately')
     args = parser.parse_args()
     settings = json.loads(Path(expand(args.settings)).read_text())
     accounts = settings.get('connectors', {}).get('agent', {}).get('accounts', [])
@@ -204,12 +209,14 @@ def main():
     if len(matches) != 1:
         raise ValueError('Choose one configured agent account with --name')
     config = matches[0]
+    if args.bind and args.command != 'send-doctor':
+        raise ValueError('--bind is only for send-doctor')
     validate_config(config)
     import shutil
     if not shutil.which('claude'):
         raise ValueError('Claude CLI is not installed on this machine')
     if args.command == 'doctor':
-        print('Transport: '+config.get('transport','agent')+' (Claude); read-only; tool scope configured.')
+        print('Transport: '+config.get('transport','agent')+' (Claude); '+('queued Slack sends enabled' if config.get('send') else 'read-only')+'; tool scope configured.')
         print('Run sync to verify account identity and connector availability; no messages are sent.')
         return
     state = Path(expand(config['state_dir']));state.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -217,6 +224,21 @@ def main():
     # One lock for all agent accounts prevents simultaneous Claude startup races.
     shared = Path(expand(settings.get('connectors', {}).get('agent', {}).get('lock_file', '~/.cache/amythest/claude-import.lock')))
     shared.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if args.command == 'watch':
+        import slack_worker
+        if not config.get('send'):
+            raise ValueError('Enable send after binding the Slack profile with send-doctor --bind')
+        with (state / 'worker.lock').open('a') as worker_lock:
+            try: fcntl.flock(worker_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError: raise RuntimeError('A Slack delivery worker already owns this account') from None
+            os.umask(0o077)
+            journal = Journal(state / 'journal.db')
+            gateway_url = config.get('gateway', settings.get('client', {}).get('url', 'http://127.0.0.1:8642'))
+            gateway = Gateway(gateway_url, expand(config['token_file']))
+            sender = slack_worker.ClaudeSender(config, gateway_url)
+            try: slack_worker.Worker(config, gateway, journal, sender).watch(shared)
+            finally: journal.db.close()
+        return
     fd = os.open(shared, os.O_RDWR | os.O_CREAT, 0o600)
     with os.fdopen(fd, 'w') as lock:
         try:
@@ -224,6 +246,19 @@ def main():
         except BlockingIOError:
             raise RuntimeError('Another Claude import is running; retry after it finishes') from None
         os.umask(0o077)
+        if args.command == 'send-doctor':
+            import slack_worker
+            gateway_url = config.get('gateway', settings.get('client', {}).get('url', 'http://127.0.0.1:8642'))
+            observed = slack_worker.ClaudeSender(config, gateway_url).invoke()
+            if args.bind:
+                config['send_profile'] = observed
+                slack_worker.private_json(Path(expand(args.settings)), settings)
+                print('Current Slack profile bound privately. No message sent. Enable send, then run watch.')
+            elif observed != config.get('send_profile'):
+                raise ValueError('The current Slack profile differs from its binding; review sign-in before rebinding')
+            else:
+                print('Slack profile and delivery hooks verified. No message sent.')
+            return
         journal = Journal(state / 'journal.db')
         gateway = Gateway(config.get('gateway', settings.get('client', {}).get('url', 'http://127.0.0.1:8642')), expand(config['token_file']))
         try:

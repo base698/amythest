@@ -1,11 +1,14 @@
 # Slack and Outlook through Claude connections
 
 `amy-agent-messages` imports messages through existing, authorized Claude Code
-connections on the machine where those connections are available. This is the
-read-only agent transport from the messaging-connector plan. Direct Gmail and
+connections on the machine where those connections are available. Its Slack
+worker also delivers explicitly queued text replies. Direct Gmail and
 Outlook accounts continue to use [amy-mail](mail.md). Direct MCP transport,
-automatic transport selection, native Slack API access and Slack sending are
+automatic transport selection and native Slack API access are
 not implemented by this bridge.
+
+See the [messaging architecture](messaging-architecture.md), including a PNG and
+editable canvas source.
 
 Install on the machine with Claude:
 
@@ -72,9 +75,9 @@ execution for that import, limits the permitted tools to explicit read tools,
 checks account/channel scope and validates the entire response before import.
 Unavailable connectors and wrong accounts fail without inventing messages.
 Messages are durably spooled before ingest; failed ingest is replayable. The
-bridge never claims outbound deliveries, sends messages, changes read state,
+import command never claims outbound deliveries, sends messages, changes read state,
 modifies labels, or trashes source messages. Slack timestamps remain strings.
-`amy messages connectors` shows `transport: agent` and `send: false`.
+`amy messages connectors` shows `transport: agent` and the configured send flag.
 
 In Messages, **f** filters a service while preserving Focus/All. Slack and Outlook
 use the same **l** note/task attachment and **C** contact-name actions as other
@@ -86,8 +89,70 @@ without replacing their content or reopening handled messages. **m** searches th
 people in the current conversation and opens the chosen person in Slack. When a
 team ID is known this opens a DM; otherwise it opens their profile in the source
 workspace, where **Message** starts a DM. **o** opens the original message.
-These shortcuts do not send anything, and sending from Amy remains unsupported
-for the agent transport.
+These shortcuts do not send anything.
+
+## Queued Slack replies
+
+Run the worker on the machine with the authenticated Slack connection in Claude
+Code. That can be a Mac or a Linux node; it does not need to be the machine running
+the Amy UI or gateway. Claude Code **2.1.295 or newer** is required for fail-closed
+hooks. The connected Slack tool must support `slack_send_message`; do not replace
+it with an upload or other side-effecting tool.
+
+Add the exact `send_tool` and `profile_tool` names to the private Slack account:
+
+```json
+{
+  "send_tool": "mcp__your_slack_server__slack_send_message",
+  "profile_tool": "mcp__your_slack_server__slack_read_user_profile"
+}
+```
+
+With `send` still false, run the read-only binding check:
+
+```sh
+amy-agent-messages send-doctor --name work-slack --bind
+```
+
+This saves a fingerprint of the connected profile in the private settings file.
+After checking that Claude is signed into the intended workspace, set `send: true`.
+Run `send-doctor` without `--bind` to verify an existing binding. A changed
+identity requires reviewing the connection and explicitly rebinding; the worker
+never silently switches accounts.
+
+```sh
+amy-agent-messages watch --name work-slack
+# Or install a login service (macOS LaunchAgent / Linux user systemd):
+python3 scripts/install-agent-worker.py --name work-slack
+```
+
+The installer starts the worker and prints its service path. Settings, connection
+identity, token, logs and generated service stay outside Git. On Linux, a user
+service normally follows the login session; configure lingering separately if it
+must run after logout. The gateway or its private tunnel must remain reachable.
+The worker polls the gateway without invoking Claude while idle; it invokes
+Claude only for a claimed send. Imports still run separately with `sync`.
+
+In an imported Slack conversation, **r** composes a reply and **Ctrl+S** submits
+it. The composer shows whether it posts in a channel/DM or an existing thread.
+The current limit is text only, up to 5,000 characters. **D** shows delivery
+status. Starting a conversation with a new recipient is not implemented; **m**
+can open a person's Slack profile/DM in Slack itself.
+
+An explicitly submitted reply queues even while a previously registered,
+send-enabled worker is offline. Disabled, unregistered or out-of-scope accounts
+keep the reply as a draft. Returning workers recheck permissions before claiming
+and immediately before sending. Agent sends still require an owner-issued grant.
+The queued destination, body and thread cannot be changed by the model. A command
+hook checks the bound profile and exact arguments and permits one send call;
+other mutations are blocked. The worker uses the provider tool's native receipt,
+never the model's claim that it sent something. Ambiguous sends become
+**uncertain**, and are never automatically retried. A durable local journal
+replays completion receipts after a gateway disconnect without repeating sends.
+
+Hook behavior is documented in [Claude Code hooks](https://code.claude.com/docs/en/hooks).
+The `onFailure: block` setting is required: a hook timeout or crash must prevent
+the send rather than allow it through.
 
 ## Outlook through Claude in Chrome
 

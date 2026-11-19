@@ -1,0 +1,639 @@
+{
+  "upsert": [
+    {
+      "id": "title",
+      "type": "text",
+      "x": 60,
+      "y": 30,
+      "width": 1620,
+      "height": 54.6,
+      "text": "Amy messaging: where sending happens",
+      "originalText": "Amy messaging: where sending happens",
+      "fontSize": 42,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#183249",
+      "roughness": 0
+    },
+    {
+      "id": "subtitle",
+      "type": "text",
+      "x": 60,
+      "y": 91,
+      "width": 1620,
+      "height": 29.900000000000002,
+      "text": "One private queue, with provider workers on the machines that hold the connections",
+      "originalText": "One private queue, with provider workers on the machines that hold the connections",
+      "fontSize": 23,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#506475",
+      "roughness": 0
+    },
+    {
+      "id": "client",
+      "type": "rectangle",
+      "x": 60,
+      "y": 160,
+      "width": 300,
+      "height": 190,
+      "backgroundColor": "#f0f5fa",
+      "strokeColor": "#245fa8",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "client-title",
+      "type": "text",
+      "x": 82,
+      "y": 180,
+      "width": 256,
+      "height": 32.5,
+      "text": "1  Amy client",
+      "originalText": "1  Amy client",
+      "fontSize": 25,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#245fa8",
+      "roughness": 0
+    },
+    {
+      "id": "client-body",
+      "type": "text",
+      "x": 82,
+      "y": 225,
+      "width": 256,
+      "height": 81.9,
+      "text": "Any client machine\nCompose + explicit Send\nOr a scoped agent API",
+      "originalText": "Any client machine\nCompose + explicit Send\nOr a scoped agent API",
+      "fontSize": 21,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#183249",
+      "roughness": 0
+    },
+    {
+      "id": "gateway",
+      "type": "rectangle",
+      "x": 440,
+      "y": 160,
+      "width": 420,
+      "height": 190,
+      "backgroundColor": "#f0f5fa",
+      "strokeColor": "#245fa8",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "gateway-title",
+      "type": "text",
+      "x": 462,
+      "y": 180,
+      "width": 376,
+      "height": 32.5,
+      "text": "2  Central gateway",
+      "originalText": "2  Central gateway",
+      "fontSize": 25,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#245fa8",
+      "roughness": 0
+    },
+    {
+      "id": "gateway-body",
+      "type": "text",
+      "x": 462,
+      "y": 225,
+      "width": 376,
+      "height": 81.9,
+      "text": "Authorization + pinned destination\nPersistent draft / delivery queue\nInbox and status live here",
+      "originalText": "Authorization + pinned destination\nPersistent draft / delivery queue\nInbox and status live here",
+      "fontSize": 21,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#183249",
+      "roughness": 0
+    },
+    {
+      "id": "worker",
+      "type": "rectangle",
+      "x": 940,
+      "y": 160,
+      "width": 380,
+      "height": 190,
+      "backgroundColor": "#f0f5fa",
+      "strokeColor": "#245fa8",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "worker-title",
+      "type": "text",
+      "x": 962,
+      "y": 180,
+      "width": 336,
+      "height": 32.5,
+      "text": "3  Provider worker",
+      "originalText": "3  Provider worker",
+      "fontSize": 25,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#245fa8",
+      "roughness": 0
+    },
+    {
+      "id": "worker-body",
+      "type": "text",
+      "x": 962,
+      "y": 225,
+      "width": 336,
+      "height": 81.9,
+      "text": "Claims a queued delivery\nUses local provider credentials\nCalls the messaging service",
+      "originalText": "Claims a queued delivery\nUses local provider credentials\nCalls the messaging service",
+      "fontSize": 21,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#183249",
+      "roughness": 0
+    },
+    {
+      "id": "provider",
+      "type": "rectangle",
+      "x": 1400,
+      "y": 160,
+      "width": 280,
+      "height": 190,
+      "backgroundColor": "#f0f5fa",
+      "strokeColor": "#245fa8",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "provider-title",
+      "type": "text",
+      "x": 1422,
+      "y": 180,
+      "width": 236,
+      "height": 32.5,
+      "text": "4  Provider",
+      "originalText": "4  Provider",
+      "fontSize": 25,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#245fa8",
+      "roughness": 0
+    },
+    {
+      "id": "provider-body",
+      "type": "text",
+      "x": 1422,
+      "y": 225,
+      "width": 236,
+      "height": 81.9,
+      "text": "Signal / Telegram / Slack\nApple Messages\nOr a mail API",
+      "originalText": "Signal / Telegram / Slack\nApple Messages\nOr a mail API",
+      "fontSize": 21,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#183249",
+      "roughness": 0
+    },
+    {
+      "id": "request",
+      "type": "arrow",
+      "x": 366,
+      "y": 246,
+      "width": 67,
+      "height": 0,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          67,
+          0
+        ]
+      ],
+      "strokeColor": "#245fa8",
+      "strokeWidth": 3,
+      "roughness": 0,
+      "endArrowhead": "arrow",
+      "startArrowhead": null
+    },
+    {
+      "id": "job",
+      "type": "arrow",
+      "x": 866,
+      "y": 246,
+      "width": 67,
+      "height": 0,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          67,
+          0
+        ]
+      ],
+      "strokeColor": "#245fa8",
+      "strokeWidth": 3,
+      "roughness": 0,
+      "endArrowhead": "arrow",
+      "startArrowhead": null
+    },
+    {
+      "id": "provider-call",
+      "type": "arrow",
+      "x": 1326,
+      "y": 246,
+      "width": 67,
+      "height": 0,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          67,
+          0
+        ]
+      ],
+      "strokeColor": "#245fa8",
+      "strokeWidth": 3,
+      "roughness": 0,
+      "endArrowhead": "arrow",
+      "startArrowhead": null
+    },
+    {
+      "id": "receipt",
+      "type": "arrow",
+      "x": 1130,
+      "y": 358,
+      "width": 480,
+      "height": 57,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          57
+        ],
+        [
+          -480,
+          57
+        ],
+        [
+          -480,
+          0
+        ]
+      ],
+      "strokeColor": "#15765c",
+      "strokeWidth": 3,
+      "roughness": 0,
+      "endArrowhead": "arrow",
+      "startArrowhead": null
+    },
+    {
+      "id": "receipt-label",
+      "type": "text",
+      "x": 703,
+      "y": 376,
+      "width": 400,
+      "height": 24.7,
+      "text": "Result / receipt updates the client",
+      "originalText": "Result / receipt updates the client",
+      "fontSize": 19,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#15765c",
+      "roughness": 0
+    },
+    {
+      "id": "worker-caption",
+      "type": "text",
+      "x": 60,
+      "y": 380,
+      "width": 495,
+      "height": 26.0,
+      "text": "The client can close after a job is queued.",
+      "originalText": "The client can close after a job is queued.",
+      "fontSize": 20,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#506475",
+      "roughness": 0
+    },
+    {
+      "id": "remote",
+      "type": "rectangle",
+      "x": 60,
+      "y": 465,
+      "width": 500,
+      "height": 220,
+      "backgroundColor": "#edf8f3",
+      "strokeColor": "#15765c",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "remote-title",
+      "type": "text",
+      "x": 82,
+      "y": 485,
+      "width": 456,
+      "height": 32.5,
+      "text": "WORKERS  |  Remote Linux node",
+      "originalText": "WORKERS  |  Remote Linux node",
+      "fontSize": 25,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#15765c",
+      "roughness": 0
+    },
+    {
+      "id": "remote-body",
+      "type": "text",
+      "x": 82,
+      "y": 530,
+      "width": 456,
+      "height": 109.2,
+      "text": "Signal worker -> signal-cli linked device\nTelegram worker -> Telegram API\nWorkers can run on a remote node.\nThe Mac is not needed for these sends.",
+      "originalText": "Signal worker -> signal-cli linked device\nTelegram worker -> Telegram API\nWorkers can run on a remote node.\nThe Mac is not needed for these sends.",
+      "fontSize": 21,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#183249",
+      "roughness": 0
+    },
+    {
+      "id": "mac",
+      "type": "rectangle",
+      "x": 620,
+      "y": 465,
+      "width": 500,
+      "height": 220,
+      "backgroundColor": "#edf3fc",
+      "strokeColor": "#245fa8",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "mac-title",
+      "type": "text",
+      "x": 642,
+      "y": 485,
+      "width": 456,
+      "height": 32.5,
+      "text": "WORKER  |  Mac",
+      "originalText": "WORKER  |  Mac",
+      "fontSize": 25,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#245fa8",
+      "roughness": 0
+    },
+    {
+      "id": "mac-body",
+      "type": "text",
+      "x": 642,
+      "y": 530,
+      "width": 456,
+      "height": 109.2,
+      "text": "iMessage / SMS / RCS -> imsg\nThen Messages.app on the Mac\nThe Mac and its feeder must be available.\nApple handoff is not a delivery receipt.",
+      "originalText": "iMessage / SMS / RCS -> imsg\nThen Messages.app on the Mac\nThe Mac and its feeder must be available.\nApple handoff is not a delivery receipt.",
+      "fontSize": 21,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#183249",
+      "roughness": 0
+    },
+    {
+      "id": "slack",
+      "type": "rectangle",
+      "x": 1180,
+      "y": 465,
+      "width": 500,
+      "height": 220,
+      "backgroundColor": "#edf8f5",
+      "strokeColor": "#127e68",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "slack-title",
+      "type": "text",
+      "x": 1202,
+      "y": 485,
+      "width": 456,
+      "height": 32.5,
+      "text": "WORKER  |  Claude + Slack",
+      "originalText": "WORKER  |  Claude + Slack",
+      "fontSize": 25,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#127e68",
+      "roughness": 0
+    },
+    {
+      "id": "slack-body",
+      "type": "text",
+      "x": 1202,
+      "y": 530,
+      "width": 456,
+      "height": 109.2,
+      "text": "Runs where Claude is signed into Slack.\nClaim job -> guarded send -> receipt\nExact text, recipient and thread checked.\nOne attempt; ambiguous sends stay put.",
+      "originalText": "Runs where Claude is signed into Slack.\nClaim job -> guarded send -> receipt\nExact text, recipient and thread checked.\nOne attempt; ambiguous sends stay put.",
+      "fontSize": 21,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#183249",
+      "roughness": 0
+    },
+    {
+      "id": "new-recipient",
+      "type": "rectangle",
+      "x": 60,
+      "y": 755,
+      "width": 790,
+      "height": 225,
+      "backgroundColor": "#fff7e8",
+      "strokeColor": "#a36310",
+      "strokeWidth": 2,
+      "strokeStyle": "dashed",
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "new-recipient-title",
+      "type": "text",
+      "x": 82,
+      "y": 775,
+      "width": 746,
+      "height": 32.5,
+      "text": "MISSING TODAY  |  New number / new person",
+      "originalText": "MISSING TODAY  |  New number / new person",
+      "fontSize": 25,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#a36310",
+      "roughness": 0
+    },
+    {
+      "id": "new-recipient-body",
+      "type": "text",
+      "x": 82,
+      "y": 820,
+      "width": 746,
+      "height": 109.2,
+      "text": "Amy currently requires an imported message to reply to.\nNeeded: choose service + account + recipient, resolve the\nprovider ID, confirm the destination, then queue a new draft.\nReply-to becomes optional. The same workers deliver it.",
+      "originalText": "Amy currently requires an imported message to reply to.\nNeeded: choose service + account + recipient, resolve the\nprovider ID, confirm the destination, then queue a new draft.\nReply-to becomes optional. The same workers deliver it.",
+      "fontSize": 21,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#183249",
+      "roughness": 0
+    },
+    {
+      "id": "offline",
+      "type": "rectangle",
+      "x": 890,
+      "y": 755,
+      "width": 790,
+      "height": 225,
+      "backgroundColor": "#f3f6f9",
+      "strokeColor": "#506475",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "offline-title",
+      "type": "text",
+      "x": 912,
+      "y": 775,
+      "width": 746,
+      "height": 32.5,
+      "text": "What must stay online?",
+      "originalText": "What must stay online?",
+      "fontSize": 25,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#506475",
+      "roughness": 0
+    },
+    {
+      "id": "offline-body",
+      "type": "text",
+      "x": 912,
+      "y": 820,
+      "width": 746,
+      "height": 109.2,
+      "text": "Configured worker offline? Explicit Send waits in the queue.\nDelivery needs the gateway, worker and provider access.\nDisabled or unconfigured send paths keep a draft.\nUncertain sends are never automatically repeated.",
+      "originalText": "Configured worker offline? Explicit Send waits in the queue.\nDelivery needs the gateway, worker and provider access.\nDisabled or unconfigured send paths keep a draft.\nUncertain sends are never automatically repeated.",
+      "fontSize": 21,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#183249",
+      "roughness": 0
+    },
+    {
+      "id": "imports",
+      "type": "rectangle",
+      "x": 60,
+      "y": 1045,
+      "width": 1620,
+      "height": 155,
+      "backgroundColor": "#f5f1fb",
+      "strokeColor": "#705193",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "imports-title",
+      "type": "text",
+      "x": 82,
+      "y": 1065,
+      "width": 1576,
+      "height": 32.5,
+      "text": "IMPORTS  |  Claude / Chrome bridges",
+      "originalText": "IMPORTS  |  Claude / Chrome bridges",
+      "fontSize": 25,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#705193",
+      "roughness": 0
+    },
+    {
+      "id": "imports-body",
+      "type": "text",
+      "x": 82,
+      "y": 1110,
+      "width": 1576,
+      "height": 54.6,
+      "text": "Slack imports and its send worker use the same inbox. Outlook via Claude or Chrome remains import-only.\nDirect Gmail / Outlook API workers support replies when configured. Imports run separately from delivery.",
+      "originalText": "Slack imports and its send worker use the same inbox. Outlook via Claude or Chrome remains import-only.\nDirect Gmail / Outlook API workers support replies when configured. Imports run separately from delivery.",
+      "fontSize": 21,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#183249",
+      "roughness": 0
+    },
+    {
+      "id": "footer",
+      "type": "text",
+      "x": 60,
+      "y": 1230,
+      "width": 1620,
+      "height": 23.400000000000002,
+      "text": "Updated 19 Nov 2026. Slack text replies are implemented; first-contact composition is still pending.",
+      "originalText": "Updated 19 Nov 2026. Slack text replies are implemented; first-contact composition is still pending.",
+      "fontSize": 18,
+      "fontFamily": 2,
+      "lineHeight": 1.3,
+      "strokeColor": "#506475",
+      "roughness": 0
+    }
+  ]
+}

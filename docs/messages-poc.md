@@ -258,7 +258,7 @@ Telegram connector supplies that route through its own authenticated ingress.
 No provider token, existing Hermes session, or mailbox is automatically reused.
 The [Signal adapter](signal.md) uses the same queue, grants and attachment flow.
 The [local iMessage feeder](imessage.md) sends Mac messages to the central
-gateway. Direct Gmail and Outlook connectors and read-only Claude Slack/Outlook imports
+gateway. Direct Gmail and Outlook connectors, Claude Slack replies and Slack/Outlook imports
 are available. Google Chat adapters remain future work; Discord personal-inbox coverage remains unresolved.
 
 ## Private host deployment

@@ -96,7 +96,7 @@ func (s *Store) Heartbeat(c Connector) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c.Provider = providerName([]string{c.Provider})
-	if (c.Provider == "slack" || browserProvider(c.Provider) || c.Transport == "agent" || c.Transport == "chrome") && c.Send {
+	if (browserProvider(c.Provider) || c.Transport == "chrome" || c.Transport == "agent" && c.Provider != "slack") && c.Send {
 		return fault(400, "Agent imports are read-only")
 	}
 	validAccount := c.Provider == "telegram" && decimal(c.Account, true) || (c.Provider == "signal" || c.Provider == "imessage") && canonicalUUID(c.Account)
@@ -183,6 +183,18 @@ func TelegramConversationID(r Route) string {
 	return "telegram/" + r.Account + "/" + r.Chat + "/" + r.Thread
 }
 func validateLive(d Draft) error {
+	if d.Target.Route.Provider == "slack" {
+		if e := validateNativeConversation(d.Target); e != nil {
+			return e
+		}
+		if len(d.Attachments) != 0 {
+			return fault(400, "Slack currently supports text sends; open Slack for files")
+		}
+		if len([]rune(d.Body)) > 5000 {
+			return fault(400, "Slack text sends are limited to 5000 characters")
+		}
+		return nil
+	}
 	if mailProvider(d.Target.Route.Provider) {
 		if e := validateNativeConversation(d.Target); e != nil {
 			return e
@@ -242,8 +254,8 @@ func (s *Store) queue(tx *sql.Tx, actor string, d Draft) (Draft, error) {
 		return d, e
 	}
 	c, e := getJSON[Connector](tx, "SELECT payload FROM connectors WHERE account=?", connectorKey(d.Target.Route.Provider, d.Target.Route.Account))
-	if e != nil || !c.Send || s.now().Sub(c.Seen) > 30*time.Second || !c.allows(d.Target.Route.Chat) {
-		return d, fault(409, "connector is offline or receive-only; reply remains a draft")
+	if e != nil || !c.Send || !c.allows(d.Target.Route.Chat) {
+		return d, fault(409, "connector is not configured to send to this conversation; reply remains a draft")
 	}
 	d.State = "queued"
 	d.SenderActor = actor
@@ -360,6 +372,9 @@ func (s *Store) Complete(r Receipt) (Draft, error) {
 	if d.Target.Route.Provider == "gmail" {
 		validReceipt = mailID("gmail", r.NativeID)
 	}
+	if d.Target.Route.Provider == "slack" {
+		validReceipt = slackTimestampRE.MatchString(r.NativeID)
+	}
 	if r.State == "sent" && !validReceipt {
 		return d, fault(400, "delivery requires a native message ID")
 	}
@@ -432,8 +447,10 @@ func DeliveryStatus(d Draft) string {
 	switch d.State {
 	case "simulated":
 		return "Reply recorded as simulated. No external message sent."
-	case "queued", "sending":
-		return "Reply queued for " + d.Target.Service + ". Delivery status is in D drafts."
+	case "queued":
+		return "Reply queued for " + d.Target.Service + "; waits for its worker if offline. Status is in D drafts."
+	case "sending":
+		return "Sending through " + d.Target.Service + ". Delivery status is in D drafts."
 	case "submitted":
 		if d.Target.Route.Provider == "outlook" {
 			return "Outlook accepted the reply. Delivery is unconfirmed; check Sent Items."

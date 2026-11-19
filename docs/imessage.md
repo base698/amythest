@@ -85,7 +85,9 @@ checks the configured services. It imports iMessage, SMS and RCS by default. Set
   uncertain attempts are not sent again automatically, and unconfirmed handoff
   does not clear the source's attention state. Press `d` to mark it handled.
 - Replies are available while this Mac's feeder is connected. The central
-  gateway retains the inbox when the Mac is offline; offline replies stay drafts.
+  gateway retains the inbox when the Mac is offline. Explicitly submitted replies
+  wait in its queue if the Mac worker was registered with sending enabled;
+  disabled or unconfigured connectors leave replies as drafts.
 
 Tests cover read-only access, native chat routing, exclusions, file snapshots,
 permission rechecks and idempotent unconfirmed handoff. Automated sends use a

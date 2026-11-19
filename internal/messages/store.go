@@ -125,7 +125,8 @@ func (s *Store) Ingest(in Ingress) (Message, error) {
 			if err != nil {
 				return Message{}, err
 			}
-			if stored.Route != c.Route || (old.SenderID != m.SenderID && !(old.SenderID == "" && old.Sender == m.SenderID)) {
+			legacySender := old.SenderID == "" && (old.Sender == m.SenderID || old.Outgoing && m.Outgoing && old.Sender == "You")
+			if stored.Route != c.Route || (old.SenderID != m.SenderID && !legacySender) {
 				return Message{}, fault(409, "message sender or destination differs from the stored identity")
 			}
 			old.SenderID = m.SenderID

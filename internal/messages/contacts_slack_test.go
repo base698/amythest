@@ -49,7 +49,7 @@ func TestContactNameSurvivesReingestWithoutRedirecting(t *testing.T) {
 		t.Fatal("reset failed")
 	}
 }
-func TestSlackStringIDsScopeReplayAndReadOnly(t *testing.T) {
+func TestSlackStringIDsScopeReplayAndSendOptIn(t *testing.T) {
 	s := testStore(t)
 	r := Route{Provider: "slack", Account: "T123:U456", Chat: "C789", Thread: "1795100000.123456"}
 	c := Connector{Provider: "slack", Account: r.Account, Worker: "worker", Chats: []string{r.Chat}}
@@ -76,8 +76,12 @@ func TestSlackStringIDsScopeReplayAndReadOnly(t *testing.T) {
 		t.Fatal("read-only Slack sent")
 	}
 	c.Send = true
-	if e = s.Heartbeat(c); e == nil {
-		t.Fatal("enabled Slack sends")
+	c.Transport = "agent"
+	if e = s.Heartbeat(c); e != nil {
+		t.Fatal(e)
+	}
+	if d, e = s.Send("owner", d.ID); e != nil || d.State != "queued" {
+		t.Fatal("opted-in Slack send did not queue", e)
 	}
 	in.Message.NativeID = "1795100001123456"
 	if e = s.ValidateIngress(in); e == nil {
