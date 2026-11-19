@@ -28,6 +28,7 @@ type API interface {
 	Do(context.Context, string, string, any, any) error
 }
 type Options struct {
+	Open        func(string) error
 	Notes       *apiclient.Client
 	Trash       bool
 	All         bool
@@ -37,6 +38,9 @@ type Options struct {
 	FocusPane   func() error
 }
 type Model struct {
+	people                    []slackPerson
+	peopleInput               textinput.Model
+	peopleCursor              int
 	link                      linkState
 	query                     string
 	serviceCursor             int
@@ -406,6 +410,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == "link" {
 			return m, m.linkKey(x)
 		}
+		if m.mode == "people" {
+			return m, m.peopleKey(x)
+		}
 		if m.mode == "contact" || m.mode == "search" || m.mode == "service" {
 			return m, m.utilityKey(x)
 		}
@@ -521,6 +528,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch x.String() {
+		case "m":
+			return m, m.startPeople()
+		case "o":
+			if it := m.current(); it != nil {
+				return m, m.openSource(it.Message.SourceURL)
+			}
+			return m, nil
 		case "l":
 			return m, m.startLink()
 		case "C", "/":
@@ -563,6 +577,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "pgup":
 			m.scroll = max(0, m.scroll-m.h/2)
 		case "r":
+			if it := m.current(); m.target == nil && it != nil && it.Conversation.Service == "Slack" && !it.Conversation.Demo {
+				m.status = "Slack imports are read-only · m opens a person in Slack · o opens the message"
+				return m, nil
+			}
 			if m.target != nil {
 				m.mode = "compose"
 				m.input.Focus()
@@ -710,6 +728,8 @@ func (m *Model) View() string {
 	var body string
 	if m.mode == "link" {
 		body = m.linkView(height)
+	} else if m.mode == "people" {
+		body = m.peopleView(height)
 	} else if m.mode == "contact" || m.mode == "search" || m.mode == "service" {
 		body = m.utilityView(height)
 	} else if m.mode == "drafts" || m.mode == "review" {
@@ -734,6 +754,12 @@ func (m *Model) View() string {
 		}
 	}
 	help := "r reply · l link note/task · C contact · / find · f service · Tab all · x trash · T view trash · D drafts · q close"
+	if it := m.current(); it != nil && it.Conversation.Service == "Slack" && !it.Conversation.Demo {
+		help = "m people in Slack · o open message · l link note/task · / find · f service · Tab all · x trash · q close"
+	}
+	if m.mode == "people" {
+		help = "Type to find · ↑↓ choose · Enter open in Slack · Esc back"
+	}
 	if m.trash {
 		help = "↑↓ choose  u restore  T back  p service  q close"
 	}

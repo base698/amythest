@@ -59,8 +59,11 @@ amy-agent-messages sync --name work-slack
 `doctor` validates local configuration and CLI availability; `sync` verifies the
 connected identity and available tools. No background schedule is installed.
 Use a bounded query and repeat with overlapping time ranges: provider message IDs
-deduplicate centrally. Each call imports at most 100 results; this is not an
-exhaustive mailbox export. Data passes through the model, so missing, altered or
+deduplicate centrally. Each call imports up to `limit` results (1–100, default
+100), newest first, following search pagination. Filters come from `query`:
+`mentions:me` only imports mentions, whereas a date or channel filter can include
+ordinary channel traffic. This is not an exhaustive mailbox export. Data passes
+through the model, so missing, altered or
 incomplete model output remains a limitation of the agent route. Source links
 and original IDs are retained for checking against the provider.
 
@@ -76,6 +79,15 @@ modifies labels, or trashes source messages. Slack timestamps remain strings.
 In Messages, **f** filters a service while preserving Focus/All. Slack and Outlook
 use the same **l** note/task attachment and **C** contact-name actions as other
 services. Any live account setup must remain outside Git.
+
+Slack author IDs are stored separately from display names. The import resolves
+names with the configured profile tool; replay enriches older ID-only messages
+without replacing their content or reopening handled messages. **m** searches the
+people in the current conversation and opens the chosen person in Slack. When a
+team ID is known this opens a DM; otherwise it opens their profile in the source
+workspace, where **Message** starts a DM. **o** opens the original message.
+These shortcuts do not send anything, and sending from Amy remains unsupported
+for the agent transport.
 
 ## Outlook through Claude in Chrome
 

@@ -181,6 +181,10 @@ func openURL(url string) error {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return fmt.Errorf("not a web address")
 	}
+	return openDesktopURL(url)
+}
+
+func openDesktopURL(url string) error {
 	name := "xdg-open"
 	if runtime.GOOS == "darwin" {
 		name = "open"

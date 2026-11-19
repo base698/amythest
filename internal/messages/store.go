@@ -105,6 +105,9 @@ func (s *Store) Ingest(in Ingress) (Message, error) {
 	if !validSourceURL(m.SourceURL) {
 		return Message{}, fault(400, "invalid source URL")
 	}
+	if m.SenderID != "" && (c.Route.Provider != "slack" || !slackSenderRE.MatchString(m.SenderID)) {
+		return Message{}, fault(400, "invalid sender ID")
+	}
 	if len(m.Attachments) != 0 {
 		return Message{}, fault(400, "incoming attachments are not supported by the demo ingress")
 	}
@@ -116,6 +119,24 @@ func (s *Store) Ingest(in Ingress) (Message, error) {
 	// A provider ID is only unique within this account/conversation. Replays do not
 	// reopen handled messages or overwrite a previously pinned destination.
 	if old, e := getJSON[Message](tx, "SELECT payload FROM messages WHERE conversation=? AND native_id=?", c.ID, m.NativeID); e == nil {
+		// Profile enrichment must not replace content, attention state or identity.
+		if c.Route.Provider == "slack" && m.SenderID != "" {
+			stored, err := getJSON[Conversation](tx, "SELECT payload FROM conversations WHERE id=?", c.ID)
+			if err != nil {
+				return Message{}, err
+			}
+			if stored.Route != c.Route || (old.SenderID != m.SenderID && !(old.SenderID == "" && old.Sender == m.SenderID)) {
+				return Message{}, fault(409, "message sender or destination differs from the stored identity")
+			}
+			old.SenderID = m.SenderID
+			if !old.Outgoing && m.Sender != "" && m.Sender != m.SenderID {
+				old.Sender = m.Sender
+			}
+			if _, err = tx.Exec("UPDATE messages SET payload=? WHERE id=?", encode(old), old.ID); err != nil {
+				return Message{}, err
+			}
+			return old, tx.Commit()
+		}
 		return old, nil
 	}
 	h := sha256.Sum256([]byte(c.ID))

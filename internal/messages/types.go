@@ -44,6 +44,7 @@ type Message struct {
 	NativeID     string       `json:"native_id"`
 	Conversation string       `json:"conversation"`
 	Sender       string       `json:"sender"`
+	SenderID     string       `json:"sender_id,omitempty"`
 	Body         string       `json:"body"`
 	At           time.Time    `json:"at"`
 	Outgoing     bool         `json:"outgoing"`
@@ -184,6 +185,13 @@ func AccountDisplay(c Conversation) string {
 	return Plain(c.Service + " / " + c.Account)
 }
 func Destination(c Conversation) string {
+	if c.Service == "Slack" {
+		s := "Slack → " + Plain(c.Name)
+		if c.Thread != "" {
+			s += " · thread"
+		}
+		return s
+	}
 	if mailProvider(c.Route.Provider) {
 		return Plain(c.Service + " / " + c.Account + " → " + c.Name)
 	}

@@ -10,20 +10,22 @@ class ConnectorTests(unittest.TestCase):
     def setUp(self):
         self.now=dt.datetime(2026,11,19,tzinfo=dt.timezone.utc)
         self.config={'provider':'slack','account':'T123:U456','read_tools':['mcp__slack__search','mcp__slack__read_thread'], 'query':'in:engineering after:2026-11-18','state_dir':'unused','token_file':'unused','channels':['C789']}
-        self.row={'id':'1795040000.123456','conversation_id':'C789','thread_id':'1795030000.000001','name':'Review','sender':'Morgan','body':'Please review\nverbatim','at':'2026-11-18T12:00:00+00:00','outgoing':False,'url':'https://example.slack.com/archives/C789/p1795040000123456'}
+        self.row={'id':'1795040000.123456','conversation_id':'C789','thread_id':'1795030000.000001','name':'Review','sender':'Morgan','sender_id':'U456','body':'Please review\nverbatim','at':'2026-11-18T12:00:00+00:00','outgoing':False,'url':'https://example.slack.com/archives/C789/p1795040000123456'}
         self.payload={'available':True,'account':'T123:U456','messages':[self.row]}
     def test_config_and_exact_ids(self):
         c.validate_config(self.config)
         event=c.normalize(self.config,self.payload,self.now)[0]
         self.assertEqual(event['message']['native_id'],self.row['id'])
         self.assertEqual(event['message']['body'],self.row['body'])
+        self.assertEqual(event['message']['sender'],'Morgan')
+        self.assertEqual(event['message']['sender_id'],'U456')
         for change in ({'send':True},{'read_tools':['mcp__slack__*']},{'read_tools':['mcp__slack__send_message']},{'account':'display name'}):
             with self.assertRaises(ValueError):c.validate_config(dict(self.config,**change))
     def test_reject_mismatch_and_malformed_batch(self):
         for bad in (dict(self.payload,account='T999:U456'),dict(self.payload,available=False),dict(self.payload,messages=[dict(self.row,id=1795040000.123456)]),dict(self.payload,messages=[dict(self.row,conversation_id='C000')]),dict(self.payload,messages=[dict(self.row,at='tomorrow')])):
             with self.assertRaises((ValueError,TypeError)):c.normalize(self.config,bad,self.now)
     def test_outlook_hash_matches_native_mail(self):
-        cfg=dict(self.config,provider='outlook',account='reader@example.test');row=dict(self.row,id='opaque-message',conversation_id='opaque-conversation',thread_id='')
+        cfg=dict(self.config,provider='outlook',account='reader@example.test');row=dict(self.row,id='opaque-message',conversation_id='opaque-conversation',thread_id='',sender_id='')
         event=c.normalize(cfg,dict(self.payload,account=cfg['account'],messages=[row]),self.now)[0]
         self.assertEqual(event['message']['native_id'],c.digest('opaque-message'))
         self.assertEqual(event['conversation']['id'],'outlook/'+c.digest(cfg['account']+'\0'+c.digest('opaque-conversation')))
@@ -40,8 +42,15 @@ class ConnectorTests(unittest.TestCase):
         def runner(args,**kwargs):
             self.assertIn('--tools',args);self.assertNotIn('--dangerously-skip-permissions',args)
             self.assertNotIn(self.config['query'],args);self.assertIn(self.config['query'],kwargs['input'])
+            self.assertIn('Follow search pagination',kwargs['input'])
+            self.assertIn('Resolve each distinct author',kwargs['input'])
             kwargs['stdout'].write(json.dumps({'structured_output':self.payload}));return Mock(returncode=0)
         events=c.read_claude(self.config,self.now,runner);self.assertEqual(len(events),1)
+    def test_limit_and_sender_identity(self):
+        for value in (0,101,True,'20'):
+            with self.assertRaises(ValueError):c.validate_config(dict(self.config,limit=value))
+        with self.assertRaises(ValueError):c.normalize(dict(self.config,limit=1),dict(self.payload,messages=[self.row,self.row]),self.now)
+        with self.assertRaises(ValueError):c.normalize(self.config,dict(self.payload,messages=[dict(self.row,sender_id='Morgan')]),self.now)
 if __name__=='__main__':unittest.main()
 
 class ProfileScopeTests(unittest.TestCase):

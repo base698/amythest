@@ -23,7 +23,7 @@ except ModuleNotFoundError:
     from messaging_common import Gateway, Journal
 
 FIELDS = {'id': 'string', 'conversation_id': 'string', 'thread_id': 'string',
-          'name': 'string', 'sender': 'string', 'body': 'string', 'at': 'string',
+          'name': 'string', 'sender': 'string', 'sender_id': 'string', 'body': 'string', 'at': 'string',
           'outgoing': 'boolean', 'url': 'string'}
 SCHEMA = {'type': 'object', 'additionalProperties': False,
           'required': ['account', 'available', 'messages', 'user_id', 'workspace'], 'properties': {
@@ -66,6 +66,8 @@ def validate_config(config):
         raise ValueError('Configure exact read-only MCP tool names in read_tools; wildcards/writes are not allowed')
     if not config.get('query'):
         raise ValueError('Configure a bounded provider search query')
+    if type(config.get('limit', 100)) is not int or not 1 <= config.get('limit', 100) <= 100:
+        raise ValueError('limit must be an integer from 1 to 100')
     for key in ('state_dir', 'token_file'):
         if not config.get(key):
             raise ValueError('Missing ' + key)
@@ -82,8 +84,14 @@ def read_claude(config, now, runner=subprocess.run):
               'from the actual current-user profile. They are independently checked; never invent a workspace ID. '
               'conversation_id is channel ID and thread_id '
               'is root ts (empty for non-thread messages). Preserve Slack ts as strings. '
-              'For Outlook use native message and conversation IDs; thread_id empty. '
-              'At most 100 results. This is a bounded overlapping search, not an exhaustive archive. '
+              'For Slack sender_id is the original user/bot ID. Resolve each distinct author with the '
+              'allowed profile tool and set sender to their observed display name or real name; if no '
+              'name is available use the ID. Never guess names. Use the observed channel name for name. '
+              'For Outlook use native message and conversation IDs; thread_id and sender_id empty. '
+              f'Fetch up to {config.get("limit", 100)} most recent matching messages, sorting by timestamp descending. '
+              'Follow search pagination until the limit or the end of results; do not stop at a sample '
+              'or the first page. Only apply the configured query filters, not an implicit mentions filter. '
+              'This is a bounded overlapping search, not an exhaustive archive. '
               f'Current UTC: {now.isoformat()}. Account: {config["account"]}. '
               f'Provider: {config["provider"]}. Query: {config["query"]}. '
               f'Expected profile: user {config.get("slack_user","")}, workspace {config.get("workspace","")}.')
@@ -125,7 +133,7 @@ def normalize(config, payload, now):
         if payload.get('user_id')!=config['slack_user'] or payload.get('workspace')!=config['workspace']:
             raise ValueError('Slack profile/workspace changed; no messages imported')
     records = payload.get('messages')
-    if not isinstance(records, list) or len(records) > 100:
+    if not isinstance(records, list) or len(records) > config.get('limit', 100):
         raise ValueError('Invalid bounded import')
     result = []
     for row in records:
@@ -143,12 +151,16 @@ def normalize(config, payload, now):
         provider, account = config['provider'], config['account']
         chat, thread, native = row['conversation_id'], row['thread_id'], row['id']
         if provider == 'slack':
+            if not re.fullmatch(r'[UBW][A-Z0-9]+', row['sender_id']):
+                raise ValueError('Slack requires the original sender ID separately from the display name')
             if not re.fullmatch(r'[CDG][A-Z0-9]+', chat) or not re.fullmatch(r'\d{10,}\.\d{6}', native) or (thread and not re.fullmatch(r'\d{10,}\.\d{6}', thread)):
                 raise ValueError('Slack requires exact channel IDs and string timestamps')
             if config.get('channels') and chat not in config['channels']:
                 raise ValueError('Slack channel is outside the configured scope')
             cid = 'slack/' + digest(account + '\0' + chat + '\0' + thread)
         else:
+            if row['sender_id']:
+                raise ValueError('Non-Slack sender_id must be empty')
             if thread:
                 raise ValueError('Outlook thread must be empty')
             chat, native = digest(chat), digest(native)
@@ -156,7 +168,7 @@ def normalize(config, payload, now):
         result.append({'conversation': {'id': cid, 'service': 'Slack' if provider == 'slack' else 'Outlook',
                       'account': account, 'name': row['name'], 'recipient': chat, 'thread': thread,
                       'demo': False, 'route': {'provider': provider, 'account': account, 'chat': chat, 'thread': thread}},
-                      'message': {'native_id': native, 'sender': row['sender'], 'body': row['body'],
+                      'message': {'native_id': native, 'sender': row['sender'], 'sender_id': row['sender_id'], 'body': row['body'],
                                   'at': at.isoformat(), 'outgoing': row['outgoing'], 'source_url': row['url']}})
     return result
 

@@ -416,6 +416,20 @@ func messageListen(addr string) (net.Listener, error) {
 	return l, nil
 }
 func showMessages(client *messages.Client, opts messageui.Options, pane string) error {
+	opts.Open = func(raw string) error {
+		if strings.HasPrefix(raw, "slack://user?") {
+			u, err := url.Parse(raw)
+			if err != nil {
+				return err
+			}
+			expected := messages.SlackPersonURL(messages.Conversation{Service: "Slack", Account: u.Query().Get("team") + ":U0"}, messages.Message{SenderID: u.Query().Get("id")})
+			if expected == "" || raw != expected {
+				return fmt.Errorf("invalid Slack person link")
+			}
+			return openDesktopURL(raw)
+		}
+		return openURL(raw)
+	}
 	if opts.Notes == nil {
 		cfg, err := apiclient.LoadConfig(nil)
 		if err != nil {
