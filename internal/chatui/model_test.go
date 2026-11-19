@@ -73,34 +73,105 @@ func alt(n rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []run
 
 func screen(m *Model) string { return ansi.Strip(m.View()) }
 
+// windowNamed opens (or finds) the window for a known conversation.
 func (m *Model) windowNamed(t *testing.T, conv string) (int, *window) {
 	t.Helper()
-	i, w := m.window(conv)
-	if w == nil {
-		t.Fatalf("no window for %s; have %d windows", conv, len(m.wins))
+	if i, w := m.window(conv); w != nil {
+		return i, w
 	}
+	it, ok := m.known[conv]
+	if !ok {
+		t.Fatalf("unknown conversation %s", conv)
+	}
+	i, w, cmd := m.open(it.Conversation)
+	drain(t, m, cmd, 0)
 	return i, w
 }
 
-func TestOpensAWindowForEachConversationWaitingOnYou(t *testing.T) {
+func TestHomeListsTheQueueAndOpensTheSelection(t *testing.T) {
 	m, _, _ := harness(t)
-	if len(m.wins) < 3 {
-		t.Fatalf("expected windows for the seeded queue, got %d", len(m.wins))
+	if len(m.wins) != 1 || len(m.focus) < 3 {
+		t.Fatalf("home should start alone with the queue: %d windows, %d waiting", len(m.wins), len(m.focus))
 	}
 	view := screen(m)
-	for _, want := range []string{"[1:amy]", "[Act:", "Waiting on you:", "Robot build", "[amy]"} {
+	for _, want := range []string{"waiting on you", "[home]", "Robot build", "Enter opens", "[1:amy]"} {
 		if !strings.Contains(view, want) {
-			t.Errorf("status view lacks %q\n%s", want, view)
+			t.Errorf("home lacks %q\n%s", want, view)
 		}
 	}
-	// Alt+2 shows window 2 and clears its activity.
-	_, cmd := m.Update(alt('2'))
-	drain(t, m, cmd, 0)
-	if m.active != 1 || m.cur().level != actNone || !m.cur().loaded {
-		t.Fatalf("alt+2: active=%d level=%d loaded=%v", m.active, m.cur().level, m.cur().loaded)
+	first := m.focus[0].Conversation.ID
+	if p := m.previews[first]; p == nil || len(p.msgs) == 0 {
+		t.Fatal("the selection has no preview")
 	}
-	if v := screen(m); !strings.Contains(v, "[2:") || !strings.Contains(v, "<") {
-		t.Fatalf("window 2 shows no messages:\n%s", v)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	drain(t, m, cmd, 0)
+	second := m.focus[1].Conversation.ID
+	if m.homeSel != 1 || m.previews[second] == nil {
+		t.Fatalf("down moved to %d", m.homeSel)
+	}
+	// Typing filters; Enter opens the match in a window of its own.
+	for _, r := range "robot" {
+		_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		drain(t, m, cmd, 0)
+	}
+	if items := m.homeItems(); len(items) != 1 || items[0].Conversation.ID != "demo-telegram-robot" {
+		t.Fatalf("filter: %+v", items)
+	}
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	drain(t, m, cmd, 0)
+	if m.active != 1 || m.cur().conv.ID != "demo-telegram-robot" || !m.cur().loaded {
+		t.Fatalf("enter opened %d %q", m.active, m.cur().conv.ID)
+	}
+	if v := screen(m); !strings.Contains(v, "[2:") || !strings.Contains(v, "message replies to") {
+		t.Fatalf("window 2:\n%s", v)
+	}
+}
+
+func TestBrowserListsChatsByServiceAndOpensOne(t *testing.T) {
+	m, _, _ := harness(t)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	drain(t, m, cmd, 0)
+	view := screen(m)
+	for _, want := range []string{"All chats", "Slack (demo)", "#release", "Telegram (demo)", "[find]"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("browser lacks %q\n%s", want, view)
+		}
+	}
+	for _, r := range "release" {
+		_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		drain(t, m, cmd, 0)
+	}
+	rows := m.rows()
+	if len(rows) != 2 || !rows[0].heading || rows[1].l.Conversation.ID != "demo-slack-release" || m.br.sel != 1 {
+		t.Fatalf("filtered rows: %+v sel=%d", rows, m.br.sel)
+	}
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	drain(t, m, cmd, 0)
+	if m.br.open || m.cur().conv.ID != "demo-slack-release" || m.input.Value() != "" {
+		t.Fatalf("enter: open=%v conv=%q input=%q", m.br.open, m.cur().conv.ID, m.input.Value())
+	}
+	// Esc returns to where you were, with what you had typed.
+	m.input.SetValue("half a thought")
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	drain(t, m, cmd, 0)
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.br.open || m.input.Value() != "half a thought" {
+		t.Fatalf("esc: open=%v input=%q", m.br.open, m.input.Value())
+	}
+	// Folding a service hides its chats.
+	m.input.SetValue("")
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	drain(t, m, cmd, 0)
+	before := len(m.rows())
+	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if len(m.rows()) >= before {
+		t.Fatal("left did not fold the service")
+	}
+	// /query for a chat not seen yet searches the browser.
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	typeLine(t, m, "/query nobody-like-this")
+	if !m.br.open || m.input.Value() != "nobody-like-this" || !strings.Contains(screen(m), "No conversation matches") {
+		t.Fatalf("query fallback:\n%s", screen(m))
 	}
 }
 
@@ -194,24 +265,31 @@ func TestNewMessagesRaiseActivityAndOpenWindows(t *testing.T) {
 	if _, e := s.Ingest(messages.Ingress{Conversation: conv, Message: messages.Message{NativeID: "1", Sender: "Kim", Body: "deadline moved to Monday"}}); e != nil {
 		t.Fatal(e)
 	}
+	// Elsewhere when it arrives: home (window 1) lights up and lists it.
+	j, _ := m.windowNamed(t, "demo-slack-release")
+	drain(t, m, m.show(j), 0)
 	drain(t, m, m.poll(), 0)
-	i, w := m.windowNamed(t, "new-chat")
-	if w.level != actHilight {
-		t.Fatalf("a Don't-miss message should hilight, level=%d", w.level)
+	if _, w := m.window("new-chat"); w != nil {
+		t.Fatal("a new message opened a window by itself")
 	}
-	if v := screen(m); !strings.Contains(v, fmt.Sprintf("%d!", i+1)) {
-		t.Fatalf("Act bar lacks the hilight:\n%s", v)
-	}
-	for _, other := range m.wins {
-		if other != w {
-			other.level = actNone
-		}
+	if m.wins[0].level != actHilight || !strings.Contains(screen(m), "1!") {
+		t.Fatalf("home not hilighted (level %d):\n%s", m.wins[0].level, screen(m))
 	}
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}, Alt: true})
 	drain(t, m, cmd, 0)
-	if m.active != i || w.level != actNone {
-		t.Fatalf("alt+a went to %d (want %d)", m.active, i)
+	if m.active != 0 || !strings.Contains(screen(m), "Kim") {
+		t.Fatalf("alt+a went to %d:\n%s", m.active, screen(m))
 	}
+	// Activity in a window that is open but not shown marks that window.
+	i, w := m.windowNamed(t, "new-chat")
+	if _, e := s.Ingest(messages.Ingress{Conversation: conv, Message: messages.Message{NativeID: "1b", Sender: "Kim", Body: "urgent: call me"}}); e != nil {
+		t.Fatal(e)
+	}
+	drain(t, m, m.poll(), 0)
+	if w.level == actNone || !strings.Contains(screen(m), fmt.Sprint(i+1)) {
+		t.Fatalf("open window not marked (level %d)", w.level)
+	}
+	drain(t, m, m.show(i), 0)
 	// While the window is open, a new message appears in it.
 	if _, e := s.Ingest(messages.Ingress{Conversation: conv, Message: messages.Message{NativeID: "2", Sender: "Kim", Body: "and the room changed"}}); e != nil {
 		t.Fatal(e)
@@ -267,6 +345,8 @@ func TestJumpEventOpensTheMessageAndOlderPagesLoad(t *testing.T) {
 
 func TestCommandsWindowsAndHelp(t *testing.T) {
 	m, _, _ := harness(t)
+	m.windowNamed(t, "demo-slack-release")
+	m.windowNamed(t, "demo-telegram-robot")
 	n := len(m.wins)
 	typeLine(t, m, "/win 3")
 	if m.active != 2 {
@@ -287,12 +367,8 @@ func TestCommandsWindowsAndHelp(t *testing.T) {
 		t.Fatalf("tab completed %q", m.input.Value())
 	}
 	typeLine(t, m, "/help")
-	if m.active != 0 || !strings.Contains(screen(m), "/thread REF") {
+	if m.cur().title != "help" || !strings.Contains(screen(m), "/thread REF") || !strings.Contains(screen(m), "Ctrl+F") {
 		t.Fatalf("help:\n%s", screen(m))
-	}
-	typeLine(t, m, "hello")
-	if !strings.Contains(screen(m), "This window has no conversation") {
-		t.Fatal("text in the status window not explained")
 	}
 	typeLine(t, m, "/bogus")
 	if !strings.Contains(screen(m), "Unknown command /bogus") {

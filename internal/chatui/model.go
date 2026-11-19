@@ -2,6 +2,9 @@ package chatui
 
 import (
 	"context"
+	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +25,11 @@ type API interface {
 	Search(context.Context, string, string, int) ([]messages.Hit, error)
 	Events(context.Context, int64, messages.Listener, time.Duration) (messages.Events, error)
 	Message(context.Context, string) (messages.Message, error)
+	Conversations(context.Context) ([]messages.Listing, error)
+	Attach(context.Context, string, []byte) (messages.Attachment, error)
+	Download(context.Context, string) ([]byte, error)
+	Grant(context.Context, messages.Grant) error
+	Revoke(context.Context, string) error
 }
 
 type Options struct {
@@ -29,6 +37,17 @@ type Options struct {
 	Listener    messages.Listener
 	EventsAfter int64
 	Now         func() time.Time
+
+	// Pictures: "kitty", "blocks" or "off" (as the wall). Kitty uploads go
+	// to Out, which must be serialized with the screen. CellW and CellAspect
+	// describe a terminal cell (pixels wide; width over height).
+	Graphics   string
+	Out        io.Writer
+	CellW      int
+	CellAspect float64
+
+	DownloadDir string             // where /open and /save put files (~/Downloads)
+	Open        func(string) error // opens a saved file (the system's open)
 }
 
 const (
@@ -42,20 +61,25 @@ const (
 var eventWait = 10 * time.Second
 
 type Model struct {
-	api      API
-	o        Options
-	w, h     int
-	wins     []*window // wins[0] is the status window
-	active   int
-	input    textinput.Model
-	focus    []messages.Item          // the attention queue, for window 1
-	seen     map[string]time.Time     // conversation -> activity already noticed
-	known    map[string]messages.Item // conversation -> latest item (all)
-	started  bool                     // the first poll has happened
-	eventSeq int64
-	pending  *messages.Jump // a jump waiting for its window to load
-	history  []string
-	histAt   int
+	api       API
+	o         Options
+	w, h      int
+	wins      []*window // wins[0] is the status window
+	active    int
+	input     textinput.Model
+	focus     []messages.Item          // the attention queue, for window 1
+	seen      map[string]time.Time     // conversation -> activity already noticed
+	known     map[string]messages.Item // conversation -> latest item (all)
+	started   bool                     // the first poll has happened
+	eventSeq  int64
+	pending   *messages.Jump // a jump waiting for its window to load
+	history   []string
+	histAt    int
+	homeSel   int
+	previews  map[string]*preview
+	br        browser
+	pics      map[string]*pic // attachment ID -> picture
+	nextImage int
 }
 
 type (
@@ -100,16 +124,32 @@ func New(api API, o Options) *Model {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
+	if o.Out == nil {
+		o.Out = io.Discard
+	}
+	if o.Graphics == "" {
+		o.Graphics = "off"
+	}
+	if o.Open == nil {
+		o.Open = openWithSystem
+	}
+	if o.DownloadDir == "" {
+		if h, e := os.UserHomeDir(); e == nil {
+			o.DownloadDir = filepath.Join(h, "Downloads")
+		}
+	}
 	in := textinput.New()
 	in.Prompt = ""
 	in.CharLimit = 5000
 	in.Focus()
-	m := &Model{api: api, o: o, input: in, seen: map[string]time.Time{}, known: map[string]messages.Item{}, eventSeq: -1}
+	m := &Model{api: api, o: o, input: in, seen: map[string]time.Time{}, known: map[string]messages.Item{}, eventSeq: -1,
+		previews: map[string]*preview{}, br: browser{collapsed: map[string]bool{}},
+		pics: map[string]*pic{}, nextImage: 1 + os.Getpid()%1000*1000}
 	m.wins = []*window{{kind: kindStatus, refs: map[string]string{}, byRef: map[string]string{}}}
 	if o.EventsAfter > 0 {
 		m.eventSeq = o.EventsAfter
 	}
-	m.status("Welcome to Messages. Type /help for commands; Alt+1…9 switch windows.")
+	m.status("Welcome to Messages. Enter opens a chat, Ctrl+F lists them all, /help shows commands.")
 	return m
 }
 
@@ -281,6 +321,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			w.note(m.o.Now(), "-!- %s", x.text)
 		}
 		return m, m.poll()
+	case picMsg:
+		m.onPic(x)
+	case fileMsg:
+		_, w := m.window(x.conv)
+		if w == nil {
+			w = m.wins[0]
+		}
+		if x.err != nil {
+			w.note(m.o.Now(), "-!- %v", x.err)
+		} else {
+			w.note(m.o.Now(), "-!- %s", x.text)
+		}
+	case previewMsg:
+		return m, m.onPreview(x)
+	case dirMsg:
+		m.onDir(x)
 	case eventsMsg:
 		return m, m.onEvents(x)
 	case listenMsg:
@@ -316,17 +372,10 @@ func (m *Model) onItems(x itemsMsg) tea.Cmd {
 			continue
 		}
 		// New activity: refresh its window, or open one for a new message to us.
+		// New activity: refresh its window; without one, home shows it.
 		i, w := m.window(id)
 		if w == nil {
-			if it.Message.Outgoing {
-				continue
-			}
-			var cmd tea.Cmd
-			i, w, cmd = m.open(it.Conversation)
-			if w == nil {
-				continue
-			}
-			cmds = append(cmds, cmd)
+			i, w = 0, m.wins[0]
 		} else if w.loaded {
 			cmds = append(cmds, m.load(w, false))
 		}
@@ -336,18 +385,11 @@ func (m *Model) onItems(x itemsMsg) tea.Cmd {
 	}
 	if !m.started {
 		m.started = true
-		// Like irssi's autojoin: a window for everything waiting on you.
-		// Newest first, so Alt+2 is always the most recent.
-		for _, it := range x.focus {
-			if _, w, cmd := m.open(it.Conversation); w != nil {
-				w.level = levelOf(it.Message, it.Conversation)
-				cmds = append(cmds, cmd)
-			}
-		}
 		if len(x.focus) > 0 {
-			m.status("%d conversation(s) need attention: Alt+A goes to the busiest.", len(x.focus))
+			m.status("%d conversation(s) waiting on you.", len(x.focus))
 		}
 	}
+	cmds = append(cmds, m.loadPreview())
 	return tea.Batch(cmds...)
 }
 
@@ -404,7 +446,7 @@ func (m *Model) onPage(x pageMsg) tea.Cmd {
 	if x.page.HasAfter && !x.older {
 		more = m.load(w, false)
 	}
-	return more
+	return tea.Batch(more, m.fetchPictures(w))
 }
 
 func (m *Model) onEvents(x eventsMsg) tea.Cmd {
@@ -466,13 +508,34 @@ func (m *Model) jump(j messages.Jump) tea.Cmd {
 
 // --- input -------------------------------------------------------------------
 
-func (m *Model) prompt() string { return "[" + m.cur().name() + "] " }
+func (m *Model) prompt() string {
+	switch {
+	case m.br.open:
+		return "[find] "
+	case m.active == 0:
+		return "[home] "
+	}
+	return "[" + m.cur().name() + "] "
+}
 
 func (m *Model) key(k tea.KeyMsg) tea.Cmd {
 	s := k.String()
-	switch s {
-	case "ctrl+c":
+	if s == "ctrl+c" {
 		return tea.Quit
+	}
+	if m.br.open {
+		if cmd, ok := m.browserKey(k); ok {
+			return cmd
+		}
+	}
+	if m.active == 0 {
+		if cmd, ok := m.homeKey(k); ok {
+			return cmd
+		}
+	}
+	switch s {
+	case "ctrl+f":
+		return m.openBrowser("")
 	case "alt+a":
 		return m.nextActive()
 	case "ctrl+n", "alt+right":
@@ -531,8 +594,14 @@ func (m *Model) key(k tea.KeyMsg) tea.Cmd {
 		}
 		return m.show(n - 1)
 	}
+	before := m.input.Value()
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(k)
+	if m.active == 0 && m.input.Value() != before && !strings.HasPrefix(m.input.Value(), "/") {
+		// Typing on home filters its list.
+		m.homeSel = 0
+		return tea.Batch(cmd, m.loadPreview())
+	}
 	return cmd
 }
 
@@ -549,10 +618,13 @@ func (m *Model) nextActive() tea.Cmd {
 	return m.show(at)
 }
 
-var commands = []string{"/close", "/done", "/go", "/help", "/lastlog", "/query", "/quit", "/reply", "/search", "/snooze", "/thread", "/win"}
+var commands = []string{"/attach", "/close", "/done", "/go", "/grant", "/help", "/lastlog", "/open", "/query", "/quit", "/reply", "/revoke", "/save", "/search", "/snooze", "/thread", "/win"}
 
 // complete fills in a command, a window name after /query, or a ref.
 func (m *Model) complete() {
+	if m.completePath() {
+		return
+	}
 	v := m.input.Value()
 	fields := strings.Fields(v)
 	if len(fields) == 1 && strings.HasPrefix(v, "/") && !strings.HasSuffix(v, " ") {
@@ -600,7 +672,7 @@ func (m *Model) submit(line string) tea.Cmd {
 		}
 		target, ok := w.replyTarget()
 		if !ok {
-			w.note(m.o.Now(), "-!- Nothing to reply to yet in this conversation.")
+			w.note(m.o.Now(), "-!- No messages here yet. Amy can only answer a conversation that has one; starting new ones is not supported yet.")
 			return nil
 		}
 		return m.send(w, target, line, false)
@@ -610,7 +682,6 @@ func (m *Model) submit(line string) tea.Cmd {
 	switch strings.ToLower(name) {
 	case "help":
 		m.help()
-		m.show(0)
 	case "quit", "exit":
 		return tea.Quit
 	case "win", "w", "window":
@@ -650,6 +721,16 @@ func (m *Model) submit(line string) tea.Cmd {
 			return m.jump(messages.Jump{Conversation: r.Conversation})
 		}
 		w.note(m.o.Now(), "-!- No thread under [%s] yet: /thread %s text starts one.", ref, ref)
+	case "attach", "file":
+		return m.attach(w, rest)
+	case "open":
+		return m.saveFile(w, rest, true)
+	case "save":
+		return m.saveFile(w, rest, false)
+	case "grant":
+		return m.grant(w, rest)
+	case "revoke":
+		return m.revoke(w)
 	case "done", "snooze":
 		return m.attention(w, strings.ToLower(name))
 	case "search", "s":
@@ -674,19 +755,40 @@ func (m *Model) submit(line string) tea.Cmd {
 }
 
 func (m *Model) help() {
+	if i, w := m.named(kindSearch, "help"); w != nil {
+		m.active = i
+		return
+	}
+	w := &window{kind: kindSearch, title: "help", loaded: true, refs: map[string]string{}, byRef: map[string]string{}}
+	m.wins = append(m.wins, w)
+	m.active = len(m.wins) - 1
 	for _, l := range []string{
-		"Text replies to the newest message from someone else in this window.",
+		"Window 1 (home) lists what is waiting on you: ↑↓ choose, Enter opens, typing filters.",
+		"Ctrl+F lists every chat by service (channels, groups, people); Enter opens it.",
+		"In a chat window, text replies to the newest message from someone else.",
 		"/reply REF text     reply to a message; REF is its [abc] label (/r)",
 		"/thread REF [text]  open REF's Slack thread, or reply in it, starting it (/t)",
-		"/query NAME         open a conversation (/q; Tab completes)",
+		"/query NAME         open a conversation (/q; Tab completes; else Ctrl+F filtered)",
+		"/attach [REF] PATH... [text]  send files (Tab completes paths; up to 8, 5 MB each)",
+		"/open TAG  /save TAG [PATH]   open or save a file; TAG is its [file abc] label",
+		"/grant [30m] [files]  let agents read and send here for a while; /revoke ends it",
 		"/search WORDS       search all messages (/s); /lastlog WORDS this one (/ll)",
 		"/go N               open search result N (or type N in a search window)",
 		"/done  /snooze      mark this conversation handled, or snooze it an hour",
 		"/win N  /close      switch to or close a window; /quit exits",
 		"Alt+1…9 windows · Alt+A next activity · Ctrl+N/P next/previous · PgUp/PgDn scroll",
 	} {
-		m.status("%s", l)
+		w.note(m.o.Now(), "%s", l)
 	}
+}
+
+func (m *Model) named(kind, title string) (int, *window) {
+	for i, w := range m.wins {
+		if w.kind == kind && w.title == title {
+			return i, w
+		}
+	}
+	return -1, nil
 }
 
 func (m *Model) query(name string) tea.Cmd {
@@ -709,8 +811,8 @@ func (m *Model) query(name string) tea.Cmd {
 		}
 	}
 	if pick == nil {
-		m.status("-!- No conversation matches %q.", name)
-		return nil
+		// Not among the chats seen so far: look through every one.
+		return m.openBrowser(strings.TrimSpace(name))
 	}
 	i, w, cmd := m.open(pick.Conversation)
 	if w == nil {

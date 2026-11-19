@@ -62,3 +62,43 @@ class ProfileScopeTests(unittest.TestCase):
         self.assertEqual(c.normalize(config,payload,dt.datetime.now(dt.timezone.utc)),[])
         payload['workspace']='Another workspace'
         with self.assertRaises(ValueError):c.normalize(config,payload,dt.datetime.now(dt.timezone.utc))
+
+class ChannelListTests(unittest.TestCase):
+    def setUp(self):
+        self.config={'provider':'slack','account':'T123:U456','read_tools':['mcp__slack__search','mcp__slack__slack_list_user_channels','mcp__slack__slack_read_user_profile'],
+                     'query':'after:2026-11-18','state_dir':'unused','token_file':'unused'}
+        self.payload={'available':True,'account':'T123:U456','user_id':'','workspace':'','channels':[
+            {'id':'C111','name':'release','type':'public_channel'},
+            {'id':'D222','name':'Morgan  Example','type':'im'},
+            {'id':'G333','name':'a, b, c','type':'mpim'},
+            {'id':'C111','name':'release','type':'public_channel'}]}
+    def test_channels_become_slack_conversations_with_import_ids(self):
+        out=c.normalize_channels(self.config,self.payload)
+        self.assertEqual([e['recipient'] for e in out],['C111','D222','G333'])
+        self.assertEqual(out[0]['id'],'slack/'+c.digest('T123:U456\0C111\0'))
+        self.assertEqual(out[1]['name'],'Morgan Example')
+        self.assertEqual(out[0]['route'],{'provider':'slack','account':'T123:U456','chat':'C111','thread':''})
+        # The same ID the message import gives the channel.
+        row={'id':'1795040000.123456','conversation_id':'C111','thread_id':'','name':'release','sender':'Morgan','sender_id':'U456','body':'hi','at':'2026-11-18T12:00:00+00:00','outgoing':False,'url':''}
+        event=c.normalize(self.config,{'available':True,'account':'T123:U456','messages':[row]},dt.datetime(2026,11,19,tzinfo=dt.timezone.utc))[0]
+        self.assertEqual(event['conversation']['id'],out[0]['id'])
+    def test_rejects_bad_lists_and_scopes(self):
+        for bad in (dict(self.payload,available=False),dict(self.payload,account='T9:U9'),
+                    dict(self.payload,channels=[{'id':'general','name':'x','type':'public_channel'}]),
+                    dict(self.payload,channels=[{'id':'C1','name':'x','type':'workspace'}]),
+                    dict(self.payload,channels=[{'id':'C1','name':'x'}])):
+            with self.assertRaises(ValueError):c.normalize_channels(self.config,bad)
+        scoped=c.normalize_channels(dict(self.config,channels=['D222']),self.payload)
+        self.assertEqual([e['recipient'] for e in scoped],['D222'])
+        with self.assertRaises(ValueError):c.list_tool(dict(self.config,read_tools=['mcp__slack__search']))
+    def test_claude_gets_only_the_list_tools_and_sync_registers(self):
+        def runner(args,**kwargs):
+            allowed=args[args.index('--allowedTools')+1]
+            self.assertEqual(allowed,'ToolSearch,mcp__slack__slack_list_user_channels,mcp__slack__slack_read_user_profile')
+            self.assertIn('types="public_channel,private_channel,im,mpim"',kwargs['input'])
+            kwargs['stdout'].write(json.dumps({'structured_output':self.payload}));return Mock(returncode=0)
+        out=c.read_channels(self.config,dt.datetime.now(dt.timezone.utc),runner)
+        gateway=Mock();gateway.request.return_value={}
+        self.assertEqual(c.sync_channels(self.config,gateway,lambda cfg,now:out),3)
+        paths=[call.args[0] for call in gateway.request.call_args_list]
+        self.assertEqual(paths,['/connector/heartbeat','/connector/conversations'])

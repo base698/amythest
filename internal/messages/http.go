@@ -112,7 +112,7 @@ func (g *Gateway) Handler() http.Handler {
 				return
 			}
 		} else if actor != "owner" {
-			allowed := r.Method == "GET" && (r.URL.Path == "/items" || r.URL.Path == "/thread" || r.URL.Path == "/search" || r.URL.Path == "/message" || r.URL.Path == "/drafts") || r.Method == "POST" && (r.URL.Path == "/drafts" || r.URL.Path == "/send")
+			allowed := r.Method == "GET" && (r.URL.Path == "/items" || r.URL.Path == "/conversations" || r.URL.Path == "/thread" || r.URL.Path == "/search" || r.URL.Path == "/message" || r.URL.Path == "/drafts") || r.Method == "POST" && (r.URL.Path == "/drafts" || r.URL.Path == "/send")
 			if !allowed {
 				http.Error(w, "owner credential required", 403)
 				return
@@ -237,6 +237,8 @@ func (g *Gateway) route(w http.ResponseWriter, r *http.Request, actor, provider 
 		w.Header().Set("Content-Type", a.MIME)
 		_, e = w.Write(b)
 		return nil, e
+	case "GET /conversations":
+		return s.Conversations(actor)
 	case "GET /items":
 		return s.Items(actor, r.URL.Query().Get("all") == "1", r.URL.Query().Get("trash") == "1")
 	case "GET /thread":

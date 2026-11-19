@@ -99,9 +99,13 @@ def read_claude(config, now, runner=subprocess.run):
               f'Current UTC: {now.isoformat()}. Account: {config["account"]}. '
               f'Provider: {config["provider"]}. Query: {config["query"]}. '
               f'Expected profile: user {config.get("slack_user","")}, workspace {config.get("workspace","")}.')
-    args = ['claude', '-p', '--output-format', 'json', '--json-schema', json.dumps(SCHEMA),
+    return normalize(config, ask_claude(config, prompt, SCHEMA, config['read_tools'], runner), now)
+
+def ask_claude(config, prompt, schema, tools, runner=subprocess.run):
+    """Run Claude read-only with exactly these tools and return its structured output."""
+    args = ['claude', '-p', '--output-format', 'json', '--json-schema', json.dumps(schema),
             '--no-session-persistence', '--permission-mode', 'dontAsk', '--permission-prompts', 'none',
-            '--tools', 'ToolSearch', '--allowedTools', ','.join(['ToolSearch']+config['read_tools']),
+            '--tools', 'ToolSearch', '--allowedTools', ','.join(['ToolSearch']+tools),
             '--disallowedTools', 'Bash,Edit,Write,NotebookEdit,Agent,Task']
     # No permission bypass, hooks, arbitrary shell, or provider credentials in prompts.
     args += ['--settings', json.dumps({'disableAllHooks': True})]
@@ -120,7 +124,7 @@ def read_claude(config, now, runner=subprocess.run):
     payload = envelope.get('structured_output')
     if payload is None:
         payload = json.loads(envelope.get('result', '{}'))
-    return normalize(config, payload, now)
+    return payload
 
 # Temporary files are private and unlinked; tool transcripts never enter logs.
 from contextlib import contextmanager
@@ -176,6 +180,74 @@ def normalize(config, payload, now):
                                   'at': at.isoformat(), 'outgoing': row['outgoing'], 'source_url': row['url']}})
     return result
 
+CHANNEL_FIELDS = {'id': 'string', 'name': 'string', 'type': 'string'}
+CHANNEL_SCHEMA = {'type': 'object', 'additionalProperties': False,
+                  'required': ['account', 'available', 'channels', 'user_id', 'workspace'], 'properties': {
+                      'account': {'type': 'string'}, 'user_id': {'type': 'string'}, 'workspace': {'type': 'string'}, 'available': {'type': 'boolean'},
+                      'channels': {'type': 'array', 'maxItems': 2000, 'items': {
+                          'type': 'object', 'additionalProperties': False, 'required': list(CHANNEL_FIELDS),
+                          'properties': {k: {'type': v} for k, v in CHANNEL_FIELDS.items()}}}}}
+CHANNEL_TYPES = ('public_channel', 'private_channel', 'im', 'mpim')
+
+def list_tool(config):
+    tools = [t for t in config['read_tools'] if t.endswith('slack_list_user_channels')]
+    if config['provider'] != 'slack' or not tools:
+        raise ValueError('Listing channels needs a Slack account with slack_list_user_channels in read_tools')
+    return tools[0]
+
+def read_channels(config, now, runner=subprocess.run):
+    tool = list_tool(config)
+    profile = [t for t in config['read_tools'] if t.endswith('slack_read_user_profile')]
+    prompt = ('Read-only directory listing. Use ONLY these tools: ' + ', '.join([tool] + profile) +
+              '. Never send, join, leave, update or act on anything you read. '
+              'First use ToolSearch to load the exact allowed tool definitions if they are deferred or pending. '
+              'Verify the connected account before listing; if the tools are unavailable or the account does not match, '
+              'return available=false and no channels. '
+              f'Call {tool} with types="{",".join(CHANNEL_TYPES)}", exclude_archived=true and limit=200, and follow '
+              'next_cursor until there are no more pages or 2000 channels. '
+              'For each, return id (the exact Slack channel ID), type (one of ' + ', '.join(CHANNEL_TYPES) + ') and name: '
+              'the channel name without #, for a DM the other person\'s display name as listed, for a group DM its members. '
+              'Never invent channels or IDs. '
+              'For Slack account is TEAM_ID:USER_ID, unless a profile-bound account key is supplied; then echo it, '
+              'and return user_id and workspace from the actual current-user profile. '
+              f'Current UTC: {now.isoformat()}. Account: {config["account"]}. '
+              f'Expected profile: user {config.get("slack_user","")}, workspace {config.get("workspace","")}.')
+    return normalize_channels(config, ask_claude(config, prompt, CHANNEL_SCHEMA, [tool] + profile, runner))
+
+def normalize_channels(config, payload):
+    if payload.get('available') is not True or payload.get('account') != config['account']:
+        raise ValueError('Connector unavailable or wrong account; no channels listed')
+    if config['account'].startswith('profile/'):
+        if payload.get('user_id') != config['slack_user'] or payload.get('workspace') != config['workspace']:
+            raise ValueError('Slack profile/workspace changed; no channels listed')
+    rows = payload.get('channels')
+    if not isinstance(rows, list) or len(rows) > 2000:
+        raise ValueError('Invalid channel list')
+    account, seen, out = config['account'], set(), []
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != set(CHANNEL_FIELDS) or any(type(row[k]) is not str for k in CHANNEL_FIELDS):
+            raise ValueError('Invalid channel fields')
+        chat, name = row['id'], ' '.join(row['name'].split())
+        if not re.fullmatch(r'[CDG][A-Z0-9]+', chat) or row['type'] not in CHANNEL_TYPES or len(name.encode()) > 300:
+            raise ValueError('Slack requires exact channel IDs')
+        if config.get('channels') and chat not in config['channels'] or chat in seen:
+            continue
+        seen.add(chat)
+        out.append({'id': 'slack/' + digest(account + '\0' + chat + '\0'), 'service': 'Slack', 'account': account,
+                    'name': name or chat, 'recipient': chat, 'thread': '', 'demo': False,
+                    'route': {'provider': 'slack', 'account': account, 'chat': chat, 'thread': ''}})
+    return out
+
+def sync_channels(config, gateway, fetch=read_channels):
+    """Register the Slack channels and DMs the user is in, without messages."""
+    entries = fetch(config, dt.datetime.now(dt.timezone.utc))
+    gateway.request('/connector/heartbeat', {'provider': config['provider'], 'account': config['account'],
+                    'worker': str(uuid.uuid4()), 'transport': config.get('transport', 'agent'), 'chats': config.get('channels', []),
+                    'all_chats': not bool(config.get('channels')), 'send': config.get('send', False)})
+    for offset in range(0, len(entries), 1000):
+        gateway.request('/connector/conversations', {'account': config['account'], 'conversations': entries[offset:offset + 1000]})
+    return len(entries)
+
 def sync(config, gateway, journal, fetch=read_claude):
     now = dt.datetime.now(dt.timezone.utc)
     # Validate the entire response before persisting anything from this batch.
@@ -199,7 +271,7 @@ def sync(config, gateway, journal, fetch=read_claude):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--settings', default=os.environ.get('AMYTHEST_MESSAGES_CONFIG', '~/.config/amythest/messages.json'))
-    parser.add_argument('command', choices=('doctor', 'sync', 'send-doctor', 'watch'))
+    parser.add_argument('command', choices=('doctor', 'sync', 'channels', 'send-doctor', 'watch'))
     parser.add_argument('--name', required=True)
     parser.add_argument('--bind', action='store_true', help='send-doctor: save the observed current-profile binding privately')
     args = parser.parse_args()
@@ -258,6 +330,10 @@ def main():
                 raise ValueError('The current Slack profile differs from its binding; review sign-in before rebinding')
             else:
                 print('Slack profile and delivery hooks verified. No message sent.')
+            return
+        if args.command == 'channels':
+            gateway = Gateway(config.get('gateway', settings.get('client', {}).get('url', 'http://127.0.0.1:8642')), expand(config['token_file']))
+            print(f'Listed {sync_channels(config, gateway)} Slack channels and DMs. No messages read or sent.')
             return
         journal = Journal(state / 'journal.db')
         gateway = Gateway(config.get('gateway', settings.get('client', {}).get('url', 'http://127.0.0.1:8642')), expand(config['token_file']))

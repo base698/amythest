@@ -150,9 +150,7 @@ func (m *Model) lines(w *window, width int) []line {
 		}
 		out = append(out, indented(head, body, width, msg.ID)...)
 		pad := strings.Repeat(" ", lipgloss.Width(head))
-		for _, a := range msg.Attachments {
-			out = append(out, line{pad + dim.Render(fmt.Sprintf("[file] %s (%d bytes)", messages.Plain(a.Name), a.Size)), msg.ID})
-		}
+		out = append(out, m.attachmentLines(w, msg, pad, width)...)
 		if r, ok := w.replies[msg.ID]; ok {
 			label := "1 reply"
 			if r.Count != 1 {
@@ -170,7 +168,13 @@ func (m *Model) View() string {
 	}
 	w := m.cur()
 	title := " " + w.name()
-	if w.kind == kindConv {
+	if m.active == 0 {
+		title = " Messages — waiting on you"
+	}
+	if m.br.open {
+		title = " All chats — by service"
+	}
+	if w.kind == kindConv && !m.br.open {
 		title += " — " + messages.Destination(w.conv)
 		if w.conv.Demo {
 			title += " (demo: replies are simulated)"
@@ -179,11 +183,30 @@ func (m *Model) View() string {
 	top := barStyle.Render(ansi.Truncate(title, m.w, "…") + strings.Repeat(" ", max(0, m.w-lipgloss.Width(ansi.Truncate(title, m.w, "…")))))
 
 	h := m.bodyHeight()
+	var b strings.Builder
+	b.WriteString(top + "\n")
+	m.input.Placeholder = m.hint()
+	if m.br.open || m.active == 0 {
+		var rows []string
+		if m.br.open {
+			rows = m.browserLines(m.w, h)
+		} else {
+			rows = m.homeLines(m.w, h)
+		}
+		for i := 0; i < h; i++ {
+			s := ""
+			if i < len(rows) {
+				s = ansi.Truncate(rows[i], m.w, "…")
+			}
+			b.WriteString(s + "\n")
+		}
+		b.WriteString(barStyle.Render(m.statusBar()) + "\n")
+		b.WriteString(m.prompt() + m.input.View())
+		return b.String()
+	}
 	lines := m.lines(w, m.w)
 	end := max(0, len(lines)-w.scroll)
 	start := max(0, end-h)
-	var b strings.Builder
-	b.WriteString(top + "\n")
 	for i := 0; i < h; i++ {
 		// Short histories sit at the bottom, as a chat log reads.
 		s := ""

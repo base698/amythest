@@ -62,6 +62,13 @@ func (c *Client) Items(ctx context.Context, all bool) ([]Item, error) {
 	e := c.Do(ctx, "GET", p, nil, &out)
 	return out, e
 }
+
+// Conversations lists every conversation the gateway knows, by service.
+func (c *Client) Conversations(ctx context.Context) ([]Listing, error) {
+	var out []Listing
+	return out, c.Do(ctx, "GET", "/conversations", nil, &out)
+}
+
 func (c *Client) Thread(ctx context.Context, id string) (Thread, error) {
 	var out Thread
 	e := c.Do(ctx, "GET", "/thread?conversation="+url.QueryEscape(id), nil, &out)
@@ -151,6 +158,40 @@ func (c *Client) Attach(ctx context.Context, name string, b []byte) (Attachment,
 	}{name, b}, &out)
 	return out, e
 }
+
+// Download fetches an attachment's bytes.
+func (c *Client) Download(ctx context.Context, id string) ([]byte, error) {
+	req, e := http.NewRequestWithContext(ctx, "GET", c.URL+"/attachment?id="+url.QueryEscape(id), nil)
+	if e != nil {
+		return nil, e
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	resp, e := c.HTTP.Do(req)
+	if e != nil {
+		return nil, fmt.Errorf("messaging gateway unavailable at %s", c.URL)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, &Fault{resp.StatusCode, strings.TrimSpace(string(b))}
+	}
+	b, e := io.ReadAll(io.LimitReader(resp.Body, MaxAttachment+1))
+	if e == nil && len(b) > MaxAttachment {
+		e = fmt.Errorf("attachment is larger than %d bytes", MaxAttachment)
+	}
+	return b, e
+}
+
+// Grant lets agents use one conversation until the grant expires.
+func (c *Client) Grant(ctx context.Context, g Grant) error {
+	return c.Do(ctx, "POST", "/grants", g, nil)
+}
+
+// Revoke ends the agents' grant for a conversation.
+func (c *Client) Revoke(ctx context.Context, conversation string) error {
+	return c.Do(ctx, "DELETE", "/grants?conversation="+url.QueryEscape(conversation), nil, nil)
+}
+
 func (c *Client) Attachments(ctx context.Context) ([]Attachment, error) {
 	var out []Attachment
 	e := c.Do(ctx, "GET", "/attachments", nil, &out)

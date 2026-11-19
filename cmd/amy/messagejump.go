@@ -103,7 +103,16 @@ func openMessagesAt(ref *find.MessageRef, pane string) error {
 
 // showChat runs the irssi-style client, closing its own pane on exit.
 func showChat(client *messages.Client, opts chatui.Options, pane string) error {
-	_, e := tea.NewProgram(chatui.New(client, opts), tea.WithAltScreen()).Run()
+	// Pictures are drawn as the wall draws them; AMY_WALL_IMAGES overrides.
+	out := &serialOut{File: os.Stdout}
+	var w wall.Options
+	if e := configureWallGraphics("auto", &w, out); e != nil {
+		return e
+	}
+	opts.Graphics, opts.Out, opts.CellW, opts.CellAspect = w.Graphics, out, w.CellW, w.CellAspect
+	m := chatui.New(client, opts)
+	_, e := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(out)).Run()
+	m.Cleanup()
 	if e == nil && pane != "" {
 		return wall.ClosePane(pane, nil)
 	}

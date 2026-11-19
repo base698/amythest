@@ -76,20 +76,51 @@ incoming message remains in focus.
 `"view": "chat"` under `client` in `messages.json` to make plain `amy messages`
 (and so Cmd+Shift+M) open it; `amy messages focus` still opens the queue view.
 
-- Window 1 (`amy`) shows notices and the attention queue. Each conversation
-  waiting on you gets a window, newest first. New messages elsewhere open one.
-- The status bar's `[Act: 2,3!,5]` lists windows with unread activity: plain
-  for chatter, bold for a question or direct message, `!` for Don't miss.
+- Window 1 (home) is the attention queue with the selected conversation's
+  recent messages beside it. Up/Down choose, Enter opens it as a window,
+  typing filters the list, Esc clears the filter.
+- Ctrl+F lists every chat by service: channels, groups and direct chats, with
+  Slack threads under their channel. Typing filters, Left/Right fold a service,
+  Enter opens the chat as a window, Esc goes back. `/query NAME` opens a chat
+  directly, or this list filtered by NAME when nothing matches.
+- New messages light window 1 (or the chat's window, when open) in the status
+  bar's `[Act: 1!,3]`: plain for chatter, bold for a question or direct
+  message, `!` for Don't miss.
 - Alt+1…9 switch windows, Alt+A goes to the busiest, Ctrl+N/Ctrl+P cycle,
   PgUp/PgDn scroll (PgUp at the top loads older messages).
-- Text replies to the newest message from someone else. Each message has a
-  short `[ref]`: `/reply REF text` answers that one. In Slack, `/thread REF text`
-  replies in its thread (starting it), and `/thread REF` opens the thread window.
+- In a chat window, text replies to the newest message from someone else. Each
+  message has a short `[ref]`: `/reply REF text` answers that one. In Slack,
+  `/thread REF text` replies in its thread (starting it), and `/thread REF`
+  opens the thread window. The input line's hint says where text will go.
+- A chat with no messages yet opens but cannot be written to: Amy only answers
+  existing messages so far.
+- `/attach [REF] PATH... [text]` sends files (up to 8, 5 MB each) with optional
+  text, as a reply like plain text or to REF; Tab completes paths. Files on
+  messages show as `[file TAG] name`: `/open TAG` saves to ~/Downloads and
+  opens it, `/save TAG [PATH]` only saves. PNG, JPEG and GIF pictures are drawn
+  under their message as the wall draws them (Kitty graphics, else coloured
+  blocks; `AMY_WALL_IMAGES=off` turns them off).
+- `/grant [DURATION] [files]` lets agents read and send in this conversation
+  (30 minutes by default, up to 24 hours) and shows its ID; `/revoke` ends it.
 - `/search WORDS` opens a results window; type a number to open that message.
   `/lastlog WORDS` searches the current conversation.
-- `/query NAME` opens a conversation (Tab completes), `/done` and `/snooze`
-  set attention, `/win N` and `/close` manage windows, `/help` lists commands.
+- `/done` and `/snooze` set attention, `/win N` and `/close` manage windows,
+  `/help` lists commands.
 - Jumps from amy find land here when this is the configured view.
+
+### Slack channels in the list
+
+Slack chats appear once a message from them is imported. To list every channel,
+private channel, DM and group DM you are in, add the read-only
+`mcp__claude_ai_Slack__slack_list_user_channels` tool to the account's
+`read_tools`, then run:
+
+```sh
+amy-agent-messages channels --name slack-NAME
+```
+
+It registers the chats without reading or sending messages. Run it again to
+pick up channels you join later.
 
 ## Search and jumps
 
