@@ -66,6 +66,10 @@ type Thread struct {
 	// Set only on a page of a longer conversation (see Store.ThreadPage).
 	HasBefore bool `json:"has_before,omitempty"`
 	HasAfter  bool `json:"has_after,omitempty"`
+	// Slack only, for the owner: threads under this conversation's messages
+	// (keyed by message ID), or the message this thread hangs from.
+	Replies map[string]ReplySummary `json:"replies,omitempty"`
+	Parent  *ThreadParent           `json:"parent,omitempty"`
 }
 type Draft struct {
 	ID            string       `json:"id"`
@@ -87,6 +91,9 @@ type DraftInput struct {
 	ReplyTo     string   `json:"reply_to"`
 	Body        string   `json:"body"`
 	Attachments []string `json:"attachments,omitempty"`
+	// Thread replies in a Slack thread under ReplyTo, starting it if needed,
+	// instead of posting to the channel or DM.
+	Thread bool `json:"thread,omitempty"`
 }
 type Grant struct {
 	Conversation string    `json:"conversation"`

@@ -40,7 +40,14 @@ Back up the directory if retaining demo data. It is independent of the vault.
 - Up/down or j/k: choose a conversation; the right pane shows message context.
 - `r`: compose a reply to the selected message, or resume a paused composer.
 - `n`: start a new reply to the currently selected message (discards the paused
-  composer). `Ctrl+D` saves a durable draft before leaving a composer.
+  composer).
+- `t` (Slack): reply in the thread under the selected conversation's latest
+  message, or under the message a jump marked `▶`. The first reply starts the
+  thread. It is the conversation the Slack import uses for that thread, so later
+  imported replies join it. Only the owner credential starts threads.
+- A message with a thread shows `↳ N replies in thread`. `>` opens the marked
+  message's thread (or the newest one loaded); `<` returns from a thread to its
+  message in the channel. `Ctrl+D` saves a durable draft before leaving a composer.
 - `a`: compose with attachments; `Ctrl+A` opens the picker while composing.
 - Space toggles files; Tab returns to the composer. `Ctrl+X` clears attachments.
 - `Ctrl+S`: record a demo reply or queue a live Telegram reply. Its account, recipient, thread, parent

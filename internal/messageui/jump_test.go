@@ -118,3 +118,69 @@ func TestEventErrorsRetryFromTheStart(t *testing.T) {
 		t.Fatalf("retry not scheduled from a fresh position: %d", m.eventSeq)
 	}
 }
+
+func key(s string) tea.KeyMsg {
+	switch s {
+	case "ctrl+s":
+		return tea.KeyMsg{Type: tea.KeyCtrlS}
+	}
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+}
+
+func TestReplyInSlackThreadThenOpenItAndReturn(t *testing.T) {
+	m, s, _ := harness(t)
+	drain(t, m, m.startJump(messages.Jump{Conversation: "demo-slack-release"}), 0)
+	root := m.current().Message
+	_, cmd := m.Update(key("t"))
+	if m.mode != "compose" || !m.inThread || cmd == nil {
+		t.Fatalf("t did not start a thread reply: mode=%s inThread=%v", m.mode, m.inThread)
+	}
+	if !strings.Contains(ansi.Strip(m.View()), "Replies in the thread under Sam's message") {
+		t.Fatalf("composer does not say where the reply goes:\n%s", ansi.Strip(m.View()))
+	}
+	m.input.SetValue("On it")
+	_, cmd = m.Update(key("ctrl+s"))
+	drain(t, m, cmd, 0)
+	if m.inThread || m.target != nil {
+		t.Fatal("thread reply state survived sending")
+	}
+	thread := "demo-slack-release/thread/" + root.NativeID
+	if th, e := s.Thread("owner", thread); e != nil || len(th.Messages) != 1 {
+		t.Fatalf("reply not in the thread conversation: %+v %v", th, e)
+	}
+	drain(t, m, m.startJump(messages.Jump{Conversation: "demo-slack-release"}), 0)
+	if !strings.Contains(ansi.Strip(m.View()), "↳ 1 reply in thread") {
+		t.Fatalf("no reply summary:\n%s", ansi.Strip(m.View()))
+	}
+	_, cmd = m.Update(key(">"))
+	drain(t, m, cmd, 0)
+	if it := m.current(); it == nil || it.Conversation.ID != thread {
+		t.Fatalf("> did not open the thread: %+v", it)
+	}
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "< back to the channel") || !strings.Contains(view, "On it") {
+		t.Fatalf("thread view:\n%s", view)
+	}
+	if _, cmd = m.Update(key("t")); cmd != nil || !strings.Contains(m.status, "Already in a thread") {
+		t.Fatalf("t inside a thread: %q", m.status)
+	}
+	_, cmd = m.Update(key("<"))
+	drain(t, m, cmd, 0)
+	if it := m.current(); it == nil || it.Conversation.ID != "demo-slack-release" || m.highlight != root.ID {
+		t.Fatalf("< did not return to the root message: %+v highlight=%q", it, m.highlight)
+	}
+}
+
+func TestThreadKeysOutsideSlackExplainThemselves(t *testing.T) {
+	m, _, _ := harness(t)
+	drain(t, m, m.startJump(messages.Jump{Conversation: "demo-telegram-robot"}), 0)
+	if cmd := m.startThreadReply(); cmd != nil || m.mode == "compose" || !strings.Contains(m.status, "Slack") {
+		t.Fatalf("t on Telegram: mode=%s status=%q", m.mode, m.status)
+	}
+	if cmd := m.openThread(); cmd != nil || m.status != "No thread here." {
+		t.Fatalf("> without threads: %q", m.status)
+	}
+	if cmd := m.openParent(); cmd != nil || m.status != "Not in a thread." {
+		t.Fatalf("< outside a thread: %q", m.status)
+	}
+}

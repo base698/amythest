@@ -2,9 +2,11 @@ package messageui
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/base698/amythest/internal/messages"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -144,4 +146,74 @@ func (m *Model) land() {
 	available := max(1, m.h-10)
 	start := max(0, at-2)
 	m.scroll = max(0, len(lines)-available-start)
+}
+
+// startThreadReply composes a reply in the Slack thread under the marked
+// message (or the conversation's latest), starting the thread if needed.
+func (m *Model) startThreadReply() tea.Cmd {
+	it := m.current()
+	if it == nil || it.Conversation.Service != "Slack" {
+		m.status = "Threads are a Slack feature."
+		return nil
+	}
+	if m.thread.Parent != nil && m.thread.Conversation.ID == it.Conversation.ID {
+		m.status = "Already in a thread · r replies here."
+		return nil
+	}
+	m.target = nil
+	m.startCompose()
+	if m.target == nil {
+		return nil
+	}
+	if m.highlight != "" && m.thread.Conversation.ID == it.Conversation.ID {
+		for _, msg := range m.thread.Messages {
+			if msg.ID == m.highlight {
+				m.target.Message = msg
+			}
+		}
+	}
+	m.inThread = true
+	return textarea.Blink
+}
+
+// openThread shows the thread under the marked message, or else under the
+// newest message that has one.
+func (m *Model) openThread() tea.Cmd {
+	it := m.current()
+	if it == nil || m.thread.Conversation.ID != it.Conversation.ID || len(m.thread.Replies) == 0 {
+		m.status = "No thread here."
+		return nil
+	}
+	pick := ""
+	if _, ok := m.thread.Replies[m.highlight]; ok {
+		pick = m.highlight
+	} else {
+		for i := len(m.thread.Messages) - 1; i >= 0 && pick == ""; i-- {
+			if _, ok := m.thread.Replies[m.thread.Messages[i].ID]; ok {
+				pick = m.thread.Messages[i].ID
+			}
+		}
+	}
+	if pick == "" {
+		m.status = "No thread under the loaded messages."
+		return nil
+	}
+	return m.startJump(messages.Jump{Conversation: m.thread.Replies[pick].Conversation})
+}
+
+// openParent goes from a thread back to its message in the channel.
+func (m *Model) openParent() tea.Cmd {
+	p := m.thread.Parent
+	if it := m.current(); p == nil || it == nil || m.thread.Conversation.ID != it.Conversation.ID {
+		m.status = "Not in a thread."
+		return nil
+	}
+	return m.startJump(messages.Jump{Conversation: p.Conversation, Message: p.Message})
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }

@@ -71,6 +71,7 @@ type Model struct {
 	review                    *messages.Draft
 	jump                      *messages.Jump // waiting for its conversation to load
 	highlight                 string         // the message a jump landed on
+	inThread                  bool           // the reply goes in a Slack thread under target
 	eventSeq                  int64
 }
 type itemsMsg struct {
@@ -226,6 +227,7 @@ func (m *Model) startCompose() {
 		copy.Message = parent
 	}
 	m.target = &copy
+	m.inThread = false
 	m.selected = append([]messages.Attachment{}, m.opts.Attachments...)
 	m.input.SetValue("")
 	m.input.Focus()
@@ -252,7 +254,7 @@ func (m *Model) send(save bool) tea.Cmd {
 		m.requestID = messages.ID()
 	}
 	m.requestBody = key
-	in := messages.DraftInput{RequestID: m.requestID, ReplyTo: m.target.Message.ID, Body: body, Attachments: ids}
+	in := messages.DraftInput{RequestID: m.requestID, ReplyTo: m.target.Message.ID, Body: body, Attachments: ids, Thread: m.inThread}
 	m.busy = true
 	return func() tea.Msg {
 		c, cancel := ctx()
@@ -393,6 +395,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.mode = "focus"
 		m.target = nil
+		m.inThread = false
 		m.review = nil
 		m.selected = nil
 		m.opts.Attachments = nil
@@ -625,6 +628,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.target = nil
 			m.startCompose()
 			return m, textarea.Blink
+		case "t":
+			return m, m.startThreadReply()
+		case ">":
+			return m, m.openThread()
+		case "<":
+			return m, m.openParent()
 		case "a":
 			if m.target == nil {
 				m.startCompose()
@@ -788,7 +797,10 @@ func (m *Model) View() string {
 	}
 	help := "r reply · l link note/task · C contact · / find · f service · Tab all · x trash · T view trash · D drafts · q close"
 	if it := m.current(); it != nil && it.Conversation.Service == "Slack" && !it.Conversation.Demo {
-		help = "r reply · m people in Slack · o open message · l link note/task · / find · f service · Tab all · D drafts · q close"
+		help = "r reply · t reply in thread · > open thread · m people · o open in Slack · l link · / find · Tab all · D drafts · q close"
+		if m.thread.Parent != nil && m.thread.Conversation.ID == it.Conversation.ID {
+			help = "r reply in thread · < channel · m people · o open in Slack · l link · / find · Tab all · D drafts · q close"
+		}
 	}
 	if m.mode == "people" {
 		help = "Type to find · ↑↓ choose · Enter open in Slack · Esc back"
@@ -890,6 +902,9 @@ func (m *Model) detailLines(w int) []string {
 		return nil
 	}
 	out := []string{bold.Render(cut(it.Conversation.Name, w)), quiet.Render(cut(messages.Destination(it.Conversation), w)), amber.Render(cut(it.Message.Reason, w)), ""}
+	if m.thread.Conversation.ID == it.Conversation.ID && m.thread.Parent != nil {
+		out = append(out[:3], quiet.Render(cut("Thread · < back to the channel", w)), "")
+	}
 	if m.thread.Conversation.ID != it.Conversation.ID {
 		return append(out, "Loading context…")
 	}
@@ -934,6 +949,9 @@ func (m *Model) threadLines(w int, find string) ([]string, int) {
 		for _, a := range msg.Attachments {
 			lines = append(lines, quiet.Render(cut("↳ "+a.Name+fmt.Sprintf(" (%d bytes)", a.Size), w)))
 		}
+		if r, ok := m.thread.Replies[msg.ID]; ok {
+			lines = append(lines, accent.Render(cut(fmt.Sprintf("  ↳ %s in thread", plural(r.Count, "reply", "replies")), w)))
+		}
 		lines = append(lines, "")
 	}
 	return lines, at
@@ -954,7 +972,12 @@ func (m *Model) composeLines(w int) []string {
 		if it.Conversation.Thread != "" {
 			where = "Posts in this Slack thread."
 		}
+		if m.inThread {
+			where = threadWhere(it)
+		}
 		out = append(out, wrap(where+" Text only; the queued message waits if its worker is offline.", w)...)
+	} else if m.inThread {
+		out = append(out, wrap(threadWhere(it), w)...)
 	}
 	if it.Conversation.Route.Provider == "imessage" {
 		out = append(out, wrap("Conversation reply; inline quotes are unavailable. Delivery is confirmed in Messages on your Mac.", w)...)
@@ -1031,4 +1054,8 @@ func (m *Model) draftView(h int) string {
 		lines = append(lines, "No drafts yet. Press r on a message to compose a reply.")
 	}
 	return fit(lines, h, m.w-2)
+}
+
+func threadWhere(it messages.Item) string {
+	return "Replies in the thread under " + messages.Plain(it.Message.Sender) + "'s message, starting it if needed."
 }

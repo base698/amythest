@@ -318,7 +318,11 @@ func (s *Store) Items(actor string, all bool, trashMode ...bool) ([]Item, error)
 func (s *Store) Thread(actor, conversation string) (Thread, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.thread(actor, conversation)
+	t, e := s.thread(actor, conversation)
+	if e != nil {
+		return t, e
+	}
+	return t, s.annotate(actor, &t)
 }
 func (s *Store) thread(actor, conversation string) (Thread, error) {
 	var out Thread
@@ -470,6 +474,11 @@ func (s *Store) Draft(actor string, in DraftInput) (Draft, error) {
 	c, e := getJSON[Conversation](s.db, "SELECT payload FROM conversations WHERE id=?", m.Conversation)
 	if e != nil {
 		return Draft{}, e
+	}
+	if in.Thread {
+		if c, e = s.startThread(actor, c, m); e != nil {
+			return Draft{}, e
+		}
 	}
 	d := Draft{ID: ID(), Actor: actor, Target: c, ReplyTo: m.ID, Body: in.Body, State: "draft", Created: s.now().UTC()}
 	seen := map[string]bool{}

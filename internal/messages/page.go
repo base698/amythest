@@ -70,5 +70,5 @@ func (s *Store) ThreadPage(actor, conversation string, p Page) (Thread, error) {
 	t.Messages = all[lo:hi]
 	t.HasBefore = lo > 0
 	t.HasAfter = hi < len(all)
-	return t, nil
+	return t, s.annotate(actor, &t)
 }
