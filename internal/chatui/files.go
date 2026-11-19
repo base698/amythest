@@ -317,11 +317,31 @@ func (m *Model) sendFiles(w *window, target messages.Message, paths []string, bo
 			}
 			ids = append(ids, a.ID)
 		}
-		d, e := m.api.Draft(c, messages.DraftInput{RequestID: messages.ID(), ReplyTo: target.ID, Body: body, Attachments: ids})
-		if e == nil {
-			d, e = m.api.Send(c, d.ID)
+		// Slack and Telegram take one file per message: send each on its
+		// own, the text with the first.
+		groups := [][]string{ids}
+		if p := w.conv.Route.Provider; (p == "slack" || p == "telegram") && len(ids) > 1 {
+			groups = nil
+			for _, id := range ids {
+				groups = append(groups, []string{id})
+			}
 		}
-		return sentMsg{conv: conv, draft: d, err: e}
+		var d messages.Draft
+		for i, g := range groups {
+			text := body
+			if i > 0 {
+				text = ""
+			}
+			var e error
+			d, e = m.api.Draft(c, messages.DraftInput{RequestID: messages.ID(), ReplyTo: target.ID, Body: text, Attachments: g})
+			if e == nil {
+				d, e = m.api.Send(c, d.ID)
+			}
+			if e != nil {
+				return sentMsg{conv: conv, draft: d, err: e}
+			}
+		}
+		return sentMsg{conv: conv, draft: d}
 	}
 }
 

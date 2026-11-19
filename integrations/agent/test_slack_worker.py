@@ -120,5 +120,90 @@ class SlackWorkerTests(unittest.TestCase):
         self.assertEqual(self.gateway.request.call_args.args[1]['state'], 'uncertain')
 
 
+class SlackFileTests(unittest.TestCase):
+    event = SlackWorkerTests.event
+    verify = SlackWorkerTests.verify
+
+    def setUp(self):
+        SlackWorkerTests.setUp(self)
+        import hashlib
+        self.data = b'\x89PNG\r\n\x1a\nchart'
+        fid = hashlib.sha256(b'chart.png\0' + self.data).hexdigest()
+        self.file = {'id': fid, 'name': 'chart.png', 'size': len(self.data), 'mime': 'image/png'}
+        self.config['upload_tool'], self.config['share_tool'] = w.file_tools(self.config['send_tool'])
+        self.share_args = {'channel_id': 'C789', 'initial_comment': 'Reviewed', 'thread_ts': '1795100000.123456'}
+        self.context.update(file=self.file, upload_arguments={'filename': 'chart.png', 'content_length': len(self.data)},
+                            arguments=self.share_args)
+        w.private_json(self.path, self.context)
+        self.gateway.request.side_effect = lambda path, data=None, binary=False: self.data if path.startswith('/connector/attachment') else {}
+        self.posted = []
+        self.upload_response = {'content': [{'type': 'text', 'text': json.dumps({'upload_url': 'https://files.slack.com/upload/v1/ABC', 'file_id': 'F0ABC12345'})}]}
+
+    def call(self, tool, args, kind='PreToolUse', response=None):
+        return w.guard(self.path, self.event(tool, args, kind, response), self.factory,
+                       poster=lambda url, data, mime: self.posted.append((url, data, mime)))
+
+    def upload(self, response=None):
+        self.call(self.config['upload_tool'], self.context['upload_arguments'])
+        self.call(self.config['upload_tool'], self.context['upload_arguments'], 'PostToolUse', response or self.upload_response)
+
+    def test_file_is_uploaded_by_the_guard_then_shared_once_exactly(self):
+        self.assertEqual(w.file_tools('mcp__x__slack_send_message'), ('mcp__x__slack_get_file_upload_url', 'mcp__x__slack_complete_file_upload'))
+        with self.assertRaises(ValueError): self.call(self.config['upload_tool'], self.context['upload_arguments'])
+        self.verify()
+        with self.assertRaises(ValueError): self.call(self.config['upload_tool'], {'filename': 'other.png', 'content_length': 3})
+        with self.assertRaises(ValueError): self.call(self.config['send_tool'], self.arguments)
+        with self.assertRaises(ValueError): self.call(self.config['share_tool'], dict(self.share_args, file_id='F0ABC12345'))
+        self.upload()
+        self.assertEqual(self.posted, [('https://files.slack.com/upload/v1/ABC', self.data, 'image/png')])
+        for change in ({'file_id': 'F0OTHER9999'}, {'channel_id': 'C000'}, {'initial_comment': 'edited'}, {'title': 'x'}):
+            with self.assertRaises(ValueError): self.call(self.config['share_tool'], {**self.share_args, 'file_id': 'F0ABC12345', **change})
+        out = self.call(self.config['share_tool'], dict(self.share_args, file_id='F0ABC12345'))
+        self.assertEqual(out['hookSpecificOutput']['permissionDecision'], 'allow')
+        with self.assertRaises(ValueError): self.call(self.config['share_tool'], dict(self.share_args, file_id='F0ABC12345'))
+        with self.assertRaises(ValueError): self.call(self.config['upload_tool'], self.context['upload_arguments'])
+
+    def test_bytes_go_only_to_slack_and_must_match_the_snapshot(self):
+        self.verify()
+        bad = {'content': [{'type': 'text', 'text': json.dumps({'upload_url': 'https://evil.example/upload', 'file_id': 'F0ABC12345'})}]}
+        with self.assertRaises(ValueError): self.upload(bad)
+        self.assertEqual(self.posted, [])
+        self.assertEqual(w.upload_target('upload_url: https://files.slack.com/upload/v1/X file_id: F0ABC12345'),
+                         ('https://files.slack.com/upload/v1/X', 'F0ABC12345'))
+        state = self.path.with_name('guard-state.json'); state.unlink()
+        self.verify()
+        self.gateway.request.side_effect = lambda path, data=None, binary=False: b'changed' if path.startswith('/connector/attachment') else {}
+        with self.assertRaises(ValueError): self.upload()
+        self.assertEqual(self.posted, [])
+
+    def test_sender_reports_a_share_as_submitted(self):
+        job = copy.deepcopy(self.job); job['draft']['attachments'] = [self.file]
+        def runner(args, prompt, cwd):
+            self.assertIn(self.config['upload_tool'], prompt); self.assertNotIn(self.config['send_tool'], prompt)
+            context = Path(cwd) / 'context.json'
+            def g(tool, a, kind='PreToolUse', response=None):
+                return w.guard(context, self.event(tool, a, kind, response), self.factory, poster=lambda *x: self.posted.append(x))
+            g(self.config['profile_tool'], {}, 'PostToolUse', self.profile)
+            g(self.config['upload_tool'], {'filename': 'chart.png', 'content_length': len(self.data)})
+            g(self.config['upload_tool'], {}, 'PostToolUse', self.upload_response)
+            share = dict(self.share_args, file_id='F0ABC12345')
+            g(self.config['share_tool'], share)
+            g(self.config['share_tool'], share, 'PostToolUse', {'content': [{'type': 'text', 'text': 'Shared file F0ABC12345 "chart.png": https://example.slack.com/files/U456/F0ABC12345/chart.png'}]})
+            return 0
+        with patch.object(subprocess, 'check_output', return_value='2.1.328'):
+            state, native, _ = w.ClaudeSender(self.config, 'http://localhost:8642', runner).invoke(job)
+        self.assertEqual((state, native), ('submitted', ''))
+        self.assertEqual(len(self.posted), 1)
+
+    def test_worker_allows_one_file_without_text(self):
+        journal = c.Journal(Path(self.tmp.name) / 'journal.db'); self.addCleanup(journal.db.close)
+        sender = Mock(); sender.invoke.return_value = ('submitted', '', 'ok')
+        worker = w.Worker(self.config, self.gateway, journal, sender)
+        job = copy.deepcopy(self.job); job['draft']['body'] = ''; job['draft']['attachments'] = [self.file]
+        worker.deliver(job); sender.invoke.assert_called_once()
+        job['draft']['attachments'] = [self.file, self.file]
+        worker.deliver(job); sender.invoke.assert_called_once()
+
+
 if __name__ == '__main__':
     unittest.main()

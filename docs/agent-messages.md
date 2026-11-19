@@ -135,8 +135,14 @@ Claude only for a claimed send. Imports still run separately with `sync`.
 
 In an imported Slack conversation, **r** composes a reply and **Ctrl+S** submits
 it. The composer shows whether it posts in a channel/DM or an existing thread.
-The current limit is text only, up to 5,000 characters. **D** shows delivery
-status. Starting a conversation with a new recipient is not implemented; **m**
+Text is limited to 5,000 characters. A message can carry one file (up to 5 MiB):
+Claude asks Slack for a signed upload URL with the queued name and size, the
+guard itself fetches the file from the gateway, checks it against the snapshot
+and posts it to Slack's own HTTPS host, and the one permitted side effect is
+sharing that exact file to the queued channel or thread with the queued text.
+The share returns the file, not the message timestamp, so its status is
+**submitted** (accepted, unconfirmed). The chat client sends several files as one
+message each. **D** shows delivery status. Starting a conversation with a new recipient is not implemented; **m**
 can open a person's Slack profile/DM in Slack itself.
 
 An explicitly submitted reply queues even while a previously registered,

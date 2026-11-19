@@ -187,8 +187,8 @@ func validateLive(d Draft) error {
 		if e := validateNativeConversation(d.Target); e != nil {
 			return e
 		}
-		if len(d.Attachments) != 0 {
-			return fault(400, "Slack currently supports text sends; open Slack for files")
+		if len(d.Attachments) > 1 {
+			return fault(400, "Slack sends one file per message")
 		}
 		if len([]rune(d.Body)) > 5000 {
 			return fault(400, "Slack text sends are limited to 5000 characters")
@@ -362,7 +362,9 @@ func (s *Store) Complete(r Receipt) (Draft, error) {
 	if r.State != "sent" && r.State != "failed" && r.State != "uncertain" && r.State != "submitted" {
 		return d, fault(400, "invalid delivery result")
 	}
-	if r.State == "submitted" && ((d.Target.Route.Provider != "imessage" && d.Target.Route.Provider != "outlook") || r.NativeID != "") {
+	// A Slack file share returns the file, not the message timestamp.
+	slackFile := d.Target.Route.Provider == "slack" && len(d.Attachments) > 0
+	if r.State == "submitted" && ((d.Target.Route.Provider != "imessage" && d.Target.Route.Provider != "outlook" && !slackFile) || r.NativeID != "") {
 		return d, fault(400, "submitted requires an unconfirmed provider handoff")
 	}
 	if r.State == "sent" && (d.Target.Route.Provider == "imessage" || d.Target.Route.Provider == "outlook") {
