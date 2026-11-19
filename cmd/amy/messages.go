@@ -366,7 +366,10 @@ func messageCommand(args []string) error {
 			return e
 		}
 		var m messages.Message
-		e = client.Do(ctx, "POST", "/ingest", in, &m)
+		// This case declared its own e above; report the gateway's answer here.
+		if e = client.Do(ctx, "POST", "/ingest", in, &m); e != nil {
+			return e
+		}
 		result = m
 	default:
 		return fmt.Errorf("unknown command %q; use focus, config, demo, serve, list, thread, draft, send, drafts, connectors, attach, attachment, grant, revoke, or ingest", op)
