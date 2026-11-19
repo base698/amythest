@@ -56,6 +56,10 @@ func Open(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = migrateOrder(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err = openSearch(db); err != nil {
 		db.Close()
 		return nil, err
@@ -183,7 +187,7 @@ func (s *Store) Ingest(in Ingress) (Message, error) {
 		m.Sender = "You"
 		m.Category, m.Reason = "Sent", "Your message in this conversation"
 	}
-	_, e = tx.Exec("INSERT INTO messages VALUES(?,?,?,?,?)", m.ID, c.ID, m.NativeID, m.At.Format(time.RFC3339Nano), encode(m))
+	_, e = tx.Exec("INSERT INTO messages VALUES(?,?,?,?,?)", m.ID, c.ID, m.NativeID, occurredKey(m.At), encode(m))
 	if e != nil {
 		return Message{}, e
 	}
@@ -211,48 +215,38 @@ func (s *Store) Items(actor string, all bool, trashMode ...bool) ([]Item, error)
 	if e != nil {
 		return nil, e
 	}
-	rows, e := s.db.Query("SELECT payload FROM messages ORDER BY rowid")
+	// The latest message per conversation comes from the index; only the
+	// messages that are shown are read and decoded.
+	activity, e := latestKeys(s.db, false)
 	if e != nil {
 		return nil, e
 	}
-	latest := map[string]Message{}
-	activity := map[string]Message{}
-	for rows.Next() {
-		var raw string
-		if e = rows.Scan(&raw); e != nil {
-			rows.Close()
-			return nil, e
-		}
-		var m Message
-		if e = json.Unmarshal([]byte(raw), &m); e != nil {
-			rows.Close()
-			return nil, e
-		}
-		if !m.Outgoing {
-			previous, exists := latest[m.Conversation]
-			if !exists || !m.At.Before(previous.At) {
-				latest[m.Conversation] = m
-			}
-		}
-		if previous, exists := activity[m.Conversation]; !exists || !m.At.Before(previous.At) {
-			activity[m.Conversation] = m
-		}
-	}
-	e = rows.Err()
-	rows.Close()
+	latest, e := latestKeys(s.db, true)
 	if e != nil {
 		return nil, e
 	}
 	out := []Item{}
-	for id, recent := range activity {
-		m, incoming := latest[id]
+	for id, recentKey := range activity {
+		key, incoming := latest[id]
 		if all || onlyTrash {
-			m = recent
+			key = recentKey
 		} else if !incoming {
 			continue
 		}
-		if trashed[m.Conversation] != onlyTrash {
+		if trashed[id] != onlyTrash {
 			continue
+		}
+		recentAt, _, e := splitOrderKey(recentKey)
+		if e != nil {
+			return nil, e
+		}
+		_, rowid, e := splitOrderKey(key)
+		if e != nil {
+			return nil, e
+		}
+		m, e := messageAt(s.db, rowid)
+		if e != nil {
+			return nil, e
 		}
 		if !all && !onlyTrash && (m.Handled || m.SnoozedUntil.After(s.now())) {
 			continue
@@ -264,7 +258,7 @@ func (s *Store) Items(actor string, all bool, trashMode ...bool) ([]Item, error)
 		if e != nil {
 			return nil, e
 		}
-		out = append(out, Item{Conversation: c, Message: m, LastActivity: recent.At})
+		out = append(out, Item{Conversation: c, Message: m, LastActivity: recentAt})
 	}
 	if all || onlyTrash {
 		rows, e := s.db.Query("SELECT payload FROM conversations")
@@ -335,7 +329,7 @@ func (s *Store) thread(actor, conversation string) (Thread, error) {
 	}
 	out.Conversation = s.named(c)
 	out.Messages = []Message{}
-	rows, e := s.db.Query("SELECT payload FROM messages WHERE conversation=? ORDER BY rowid", conversation)
+	rows, e := s.db.Query("SELECT payload FROM messages WHERE conversation=? ORDER BY occurred, rowid", conversation)
 	if e != nil {
 		return out, e
 	}
@@ -558,7 +552,7 @@ func (s *Store) Send(actor, id string) (Draft, error) {
 	// transport must use a durable outbox and represent uncertain delivery.
 	d.State = "simulated"
 	m := Message{ID: "reply-" + d.ID, NativeID: "reply-" + d.ID, Conversation: d.Target.ID, Sender: "You (simulated)", Body: d.Body, At: s.now().UTC(), Outgoing: true, ReplyTo: d.ReplyTo, Attachments: d.Attachments}
-	if _, e = tx.Exec("INSERT INTO messages VALUES(?,?,?,?,?)", m.ID, m.Conversation, m.NativeID, m.At.Format(time.RFC3339Nano), encode(m)); e != nil {
+	if _, e = tx.Exec("INSERT INTO messages VALUES(?,?,?,?,?)", m.ID, m.Conversation, m.NativeID, occurredKey(m.At), encode(m)); e != nil {
 		return d, e
 	}
 	parent, e := getJSON[Message](tx, "SELECT payload FROM messages WHERE id=?", d.ReplyTo)

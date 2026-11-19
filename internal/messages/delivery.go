@@ -407,7 +407,7 @@ func (s *Store) Complete(r Receipt) (Draft, error) {
 			}
 			m.ID, m.At = observed.ID, observed.At
 		}
-		if _, e = tx.Exec("INSERT INTO messages VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", m.ID, m.Conversation, m.NativeID, m.At.Format(time.RFC3339Nano), encode(m)); e != nil {
+		if _, e = tx.Exec("INSERT INTO messages VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", m.ID, m.Conversation, m.NativeID, occurredKey(m.At), encode(m)); e != nil {
 			return d, e
 		}
 		p, e := getJSON[Message](tx, "SELECT payload FROM messages WHERE id=?", d.ReplyTo)
