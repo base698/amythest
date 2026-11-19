@@ -67,7 +67,9 @@ def attachment_files(attachments,root=ATTACHMENTS):
     Stickers and files Messages has not downloaded are left out."""
     files,left=[],0
     for a in attachments or []:
-        if a.get('is_sticker'):
+        # Stickers, and the link previews Messages stores as attachments.
+        names=str(a.get('transfer_name') or '')+' '+str(a.get('filename') or '')
+        if a.get('is_sticker') or 'pluginPayloadAttachment' in names:
             continue
         raw=a.get('original_path') or a.get('filename') or ''
         path=Path(os.path.expanduser(str(raw))) if raw else None
@@ -88,7 +90,7 @@ def normalized(message,chat,account,root=None):
     if not chat or not valid_chat(chat['guid']):
         return None
     body=message.get('text') or ''
-    files,left=attachment_files(message.get('attachments'),root) if root else ([],len(message.get('attachments') or []))
+    files,left=attachment_files(message.get('attachments'),root) if root else attachment_files(message.get('attachments'),Path('/nonexistent'))
     if left:
         body+='\n[iMessage attachment · open in Messages on the Mac]'
     if not body and not files:

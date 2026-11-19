@@ -157,7 +157,8 @@ class IncomingFileTests(unittest.TestCase):
         attachments=[{'original_path':str(photo),'transfer_name':'IMG_1.HEIC','mime_type':'image/heic','missing':False,'is_sticker':False},
                      {'original_path':str(outside),'transfer_name':'secret.txt','missing':False,'is_sticker':False},
                      {'original_path':str(self.root/'ab'/'..'/'..'/'secret.txt'),'transfer_name':'x','missing':False},
-                     {'original_path':str(photo),'missing':True},{'original_path':str(photo),'is_sticker':True}]
+                     {'original_path':str(photo),'missing':True},{'original_path':str(photo),'is_sticker':True},
+                     {'original_path':str(self.root/'ab'/'1.pluginPayloadAttachment'),'transfer_name':'1.pluginPayloadAttachment','missing':False}]
         files,left=attachment_files(attachments,self.root)
         self.assertEqual(files,[{'path':str(photo),'name':'IMG_1.HEIC','mime':'image/heic'}]);self.assertEqual(left,3)
         message=dict(MESSAGE,text='',attachments=attachments)
