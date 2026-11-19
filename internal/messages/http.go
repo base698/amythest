@@ -13,7 +13,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,6 +25,9 @@ type Gateway struct {
 	ConnectorToken         string // Backwards-compatible Telegram credential.
 	ConnectorTokens        map[string]string
 	IRC                    *IRC
+
+	hubOnce sync.Once
+	hub     *hub
 }
 
 func Token(dir, name string) (string, error) {
@@ -101,13 +106,13 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		}
 		if actor == "connector" {
-			allowed := r.Method == "POST" && (r.URL.Path == "/connector/heartbeat" || r.URL.Path == "/connector/conversations" || r.URL.Path == "/connector/ingest" || r.URL.Path == "/connector/claim" || r.URL.Path == "/connector/complete" || r.URL.Path == "/connector/authorize") || r.Method == "GET" && r.URL.Path == "/connector/attachment"
+			allowed := r.Method == "POST" && (r.URL.Path == "/connector/heartbeat" || r.URL.Path == "/connector/conversations" || r.URL.Path == "/connector/ingest" || r.URL.Path == "/connector/attachments" || r.URL.Path == "/connector/claim" || r.URL.Path == "/connector/complete" || r.URL.Path == "/connector/authorize") || r.Method == "GET" && r.URL.Path == "/connector/attachment"
 			if !allowed {
 				http.Error(w, "connector operation required", 403)
 				return
 			}
 		} else if actor != "owner" {
-			allowed := r.Method == "GET" && (r.URL.Path == "/items" || r.URL.Path == "/thread" || r.URL.Path == "/drafts") || r.Method == "POST" && (r.URL.Path == "/drafts" || r.URL.Path == "/send")
+			allowed := r.Method == "GET" && (r.URL.Path == "/items" || r.URL.Path == "/conversations" || r.URL.Path == "/thread" || r.URL.Path == "/search" || r.URL.Path == "/message" || r.URL.Path == "/drafts") || r.Method == "POST" && (r.URL.Path == "/drafts" || r.URL.Path == "/send")
 			if !allowed {
 				http.Error(w, "owner credential required", 403)
 				return
@@ -127,6 +132,16 @@ func (g *Gateway) Handler() http.Handler {
 			write(w, result)
 		}
 	})
+}
+func queryLimit(v string) (int, error) {
+	if v == "" {
+		return 0, nil
+	}
+	n, e := strconv.Atoi(v)
+	if e != nil || n < 1 {
+		return 0, fault(400, "limit must be a positive number")
+	}
+	return n, nil
 }
 func write(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -213,6 +228,16 @@ func (g *Gateway) route(w http.ResponseWriter, r *http.Request, actor, provider 
 			g.IRC.Broadcast("reply-" + d.ID)
 		}
 		return d, e
+	case "POST /connector/attachments":
+		// A file that came with an incoming message, uploaded before it.
+		var in struct {
+			Name string `json:"name"`
+			Data []byte `json:"data"`
+		}
+		if e := decode(r, &in); e != nil {
+			return nil, e
+		}
+		return s.AddAttachment(in.Name, in.Data)
 	case "GET /connector/attachment":
 		q := r.URL.Query()
 		a, b, e := s.DeliveryAttachment(q.Get("account"), q.Get("draft"), q.Get("attempt"), q.Get("id"), provider)
@@ -222,10 +247,58 @@ func (g *Gateway) route(w http.ResponseWriter, r *http.Request, actor, provider 
 		w.Header().Set("Content-Type", a.MIME)
 		_, e = w.Write(b)
 		return nil, e
+	case "GET /conversations":
+		return s.Conversations(actor)
 	case "GET /items":
 		return s.Items(actor, r.URL.Query().Get("all") == "1", r.URL.Query().Get("trash") == "1")
 	case "GET /thread":
-		return s.Thread(actor, r.URL.Query().Get("conversation"))
+		q := r.URL.Query()
+		if !q.Has("around") && !q.Has("before") && !q.Has("after") && !q.Has("limit") {
+			return s.Thread(actor, q.Get("conversation"))
+		}
+		limit, e := queryLimit(q.Get("limit"))
+		if e != nil {
+			return nil, e
+		}
+		return s.ThreadPage(actor, q.Get("conversation"), Page{Around: q.Get("around"), Before: q.Get("before"), After: q.Get("after"), Limit: limit})
+	case "GET /message":
+		return s.Message(actor, r.URL.Query().Get("id"))
+	case "POST /jump":
+		var in Jump
+		if e := decode(r, &in); e != nil {
+			return nil, e
+		}
+		return g.Jump(in)
+	case "GET /events":
+		q := r.URL.Query()
+		since := int64(-1)
+		if v := q.Get("since"); v != "" {
+			n, e := strconv.ParseInt(v, 10, 64)
+			if e != nil || n < 0 {
+				return nil, fault(400, "since must be a sequence number")
+			}
+			since = n
+		}
+		wait := time.Duration(0)
+		if v := q.Get("wait"); v != "" {
+			n, e := strconv.Atoi(v)
+			if e != nil || n < 0 {
+				return nil, fault(400, "wait is whole seconds")
+			}
+			wait = time.Duration(n) * time.Second
+		}
+		l := Listener{Machine: q.Get("machine"), Pane: q.Get("pane")}
+		if len(l.Machine) > 200 || len(l.Pane) > 200 || l.Pane != Plain(l.Pane) || l.Machine != Plain(l.Machine) {
+			return nil, fault(400, "invalid machine or pane")
+		}
+		return g.events().poll(r.Context(), l, since, wait), nil
+	case "GET /search":
+		q := r.URL.Query()
+		limit, e := queryLimit(q.Get("limit"))
+		if e != nil {
+			return nil, e
+		}
+		return s.Search(actor, q.Get("q"), q.Get("conversation"), limit)
 	case "GET /drafts":
 		return s.Drafts(actor)
 	case "GET /attachments":

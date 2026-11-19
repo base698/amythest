@@ -56,6 +56,14 @@ func Open(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = migrateOrder(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err = openSearch(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db, now: time.Now}, nil
 }
 func (s *Store) Close() error { return s.db.Close() }
@@ -108,17 +116,63 @@ func (s *Store) Ingest(in Ingress) (Message, error) {
 	if m.SenderID != "" && (c.Route.Provider != "slack" || !slackSenderRE.MatchString(m.SenderID)) {
 		return Message{}, fault(400, "invalid sender ID")
 	}
-	if len(m.Attachments) != 0 {
-		return Message{}, fault(400, "incoming attachments are not supported by the demo ingress")
+	if len(m.Attachments) > 8 {
+		return Message{}, fault(400, "a message can carry up to 8 attachments")
 	}
 	tx, e := s.db.Begin()
 	if e != nil {
 		return Message{}, e
 	}
 	defer tx.Rollback()
+	// Incoming files were uploaded first; the stored record, not the
+	// sender's description, says what each one is.
+	for i, a := range m.Attachments {
+		stored, err := getJSON[Attachment](tx, "SELECT payload FROM attachments WHERE id=?", a.ID)
+		if err != nil {
+			return Message{}, fault(400, "unknown attachment; upload it before the message")
+		}
+		m.Attachments[i] = stored
+	}
 	// A provider ID is only unique within this account/conversation. Replays do not
 	// reopen handled messages or overwrite a previously pinned destination.
 	if old, e := getJSON[Message](tx, "SELECT payload FROM messages WHERE conversation=? AND native_id=?", c.ID, m.NativeID); e == nil {
+		// A connector's correction replaces only the text of its own message,
+		// in the same conversation and direction; nothing else changes.
+		if in.Correct && c.Route.Provider != "" {
+			stored, err := getJSON[Conversation](tx, "SELECT payload FROM conversations WHERE id=?", c.ID)
+			if err != nil {
+				return Message{}, err
+			}
+			if stored.Route != c.Route || old.Outgoing != m.Outgoing {
+				return Message{}, fault(409, "a correction must match the stored message")
+			}
+			if old.Body == m.Body {
+				return old, nil
+			}
+			old.Body = m.Body
+			if _, err = tx.Exec("UPDATE messages SET payload=? WHERE id=?", encode(old), old.ID); err != nil {
+				return Message{}, err
+			}
+			return old, tx.Commit()
+		}
+		// Files fetched after the message was first imported join it once,
+		// from the same connector route; nothing else changes.
+		if len(m.Attachments) > 0 && len(old.Attachments) == 0 && c.Route.Provider != "" {
+			stored, err := getJSON[Conversation](tx, "SELECT payload FROM conversations WHERE id=?", c.ID)
+			if err != nil {
+				return Message{}, err
+			}
+			if stored.Route == c.Route && old.Outgoing == m.Outgoing {
+				old.Attachments = m.Attachments
+				if _, err = tx.Exec("UPDATE messages SET payload=? WHERE id=?", encode(old), old.ID); err != nil {
+					return Message{}, err
+				}
+				if err = tx.Commit(); err != nil {
+					return Message{}, err
+				}
+				return old, nil
+			}
+		}
 		// Profile enrichment must not replace content, attention state or identity.
 		if c.Route.Provider == "slack" && m.SenderID != "" {
 			stored, err := getJSON[Conversation](tx, "SELECT payload FROM conversations WHERE id=?", c.ID)
@@ -139,6 +193,8 @@ func (s *Store) Ingest(in Ingress) (Message, error) {
 			return old, tx.Commit()
 		}
 		return old, nil
+	} else if in.Correct {
+		return Message{}, fault(404, "nothing to correct: the message was never imported")
 	}
 	h := sha256.Sum256([]byte(c.ID))
 	c.Channel = "#amy-" + hex.EncodeToString(h[:6])
@@ -179,7 +235,7 @@ func (s *Store) Ingest(in Ingress) (Message, error) {
 		m.Sender = "You"
 		m.Category, m.Reason = "Sent", "Your message in this conversation"
 	}
-	_, e = tx.Exec("INSERT INTO messages VALUES(?,?,?,?,?)", m.ID, c.ID, m.NativeID, m.At.Format(time.RFC3339Nano), encode(m))
+	_, e = tx.Exec("INSERT INTO messages VALUES(?,?,?,?,?)", m.ID, c.ID, m.NativeID, occurredKey(m.At), encode(m))
 	if e != nil {
 		return Message{}, e
 	}
@@ -207,48 +263,38 @@ func (s *Store) Items(actor string, all bool, trashMode ...bool) ([]Item, error)
 	if e != nil {
 		return nil, e
 	}
-	rows, e := s.db.Query("SELECT payload FROM messages ORDER BY rowid")
+	// The latest message per conversation comes from the index; only the
+	// messages that are shown are read and decoded.
+	activity, e := latestKeys(s.db, false)
 	if e != nil {
 		return nil, e
 	}
-	latest := map[string]Message{}
-	activity := map[string]Message{}
-	for rows.Next() {
-		var raw string
-		if e = rows.Scan(&raw); e != nil {
-			rows.Close()
-			return nil, e
-		}
-		var m Message
-		if e = json.Unmarshal([]byte(raw), &m); e != nil {
-			rows.Close()
-			return nil, e
-		}
-		if !m.Outgoing {
-			previous, exists := latest[m.Conversation]
-			if !exists || !m.At.Before(previous.At) {
-				latest[m.Conversation] = m
-			}
-		}
-		if previous, exists := activity[m.Conversation]; !exists || !m.At.Before(previous.At) {
-			activity[m.Conversation] = m
-		}
-	}
-	e = rows.Err()
-	rows.Close()
+	latest, e := latestKeys(s.db, true)
 	if e != nil {
 		return nil, e
 	}
 	out := []Item{}
-	for id, recent := range activity {
-		m, incoming := latest[id]
+	for id, recentKey := range activity {
+		key, incoming := latest[id]
 		if all || onlyTrash {
-			m = recent
+			key = recentKey
 		} else if !incoming {
 			continue
 		}
-		if trashed[m.Conversation] != onlyTrash {
+		if trashed[id] != onlyTrash {
 			continue
+		}
+		recentAt, _, e := splitOrderKey(recentKey)
+		if e != nil {
+			return nil, e
+		}
+		_, rowid, e := splitOrderKey(key)
+		if e != nil {
+			return nil, e
+		}
+		m, e := messageAt(s.db, rowid)
+		if e != nil {
+			return nil, e
 		}
 		if !all && !onlyTrash && (m.Handled || m.SnoozedUntil.After(s.now())) {
 			continue
@@ -260,7 +306,7 @@ func (s *Store) Items(actor string, all bool, trashMode ...bool) ([]Item, error)
 		if e != nil {
 			return nil, e
 		}
-		out = append(out, Item{Conversation: c, Message: m, LastActivity: recent.At})
+		out = append(out, Item{Conversation: c, Message: m, LastActivity: recentAt})
 	}
 	if all || onlyTrash {
 		rows, e := s.db.Query("SELECT payload FROM conversations")
@@ -314,7 +360,11 @@ func (s *Store) Items(actor string, all bool, trashMode ...bool) ([]Item, error)
 func (s *Store) Thread(actor, conversation string) (Thread, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.thread(actor, conversation)
+	t, e := s.thread(actor, conversation)
+	if e != nil {
+		return t, e
+	}
+	return t, s.annotate(actor, &t)
 }
 func (s *Store) thread(actor, conversation string) (Thread, error) {
 	var out Thread
@@ -327,7 +377,7 @@ func (s *Store) thread(actor, conversation string) (Thread, error) {
 	}
 	out.Conversation = s.named(c)
 	out.Messages = []Message{}
-	rows, e := s.db.Query("SELECT payload FROM messages WHERE conversation=? ORDER BY rowid", conversation)
+	rows, e := s.db.Query("SELECT payload FROM messages WHERE conversation=? ORDER BY occurred, rowid", conversation)
 	if e != nil {
 		return out, e
 	}
@@ -396,8 +446,8 @@ func (s *Store) AddAttachment(name string, data []byte) (Attachment, error) {
 	if e := s.db.QueryRow("SELECT coalesce(sum(length(data)),0) FROM attachments").Scan(&total); e != nil {
 		return a, e
 	}
-	if total+int64(len(data)) > 64<<20 {
-		return a, fault(409, "demo attachment storage is full (64 MiB)")
+	if total+int64(len(data)) > MaxAttachmentStore {
+		return a, fault(409, fmt.Sprintf("attachment storage is full (%d MiB)", MaxAttachmentStore>>20))
 	}
 	_, e := s.db.Exec("INSERT INTO attachments VALUES(?,?,?)", a.ID, encode(a), data)
 	return a, e
@@ -466,6 +516,11 @@ func (s *Store) Draft(actor string, in DraftInput) (Draft, error) {
 	c, e := getJSON[Conversation](s.db, "SELECT payload FROM conversations WHERE id=?", m.Conversation)
 	if e != nil {
 		return Draft{}, e
+	}
+	if in.Thread {
+		if c, e = s.startThread(actor, c, m); e != nil {
+			return Draft{}, e
+		}
 	}
 	d := Draft{ID: ID(), Actor: actor, Target: c, ReplyTo: m.ID, Body: in.Body, State: "draft", Created: s.now().UTC()}
 	seen := map[string]bool{}
@@ -545,7 +600,7 @@ func (s *Store) Send(actor, id string) (Draft, error) {
 	// transport must use a durable outbox and represent uncertain delivery.
 	d.State = "simulated"
 	m := Message{ID: "reply-" + d.ID, NativeID: "reply-" + d.ID, Conversation: d.Target.ID, Sender: "You (simulated)", Body: d.Body, At: s.now().UTC(), Outgoing: true, ReplyTo: d.ReplyTo, Attachments: d.Attachments}
-	if _, e = tx.Exec("INSERT INTO messages VALUES(?,?,?,?,?)", m.ID, m.Conversation, m.NativeID, m.At.Format(time.RFC3339Nano), encode(m)); e != nil {
+	if _, e = tx.Exec("INSERT INTO messages VALUES(?,?,?,?,?)", m.ID, m.Conversation, m.NativeID, occurredKey(m.At), encode(m)); e != nil {
 		return d, e
 	}
 	parent, e := getJSON[Message](tx, "SELECT payload FROM messages WHERE id=?", d.ReplyTo)
@@ -591,8 +646,28 @@ func (s *Store) Seed() error {
 		{Conversation{ID: "demo-slack-release", Service: "Slack", Account: "work (demo)", Name: "#release", Recipient: "#release", Thread: "Deployment review", Demo: true}, "Sam", "Please review the deployment fix when you have a moment."},
 	}
 	for i, x := range examples {
-		_, e := s.Ingest(Ingress{x.c, Message{NativeID: fmt.Sprintf("seed-%d", i), Sender: x.sender, Body: x.body, At: now.Add(-time.Duration(i+1) * 7 * time.Minute)}})
+		_, e := s.Ingest(Ingress{Conversation: x.c, Message: Message{NativeID: fmt.Sprintf("seed-%d", i), Sender: x.sender, Body: x.body, At: now.Add(-time.Duration(i+1) * 7 * time.Minute)}})
 		if e != nil {
+			return e
+		}
+	}
+	// Incoming pictures, so the clients have files to show.
+	pictures := []struct {
+		conv         int
+		name, sender string
+		body         string
+		data         []byte
+	}{
+		{0, "scope-trace.png", "Maya", "Here is the scope trace after the fix.", scopeTrace()},
+		{3, "error-rate.png", "Sam", "Error rate from this morning; the red bar is the bad deploy.", dashboard()},
+	}
+	for i, p := range pictures {
+		a, e := s.AddAttachment(p.name, p.data)
+		if e != nil {
+			return e
+		}
+		x := examples[p.conv]
+		if _, e = s.Ingest(Ingress{Conversation: x.c, Message: Message{NativeID: fmt.Sprintf("seed-picture-%d", i), Sender: p.sender, Body: p.body, Attachments: []Attachment{a}, At: now.Add(-time.Duration(i+1) * 3 * time.Minute)}}); e != nil {
 			return e
 		}
 	}

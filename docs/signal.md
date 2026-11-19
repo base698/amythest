@@ -74,8 +74,9 @@ its own gateway token; it cannot claim or complete Telegram deliveries.
 - Sent-message syncs from other linked devices appear as outgoing messages and
   update conversation recency without creating attention items.
 - View-once and disappearing messages are omitted from persistent focus.
-  Incoming file bytes, reactions, edits/deletes, and story replies
-  are not imported. Incoming files are marked for opening in Signal.
+  Reactions, edits/deletes, and story replies are not imported. Received files
+  (up to 5 MiB) come with their message from the files signal-cli saves under
+  the state directory's `account/attachments/`; larger ones are named instead.
 - Replies preserve the original author/timestamp quote. Attachments use the exact
   captured bytes and original filename; up to eight files, 5 MiB each, within the
   gateway's overall attachment quota.

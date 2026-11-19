@@ -24,7 +24,8 @@ workers replay receipts, never automatically repeat an ambiguous send.
 
 Replies need an imported conversation/message today. A first-contact composer
 for a new number or recipient is not yet implemented. Slack currently supports
-text replies to the selected channel, DM or existing thread.
+text replies to the selected channel, DM or existing thread, and starting a
+thread under a channel or DM message.
 
 The diagram uses generic examples and contains no account IDs, addresses,
 private hostnames or message content. Its JSON is a complete native canvas

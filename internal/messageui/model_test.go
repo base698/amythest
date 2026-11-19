@@ -68,6 +68,10 @@ func TestFocusRemainsUsableWithoutIRCAndAgentDraftCanBeReviewed(t *testing.T) {
 	if e := c.Focus(context.Background(), it.Message.ID, ""); e == nil {
 		t.Fatal("focus claimed an IRC client exists")
 	}
+	before, e := s.Thread("owner", it.Conversation.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
 	m.startCompose()
 	m.input.SetValue("A saved draft")
 	result := m.send(true)().(sentMsg)
@@ -76,7 +80,7 @@ func TestFocusRemainsUsableWithoutIRCAndAgentDraftCanBeReviewed(t *testing.T) {
 		t.Fatal("could not save draft without IRC")
 	}
 	th, e := s.Thread("owner", it.Conversation.ID)
-	if e != nil || len(th.Messages) != 1 {
+	if e != nil || len(th.Messages) != len(before.Messages) {
 		t.Fatal("saving a draft sent a reply")
 	}
 }

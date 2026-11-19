@@ -33,6 +33,9 @@ type Client struct {
 	IRCClient string `json:"irc_client,omitempty"`
 	IRCPane   string `json:"irc_pane,omitempty"`
 	SSH       *SSH   `json:"ssh,omitempty"`
+	// View is what plain `amy messages` (and Cmd+Shift+M) opens: "focus"
+	// (the queue, the default) or "chat" (the irssi-style client).
+	View string `json:"view,omitempty"`
 }
 type Server struct {
 	StateDir string `json:"state_dir"`

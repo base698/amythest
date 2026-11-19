@@ -65,6 +65,19 @@ GUIDs even for iMessage chats; the feeder additionally checks `service_name` and
 checks the configured services. It imports iMessage, SMS and RCS by default. Set `services` to a subset of
 `["iMessage", "SMS", "RCS"]` to narrow that scope.
 
+### Run in the background
+
+`scripts/install-imessage-service.sh` runs the connector at login under
+launchd, from a small signed app (`~/Applications/Amythest iMessage.app`) that
+stays the connector's parent so macOS attributes its access to that app. Grant
+it Full Disk Access once (System Settings → Privacy & Security → Full Disk
+Access), stop any copy running in a terminal, then
+`launchctl kickstart -k gui/$(id -u)/dev.amythest.imessage`. The first queued
+send asks to let it control Messages. Logs are in
+`~/.local/state/amythest-imessage/`. Connector updates keep the grant; the app
+is rebuilt, and needs the grant again, only when its launcher changes.
+`install-imessage-service.sh uninstall` stops and removes the agent.
+
 ## Behavior
 
 - The first run considers the latest `initial` messages per selected chat
@@ -73,8 +86,11 @@ checks the configured services. It imports iMessage, SMS and RCS by default. Set
 - Incoming and outgoing messages update the conversation's latest activity.
   Outgoing messages appear in the thread without creating attention items.
   Reactions, service messages, retracted messages and expirable
-  content are skipped. Incoming file bytes are not imported; the inbox points
-  you back to Messages for those files.
+  content are skipped. Received files that Messages has downloaded come with
+  their message, read from `~/Library/Messages/Attachments` only. HEIC photos,
+  and pictures over 5 MiB, are converted to JPEG (at most 2048 pixels) with
+  macOS `sips`. Stickers, files not downloaded yet, and other files over 5 MiB
+  point you back to Messages instead.
 - Replies target the original native chat GUID. Installed imsg 0.4 supports
   conversation replies, not inline reply quotes. The composer explains this.
 - One outbound file per reply, up to 5 MiB, uses the captured bytes and filename.

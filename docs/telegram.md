@@ -124,8 +124,10 @@ journalctl --user -u amythest-telegram.service --since '10 minutes ago'
 - One attachment per live Telegram reply, up to 5 MiB. Images are sent as original
   documents so the bytes and filename are preserved. Text allows 4096 UTF-16 units;
   a file caption allows 1024. Demo replies still support eight attachments.
-- Incoming attachments are named in focus and remain in Telegram; incoming binary
-  downloads, message edits/deletions, and read receipts are not synchronized yet.
+- Incoming photos and files up to 5 MiB are downloaded to the state directory's
+  `incoming/` folder, delivered with their message, then removed. Larger files
+  are named in the message and stay in Telegram. Message edits/deletions and read
+  receipts are not synchronized yet.
   Native outgoing messages update recency and appear in the thread without
   creating attention items. Saved Messages is handled specially for
   testing, and this connector's own replies are excluded from its attention queue.

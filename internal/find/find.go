@@ -37,7 +37,7 @@ func execRunner(ctx context.Context, name string, args ...string) ([]byte, error
 
 // Result is one line of the result list.
 type Result struct {
-	Group   string // "agents", "vault", "tickets" or "screen"
+	Group   string // "agents", "vault", "messages", "tickets" or "screen"
 	Kind    string // chat, commit, image, note, card, task, screen, …
 	Title   string
 	Snippet string
@@ -48,6 +48,8 @@ type Result struct {
 	Ref     string // agents: a commit's id
 	Pane    string // screen, or agents once located: the pane to go to
 	URL     string // where it opens in a browser, if anywhere
+	// messages: the conversation and message to open in Messages
+	Conversation, Message string
 }
 
 // Viewable reports whether the result is a thing an agent made (a commit, an

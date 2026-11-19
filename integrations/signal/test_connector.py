@@ -42,6 +42,9 @@ class FakeGateway:
             self.receipts.append(copy.deepcopy(data))
         if path=='/connector/ingest': self.events.append(data)
         return {}
+    async def ingest_async(self,event):
+        self.events.append(event)
+        return {}
 
 class SignalTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -56,6 +59,18 @@ class SignalTests(unittest.IsolatedAsyncioTestCase):
             event=envelope();event['dataMessage'][field]=value;self.assertIsNone(normalized(event,ACCOUNT))
         self.assertIsNone(normalized({'syncMessage':{'sentMessage':envelope()['dataMessage']}},ACCOUNT))
         self.connector.all_chats=False;self.connector.capture(envelope(True));self.assertEqual(self.journal.pending_inbox(),[])
+    async def test_received_files_ride_along_from_the_signal_folder(self):
+        files=Path(self.temp.name)/'attachments'
+        self.connector.files_dir=str(files)
+        env=envelope();env['dataMessage']['message']=''
+        env['dataMessage']['attachments']=[{'id':'AbC123.jpg','contentType':'image/jpeg','filename':None,'size':10},
+                                           {'id':'../escape','contentType':'image/png'},{'id':'Doc9','contentType':'application/pdf','filename':'../plan.pdf'}]
+        self.connector.capture(env);await self.connector.flush()
+        event=self.gateway.events[-1]
+        self.assertEqual(event['message']['body'],'')
+        self.assertEqual(event['files'],[{'path':str(files/'AbC123.jpg'),'name':'signal-AbC123.jpg'},{'path':str(files/'Doc9'),'name':'plan.pdf'}])
+        # Without the folder (an older setup) the note stays.
+        self.assertIn('open in Signal',normalized(env,ACCOUNT)['message']['body'])
     async def test_group_quote_file_exact_bytes(self):
         value=job(True);data=b'\x89PNG original image';name='wall.png';aid=hashlib.sha256(name.encode()+b'\0'+data).hexdigest()
         value['draft']['attachments']=[{'id':aid,'name':name,'size':len(data)}];self.gateway.data=data

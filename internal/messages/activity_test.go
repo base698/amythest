@@ -12,7 +12,7 @@ func TestConversationsSortByLatestInteraction(t *testing.T) {
 	newer := Conversation{ID: "newer", Service: "Telegram", Account: "test", Recipient: "two", Demo: true}
 	add := func(c Conversation, id, body string, at time.Time, outgoing bool) Message {
 		t.Helper()
-		m, err := s.Ingest(Ingress{c, Message{NativeID: id, Body: body, At: at, Outgoing: outgoing}})
+		m, err := s.Ingest(Ingress{Conversation: c, Message: Message{NativeID: id, Body: body, At: at, Outgoing: outgoing}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,7 +72,7 @@ func TestOutgoingSyncBeforeReceiptDoesNotDuplicateOrRedate(t *testing.T) {
 	if err != nil || job == nil {
 		t.Fatal(err)
 	}
-	observed, err := s.Ingest(Ingress{job.Draft.Target, Message{NativeID: "99", Body: d.Body, At: s.now().Add(-time.Second), Outgoing: true}})
+	observed, err := s.Ingest(Ingress{Conversation: job.Draft.Target, Message: Message{NativeID: "99", Body: d.Body, At: s.now().Add(-time.Second), Outgoing: true}})
 	if err != nil {
 		t.Fatal(err)
 	}

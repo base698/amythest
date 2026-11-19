@@ -88,9 +88,21 @@ func TestSlackLimitsScopeAndRevocation(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	b, e := s.AddAttachment("second.txt", []byte("more"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	// One file per Slack message.
+	one, e := s.Draft("owner", DraftInput{RequestID: ID(), ReplyTo: m.ID, Body: "file", Attachments: []string{a.ID}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.Send("owner", one.ID); e != nil {
+		t.Fatal("one file refused:", e)
+	}
 	for _, input := range []DraftInput{
 		{RequestID: ID(), ReplyTo: m.ID, Body: strings.Repeat("a", 5001)},
-		{RequestID: ID(), ReplyTo: m.ID, Body: "file", Attachments: []string{a.ID}},
+		{RequestID: ID(), ReplyTo: m.ID, Body: "files", Attachments: []string{a.ID, b.ID}},
 	} {
 		d, e := s.Draft("owner", input)
 		if e != nil {
@@ -129,5 +141,32 @@ func TestSlackLimitsScopeAndRevocation(t *testing.T) {
 	}
 	if _, e = s.Send("owner", d.ID); e == nil {
 		t.Fatal("outside-scope send queued")
+	}
+}
+
+func TestSlackFileShareIsSubmittedNotSent(t *testing.T) {
+	s := testStore(t)
+	m, c := slackFixture(t, s)
+	a, e := s.AddAttachment("chart.png", []byte("\x89PNG\r\n\x1a\nchart"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	d, e := s.Draft("owner", DraftInput{RequestID: ID(), ReplyTo: m.ID, Attachments: []string{a.ID}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if d, e = s.Send("owner", d.ID); e != nil || d.State != "queued" {
+		t.Fatal("file share not queued", e)
+	}
+	job, e := s.Claim(c.Account, c.Worker, "slack")
+	if e != nil || job == nil || len(job.Draft.Attachments) != 1 {
+		t.Fatal("claim", e)
+	}
+	if e = s.AuthorizeDelivery(c.Account, d.ID, job.Draft.Attempt, "slack"); e != nil {
+		t.Fatal(e)
+	}
+	r := Receipt{Provider: "slack", Account: c.Account, Draft: d.ID, Attempt: job.Draft.Attempt, State: "submitted"}
+	if d, e = s.Complete(r); e != nil || d.State != "submitted" {
+		t.Fatalf("submitted file share: %+v %v", d.State, e)
 	}
 }

@@ -45,22 +45,22 @@ def thread_id(message):
     return ''
 
 
-def normalized(message, account, chat_name, sender_name):
+def normalized(message, account, chat_name, sender_name, files=None):
     chat = str(message.chat_id)
     topic = thread_id(message)
     route = {'provider': 'telegram', 'account': str(account), 'chat': chat, 'thread': topic}
     body = message.raw_text or ''
-    if message.media:
+    if message.media and not files:
         file = message.file
         name = (getattr(file, 'name', None) or 'photo' if message.photo else getattr(file, 'name', None) or 'media')
         body += '\n[Telegram attachment: ' + str(name) + ' · open in Telegram]'
-    if not body:
+    if not body and not files:
         body = '[Telegram service message]'
     # Go's ingress bound is bytes, not Unicode code points.
     body = body.encode()[:20000].decode('utf-8', 'ignore')
     def clipped(value, size):
         return value.encode()[:size].decode('utf-8', 'ignore')
-    return {
+    event = {
         'conversation': {'id': 'telegram/' + str(account) + '/' + chat + '/' + topic,
                          'service': 'Telegram', 'account': str(account), 'name': clipped(chat_name, 300),
                          'recipient': chat, 'thread': topic, 'demo': False, 'route': route},
@@ -68,6 +68,9 @@ def normalized(message, account, chat_name, sender_name):
                     'outgoing': bool(getattr(message, 'out', False)) and chat != str(account),
                     'at': message.date.astimezone(dt.timezone.utc).isoformat().replace('+00:00', 'Z')}
     }
+    if files:
+        event['files'] = files
+    return event
 
 
 # Only definite provider rejections are retryable. All other exceptions after
@@ -81,8 +84,9 @@ DEFINITE_REJECTIONS = {
 
 
 class Connector:
-    def __init__(self, client, gateway, journal, account, chats, all_chats=False, send=False):
+    def __init__(self, client, gateway, journal, account, chats, all_chats=False, send=False, files_dir=None):
         self.client, self.gateway, self.journal = client, gateway, journal
+        self.files_dir = Path(files_dir) if files_dir else None
         self.account, self.chats = str(account), set(map(str, chats))
         self.all_chats, self.send = all_chats, send
         self.worker = str(uuid.uuid4())
@@ -110,10 +114,32 @@ class Connector:
                 return
             chat = await message.get_chat()
             sender = await message.get_sender()
+            files = await self.download(message)
             payload = normalized(message, self.account,
                                  'Saved Messages' if saved else utils.get_display_name(chat),
-                                 utils.get_display_name(sender) or 'Telegram')
+                                 utils.get_display_name(sender) or 'Telegram', files)
             self.journal.spool(payload)
+
+    async def download(self, message):
+        """Save a message's photo or file (up to 5 MB) for delivery with it."""
+        file = getattr(message, 'file', None)
+        if not self.files_dir or not getattr(message, 'media', None) or file is None:
+            return None
+        size = getattr(file, 'size', None) or 0
+        if size <= 0 or size > MAX_FILE:
+            return None
+        ext = getattr(file, 'ext', None) or ''
+        name = Path(str(getattr(file, 'name', None) or ('photo' if getattr(message, 'photo', None) else 'file') + ext)).name
+        name = ''.join(c for c in name if c.isprintable())[:200] or 'file' + ext
+        self.files_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = self.files_dir / (str(message.chat_id) + '-' + str(message.id) + ext)
+        try:
+            saved = await asyncio.wait_for(message.download_media(file=str(path)), 120)
+        except Exception:
+            return None  # the message still arrives, with the open-in-Telegram note
+        if not saved or not Path(saved).is_file():
+            return None
+        return [{'path': str(saved), 'name': name, 'staged': True}]
 
     async def flush(self):
         for receipt in self.journal.pending_receipts():
@@ -123,7 +149,7 @@ class Connector:
         for key, payload in self.journal.pending_inbox():
             if not self.accepts(payload['conversation']['route']['chat']):
                 continue
-            await self.gateway.call('/connector/ingest', payload)
+            await self.gateway.ingest_async(payload)
             self.journal.acknowledge(key)
             count += 1
             if count >= 100:
@@ -295,7 +321,8 @@ async def main(args):
         if not chats and not args.all_chats:
             raise ValueError('Choose --chat me, one or more --chat IDs, or --all-chats')
         gateway = Gateway(args.gateway, args.token_file)
-        connector = Connector(client, gateway, Journal(state / 'bridge.db'), me.id, chats, args.all_chats, args.send)
+        connector = Connector(client, gateway, Journal(state / 'bridge.db'), me.id, chats, args.all_chats, args.send,
+                              files_dir=state / 'incoming')
         async def incoming(event):
             try:
                 await connector.capture(event.message)

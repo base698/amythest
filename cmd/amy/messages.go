@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/base698/amythest/internal/apiclient"
+	"github.com/base698/amythest/internal/chatui"
 	"github.com/base698/amythest/internal/find"
 	"github.com/base698/amythest/internal/messageconfig"
 	"github.com/base698/amythest/internal/messages"
@@ -37,7 +38,8 @@ func runMessages(args []string) {
 }
 func messageCommand(args []string) error {
 	op := "focus"
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+	named := len(args) > 0 && !strings.HasPrefix(args[0], "-")
+	if named {
 		op = args[0]
 		args = args[1:]
 	}
@@ -68,13 +70,14 @@ func messageCommand(args []string) error {
 	allowSend := fs.Bool("send", false, "grant permission to send in this conversation")
 	allowFiles := fs.Bool("files", false, "grant permission to use attachments")
 	ircClient := fs.String("irc-client", "", "IRC nickname to focus")
+	gotoTarget := fs.String("goto", "", "open at msg:ID, conv:ID, focus, all or drafts (jump: send an open view there)")
 	pane := fs.String("irc-pane", os.Getenv("AMYTHEST_MESSAGES_IRC_PANE"), "herdr pane containing the IRC client")
 	ownPane := fs.Bool("pane", false, "toggle Messages in this Herdr App tab; close its pane on exit")
 	if e := fs.Parse(args); e != nil {
 		return e
 	}
 	owned := ""
-	if *ownPane && op == "focus" {
+	if *ownPane && (op == "focus" || op == "chat") {
 		var closed bool
 		var e error
 		owned, closed, e = wall.ToggleAppPane(os.Getenv("HC_TERMINAL_ID"), "messages", nil)
@@ -85,6 +88,9 @@ func messageCommand(args []string) error {
 	cfg, e := messageconfig.Load(*configFile)
 	if e != nil {
 		return e
+	}
+	if !named && cfg.Client.View == "chat" {
+		op = "chat"
 	}
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
@@ -202,7 +208,10 @@ func messageCommand(args []string) error {
 	var result any
 	switch op {
 	case "focus":
-		opts := messageui.Options{IRCClient: *ircClient, All: *all, Service: *service, Trash: *trash}
+		opts := messageui.Options{IRCClient: *ircClient, All: *all, Service: *service, Trash: *trash, Listener: messageListener(thisPane())}
+		if opts.Goto, e = parseGoto(*gotoTarget); e != nil {
+			return e
+		}
 		if *attachment != "" {
 			available, e := client.Attachments(ctx)
 			if e != nil {
@@ -227,6 +236,32 @@ func messageCommand(args []string) error {
 			opts.FocusPane = func() error { return find.Focus(target, nil) }
 		}
 		return showMessages(client, opts, owned)
+	case "chat":
+		opts := chatui.Options{Listener: messageListener(thisPane())}
+		if opts.Goto, e = parseGoto(*gotoTarget); e != nil {
+			return e
+		}
+		return showChat(client, opts, owned)
+	case "jump":
+		j, e := parseGoto(*gotoTarget)
+		if e != nil {
+			return e
+		}
+		if j == nil {
+			return fmt.Errorf("usage: amy messages jump -goto msg:ID|conv:ID|focus|all|drafts")
+		}
+		res, taken, e := sendJump(client, *j, "")
+		if e != nil {
+			return e
+		}
+		switch {
+		case taken:
+		case len(res.Listeners) > 0:
+			fmt.Fprintln(os.Stderr, "Sent to the Messages view open on", res.Listeners[0].Machine+"; none is open here.")
+		default:
+			fmt.Fprintln(os.Stderr, "No Messages view is open; the next one opened within 30s goes there.")
+		}
+		result = res
 	case "list":
 		if *trash {
 			var items []messages.Item
@@ -331,7 +366,10 @@ func messageCommand(args []string) error {
 			return e
 		}
 		var m messages.Message
-		e = client.Do(ctx, "POST", "/ingest", in, &m)
+		// This case declared its own e above; report the gateway's answer here.
+		if e = client.Do(ctx, "POST", "/ingest", in, &m); e != nil {
+			return e
+		}
 		result = m
 	default:
 		return fmt.Errorf("unknown command %q; use focus, config, demo, serve, list, thread, draft, send, drafts, connectors, attach, attachment, grant, revoke, or ingest", op)

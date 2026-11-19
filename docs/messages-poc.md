@@ -40,7 +40,14 @@ Back up the directory if retaining demo data. It is independent of the vault.
 - Up/down or j/k: choose a conversation; the right pane shows message context.
 - `r`: compose a reply to the selected message, or resume a paused composer.
 - `n`: start a new reply to the currently selected message (discards the paused
-  composer). `Ctrl+D` saves a durable draft before leaving a composer.
+  composer).
+- `t` (Slack): reply in the thread under the selected conversation's latest
+  message, or under the message a jump marked `▶`. The first reply starts the
+  thread. It is the conversation the Slack import uses for that thread, so later
+  imported replies join it. Only the owner credential starts threads.
+- A message with a thread shows `↳ N replies in thread`. `>` opens the marked
+  message's thread (or the newest one loaded); `<` returns from a thread to its
+  message in the channel. `Ctrl+D` saves a durable draft before leaving a composer.
 - `a`: compose with attachments; `Ctrl+A` opens the picker while composing.
 - Space toggles files; Tab returns to the composer. `Ctrl+X` clears attachments.
 - `Ctrl+S`: record a demo reply or queue a live Telegram reply. Its account, recipient, thread, parent
@@ -62,6 +69,84 @@ message. Reply, Don't miss, and Review are deterministic classifications; no
 message content is sent to an LLM. Ingesting and opening a message do not mark
 it handled. A successful simulated reply or live delivery receipt handles its original parent; a newer
 incoming message remains in focus.
+
+## Chat client (irssi-style)
+
+`amy messages chat` is an irssi-style client over the same gateway. Set
+`"view": "chat"` under `client` in `messages.json` to make plain `amy messages`
+(and so Cmd+Shift+M) open it; `amy messages focus` still opens the queue view.
+
+- Window 1 (home) is the attention queue with the selected conversation's
+  recent messages beside it. Up/Down choose, Enter opens it as a window,
+  typing filters the list, Esc clears the filter.
+- Ctrl+F lists every chat by service: channels, groups and direct chats, with
+  Slack threads under their channel. Typing filters, Left/Right fold a service,
+  Enter opens the chat as a window, Esc goes back. `/query NAME` opens a chat
+  directly, or this list filtered by NAME when nothing matches.
+- New messages light window 1 (or the chat's window, when open) in the status
+  bar's `[Act: 1!,3]`: plain for chatter, bold for a question or direct
+  message, `!` for Don't miss.
+- Alt+1…9 switch windows, Alt+A goes to the busiest, Ctrl+N/Ctrl+P cycle,
+  PgUp/PgDn scroll (PgUp at the top loads older messages).
+- In a chat window, text replies to the newest message from someone else. Each
+  message has a short `[ref]`: `/reply REF text` answers that one. In Slack,
+  `/thread REF text` replies in its thread (starting it), and `/thread REF`
+  opens the thread window. The input line's hint says where text will go.
+- A chat with no messages yet opens but cannot be written to: Amy only answers
+  existing messages so far.
+- Pasting or dropping file paths in a chat (copypasta's ⇧⌘⏎, a Finder drag,
+  `file://` links) attaches those files instead of typing the text; Ctrl+V
+  attaches the picture on the clipboard, or files copied in Finder. They show
+  above the input: Enter sends them with what you typed, Ctrl+X clears them.
+- `/attach [REF] PATH... [text]` sends files (up to 8, 5 MB each) with optional
+  text, as a reply like plain text or to REF; Tab completes paths. Files on
+  messages show as `[file TAG] name`: `/open TAG` saves to ~/Downloads and
+  opens it, `/save TAG [PATH]` only saves. PNG, JPEG and GIF pictures are drawn
+  under their message as the wall draws them (Kitty graphics, else coloured
+  blocks; `AMY_WALL_IMAGES=off` turns them off).
+- `/grant [DURATION] [files]` lets agents read and send in this conversation
+  (30 minutes by default, up to 24 hours) and shows its ID; `/revoke` ends it.
+- `/search WORDS` opens a results window; type a number to open that message.
+  `/lastlog WORDS` searches the current conversation.
+- `/done` and `/snooze` set attention, `/win N` and `/close` manage windows,
+  `/help` lists commands.
+- Jumps from amy find land here when this is the configured view.
+
+### Slack channels in the list
+
+Slack chats appear once a message from them is imported. To list every channel,
+private channel, DM and group DM you are in, add the read-only
+`mcp__claude_ai_Slack__slack_list_user_channels` tool to the account's
+`read_tools`, then run:
+
+```sh
+amy-agent-messages channels --name slack-NAME
+```
+
+It registers the chats without reading or sending messages. Run it again to
+pick up channels you join later.
+
+## Search and jumps
+
+The gateway keeps a full-text index of message text and senders. It is built
+when the gateway starts and stays current as messages arrive or change.
+
+- `amy find` (Cmd+Shift+F in the Herdr App) lists matching messages under
+  **Messages**. Enter or Tab opens the message: an open Messages view on this
+  machine moves to it and its pane comes forward. With none open, Messages opens
+  in the find pane at that message. The message is marked `▶` and scrolled into
+  view. Find leaves this group out when no messaging credential is configured.
+- `amy messages -goto msg:ID|conv:ID|focus|all|drafts` opens Messages there.
+- `amy messages jump -goto …` sends an open view there instead. With no view
+  open, the next one opened within 30 seconds goes there.
+- `GET /search?q=&conversation=&limit=` searches; all words must match and the
+  last is a prefix. Trash is excluded. The agent credential only searches
+  conversations it holds an active grant for.
+- `GET /thread?conversation=&around=|before=|after=&limit=` returns one page of
+  a conversation with `has_before`/`has_after`. Without those parameters
+  `/thread` returns the whole conversation as before.
+- `POST /jump` and `GET /events` (a long poll) are owner-only. Jumps live in
+  gateway memory for seconds and are not stored.
 
 ## Irssi
 
@@ -173,8 +258,8 @@ You can also add an image or pasted text to the shared attachment picker:
 printf '%s\n' 'Notes from the review' | ./bin/amy messages attach -stdin -name review.txt
 ```
 
-Attachments are immutable snapshots, up to 5 MiB each, eight per reply, and
-64 MiB total for this POC. The API never accepts server filesystem paths. To
+Attachments are immutable snapshots, up to 5 MiB each, eight per message, and
+2 GiB in total, sent and received. The API never accepts server filesystem paths. To
 save a received/stored attachment locally (existing output files are preserved):
 
 ```sh
@@ -249,8 +334,17 @@ Authenticated owner-only `POST /ingest` accepts a normalized event. For example:
 Save this as a fixture and run `amy messages ingest -file fixture.json`.
 Conversation IDs must include the provider/account/conversation/thread scope.
 Replays of the same provider ID within that conversation are deduplicated;
-changing a stored conversation's destination is rejected. Incoming attachment
-collection and message edits/deletes are not implemented yet.
+changing a stored conversation's destination is rejected. Message edits and
+deletes are not implemented yet.
+
+Received files come in with their messages. A connector uploads each one to
+`POST /connector/attachments` (its own credential), then names the returned
+IDs in the message's `attachments`; the gateway describes each file from its
+own store, not from the connector. Signal, Telegram and iMessage do this. A
+file that cannot be read or stored becomes a note in the message instead, and
+the message is still delivered. Slack files are not imported: the Slack import
+reads through Claude, which cannot carry file bytes. The demo seeds two
+messages with pictures.
 
 A conversation with `demo: false` can be ingested and drafted against. Sending
 requires a registered live connector and an immutable native route. The personal

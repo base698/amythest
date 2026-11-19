@@ -1,10 +1,10 @@
-package wall
+package termimg
 
-// diacritics are the combining marks that number the rows and columns of a
+// Diacritics are the combining marks that number the rows and columns of a
 // Kitty Unicode image placeholder: mark n means row or column n. The list is
-// fixed by the protocol (kitty's gen/rowcolumn-diacritics.txt) and must not be
+// fixed by the protocol (kitty's gen/rowcolumn-Diacritics.txt) and must not be
 // reordered.
-var diacritics = [...]rune{
+var Diacritics = [...]rune{
 	0x0305, 0x030D, 0x030E, 0x0310, 0x0312, 0x033D, 0x033E, 0x033F, 0x0346, 0x034A,
 	0x034B, 0x034C, 0x0350, 0x0351, 0x0352, 0x0357, 0x035B, 0x0363, 0x0364, 0x0365,
 	0x0366, 0x0367, 0x0368, 0x0369, 0x036A, 0x036B, 0x036C, 0x036D, 0x036E, 0x036F,
