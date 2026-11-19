@@ -44,3 +44,16 @@ func TestPurgeNeverCrossesOtherTaskForUnclosedContext(t *testing.T) {
 		t.Fatal("CRLF context", e, string(out))
 	}
 }
+
+func TestContextForTabIndentedTask(t *testing.T) {
+	body := "- Section\n\t- [ ] Nested task\n"
+	parsed, _, _ := ParseFile("n", "n.md", []byte(body))
+	updated, e := Annotate(body, parsed[0], "Review: evidence")
+	if e != nil {
+		t.Fatal(e)
+	}
+	parsed, _, _ = ParseFile("n", "n.md", []byte(updated))
+	if len(parsed) != 1 || len(parsed[0].Context) != 1 || parsed[0].Context[0] != "Review: evidence" {
+		t.Fatal("nested context lost", parsed)
+	}
+}
