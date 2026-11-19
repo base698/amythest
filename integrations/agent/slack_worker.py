@@ -74,12 +74,31 @@ def upload_target(response):
     return url, file_id
 
 
+def tls_context():
+    """Verified TLS that works with python.org's macOS Python too, which has
+    no certificate store of its own: certifi when installed, else the
+    system's bundle. Verification is never turned off."""
+    import ssl
+    default = ssl.get_default_verify_paths()
+    if default.cafile and os.path.exists(default.cafile) or default.capath and os.path.isdir(default.capath) and os.listdir(default.capath):
+        return ssl.create_default_context()
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        pass
+    for bundle in ('/etc/ssl/cert.pem', '/etc/ssl/certs/ca-certificates.crt'):
+        if os.path.exists(bundle):
+            return ssl.create_default_context(cafile=bundle)
+    return ssl.create_default_context()
+
+
 def post_file(url, data, mime, opener=None):
     import urllib.request
     req = urllib.request.Request(url, data=data, method='POST',
                                  headers={'Content-Type': mime or 'application/octet-stream', 'Content-Length': str(len(data))})
     from messaging_common import NoRedirect  # a redirect would carry the bytes elsewhere
-    opener = opener or urllib.request.build_opener(NoRedirect())
+    opener = opener or urllib.request.build_opener(NoRedirect(), urllib.request.HTTPSHandler(context=tls_context()))
     with opener.open(req, timeout=60) as res:
         if not 200 <= res.status < 300:
             raise ValueError('Slack refused the file upload')
@@ -454,13 +473,24 @@ class Worker:
 
 
 if __name__ == '__main__':
+    event = {}
     try:
         if len(sys.argv) != 3 or sys.argv[1] != 'hook':
             raise ValueError('Use amy-agent-messages watch or send-doctor')
         event = json.load(sys.stdin)
         print(json.dumps(guard(sys.argv[2], event)))
-    except Exception:
+    except Exception as error:
         # Exit 2 blocks the tool. Never log message bodies, credentials or raw
-        # provider errors to a model transcript.
+        # provider errors to a model transcript. The guard's own refusal
+        # reasons (fixed texts) go to a private log beside the worker state.
+        try:
+            reason = str(error) if isinstance(error, ValueError) else type(error).__name__
+            log = Path(sys.argv[2]).parent.parent / 'guard.log'
+            with open(log, 'a') as out:
+                os.chmod(log, 0o600)
+                out.write(time.strftime('%Y-%m-%dT%H:%M:%S') + ' ' + str(event.get('hook_event_name', '?'))
+                          + ' ' + str(event.get('tool_name') or '?').rsplit('__', 1)[-1] + ': ' + reason[:200] + '\n')
+        except Exception:
+            pass
         print('Slack delivery guard rejected this operation', file=sys.stderr)
         sys.exit(2)
