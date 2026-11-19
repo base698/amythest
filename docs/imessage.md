@@ -65,6 +65,19 @@ GUIDs even for iMessage chats; the feeder additionally checks `service_name` and
 checks the configured services. It imports iMessage, SMS and RCS by default. Set `services` to a subset of
 `["iMessage", "SMS", "RCS"]` to narrow that scope.
 
+### Run in the background
+
+`scripts/install-imessage-service.sh` runs the connector at login under
+launchd, from a small signed app (`~/Applications/Amythest iMessage.app`) that
+stays the connector's parent so macOS attributes its access to that app. Grant
+it Full Disk Access once (System Settings → Privacy & Security → Full Disk
+Access), stop any copy running in a terminal, then
+`launchctl kickstart -k gui/$(id -u)/dev.amythest.imessage`. The first queued
+send asks to let it control Messages. Logs are in
+`~/.local/state/amythest-imessage/`. Connector updates keep the grant; the app
+is rebuilt, and needs the grant again, only when its launcher changes.
+`install-imessage-service.sh uninstall` stops and removes the agent.
+
 ## Behavior
 
 - The first run considers the latest `initial` messages per selected chat
