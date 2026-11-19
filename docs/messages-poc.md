@@ -63,6 +63,28 @@ message content is sent to an LLM. Ingesting and opening a message do not mark
 it handled. A successful simulated reply or live delivery receipt handles its original parent; a newer
 incoming message remains in focus.
 
+## Search and jumps
+
+The gateway keeps a full-text index of message text and senders. It is built
+when the gateway starts and stays current as messages arrive or change.
+
+- `amy find` (Cmd+Shift+F in the Herdr App) lists matching messages under
+  **Messages**. Enter or Tab opens the message: an open Messages view on this
+  machine moves to it and its pane comes forward. With none open, Messages opens
+  in the find pane at that message. The message is marked `▶` and scrolled into
+  view. Find leaves this group out when no messaging credential is configured.
+- `amy messages -goto msg:ID|conv:ID|focus|all|drafts` opens Messages there.
+- `amy messages jump -goto …` sends an open view there instead. With no view
+  open, the next one opened within 30 seconds goes there.
+- `GET /search?q=&conversation=&limit=` searches; all words must match and the
+  last is a prefix. Trash is excluded. The agent credential only searches
+  conversations it holds an active grant for.
+- `GET /thread?conversation=&around=|before=|after=&limit=` returns one page of
+  a conversation with `has_before`/`has_after`. Without those parameters
+  `/thread` returns the whole conversation as before.
+- `POST /jump` and `GET /events` (a long poll) are owner-only. Jumps live in
+  gateway memory for seconds and are not stored.
+
 ## Irssi
 
 Install Irssi with Perl scripting support. In Irssi:

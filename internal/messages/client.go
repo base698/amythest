@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -64,6 +65,72 @@ func (c *Client) Items(ctx context.Context, all bool) ([]Item, error) {
 func (c *Client) Thread(ctx context.Context, id string) (Thread, error) {
 	var out Thread
 	e := c.Do(ctx, "GET", "/thread?conversation="+url.QueryEscape(id), nil, &out)
+	return out, e
+}
+
+// ThreadPage reads part of a conversation; see Store.ThreadPage.
+func (c *Client) ThreadPage(ctx context.Context, id string, p Page) (Thread, error) {
+	v := url.Values{"conversation": {id}}
+	if p.Around != "" {
+		v.Set("around", p.Around)
+	}
+	if p.Before != "" {
+		v.Set("before", p.Before)
+	}
+	if p.After != "" {
+		v.Set("after", p.After)
+	}
+	if p.Limit > 0 {
+		v.Set("limit", strconv.Itoa(p.Limit))
+	}
+	var out Thread
+	e := c.Do(ctx, "GET", "/thread?"+v.Encode(), nil, &out)
+	return out, e
+}
+
+// Search finds messages; conversation, when set, searches only that one.
+func (c *Client) Search(ctx context.Context, q, conversation string, limit int) ([]Hit, error) {
+	v := url.Values{"q": {q}}
+	if conversation != "" {
+		v.Set("conversation", conversation)
+	}
+	if limit > 0 {
+		v.Set("limit", strconv.Itoa(limit))
+	}
+	var out []Hit
+	e := c.Do(ctx, "GET", "/search?"+v.Encode(), nil, &out)
+	return out, e
+}
+
+// Message reads one message by ID.
+func (c *Client) Message(ctx context.Context, id string) (Message, error) {
+	var out Message
+	e := c.Do(ctx, "GET", "/message?id="+url.QueryEscape(id), nil, &out)
+	return out, e
+}
+
+// Jump asks open Messages views to show a message, conversation or section.
+func (c *Client) Jump(ctx context.Context, j Jump) (JumpResult, error) {
+	var out JumpResult
+	e := c.Do(ctx, "POST", "/jump", j, &out)
+	return out, e
+}
+
+// Events waits up to wait for events after since. since < 0 is a view that
+// has just opened: it receives a recent jump that no open view took.
+func (c *Client) Events(ctx context.Context, since int64, l Listener, wait time.Duration) (Events, error) {
+	v := url.Values{"wait": {strconv.Itoa(int(wait / time.Second))}}
+	if since >= 0 {
+		v.Set("since", strconv.FormatInt(since, 10))
+	}
+	if l.Machine != "" {
+		v.Set("machine", l.Machine)
+	}
+	if l.Pane != "" {
+		v.Set("pane", l.Pane)
+	}
+	var out Events
+	e := c.Do(ctx, "GET", "/events?"+v.Encode(), nil, &out)
 	return out, e
 }
 func (c *Client) Draft(ctx context.Context, in DraftInput) (Draft, error) {

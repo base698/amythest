@@ -56,6 +56,10 @@ func Open(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = openSearch(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db, now: time.Now}, nil
 }
 func (s *Store) Close() error { return s.db.Close() }

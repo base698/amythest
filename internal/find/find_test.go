@@ -3,6 +3,7 @@ package find
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -381,5 +382,43 @@ func TestSearchIncludesTicketsFromExternalTrackers(t *testing.T) {
 	settleAll(t, m, tea.KeyMsg{Type: tea.KeyDown}, tea.KeyMsg{Type: tea.KeyEnter})
 	if c := Chosen(m); c == nil || c.URL != "https://jira.example/browse/ROB-7" {
 		t.Fatalf("ticket choice: %+v", c)
+	}
+}
+
+func TestMessageResultsOpenInMessages(t *testing.T) {
+	api := &fakeAPI{}
+	var asked []string
+	search := func(_ context.Context, q string) ([]Result, error) {
+		asked = append(asked, q)
+		return []Result{{Group: "messages", Kind: "msg", Title: "Dana", Snippet: "deploy is blocked on the migration", Where: "Slack → #eng", Conversation: "slack/abc", Message: "m-1"}}, nil
+	}
+	m := open(t, api, Options{Messages: search})
+	typeText(t, m, "deploy")
+	if len(asked) == 0 || asked[len(asked)-1] != "deploy" {
+		t.Fatalf("messages asked: %v", asked)
+	}
+	view := m.View()
+	for _, want := range []string{"Messages", "deploy is blocked", "Slack → #eng", "enter: open in Messages", "1 results"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view lacks %q\n%s", want, view)
+		}
+	}
+	// Tab (its pane) also opens Messages: that is where a message lives.
+	settleAll(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	c := Chosen(m)
+	if c == nil || c.Message == nil || c.Message.Conversation != "slack/abc" || c.Message.Message != "m-1" || c.Pane != "" || c.URL != "" {
+		t.Fatalf("choice: %+v", c)
+	}
+}
+
+func TestMessagesUnavailableIsReportedNotFatal(t *testing.T) {
+	api := &fakeAPI{vault: []apiclient.VaultHit{{Slug: "a", Title: "deploy notes", Kind: "note", URL: "a"}}}
+	m := open(t, api, Options{Messages: func(context.Context, string) ([]Result, error) {
+		return nil, fmt.Errorf("messaging gateway unavailable")
+	}})
+	typeText(t, m, "deploy")
+	view := m.View()
+	if !strings.Contains(view, "deploy notes") || !strings.Contains(view, "messages: messaging gateway unavailable") {
+		t.Fatalf("view:\n%s", view)
 	}
 }

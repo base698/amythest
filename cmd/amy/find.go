@@ -64,6 +64,7 @@ func runFind(args []string) {
 	client := apiclient.New(cfg)
 
 	opts := find.Options{Query: strings.Join(fs.Args(), " "), Local: find.LocalCollector()}
+	opts.Messages = messageSearch()
 	if !*noScreens && os.Getenv("HC_TERMINAL_ID") != "" {
 		self := os.Getenv("HC_TERMINAL_ID")
 		opts.Screens = func() []find.Screen {
@@ -116,6 +117,14 @@ func runFind(args []string) {
 		err := showWall(client, "auto", wall.Options{Project: v.Project, Show: &wall.Want{Kind: v.Kind, Title: v.Title, Ref: v.Ref}}, pane)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	case choice.Message != nil:
+		// Messages takes over this pane when none is open, and closes it on
+		// exit, so there is nothing left to do afterwards.
+		if err := openMessagesAt(choice.Message, pane); err != nil {
+			fmt.Fprintln(os.Stderr, "find: could not open Messages:", err)
 			os.Exit(1)
 		}
 		return

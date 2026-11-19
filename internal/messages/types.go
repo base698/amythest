@@ -63,6 +63,9 @@ type Item struct {
 type Thread struct {
 	Conversation Conversation `json:"conversation"`
 	Messages     []Message    `json:"messages"`
+	// Set only on a page of a longer conversation (see Store.ThreadPage).
+	HasBefore bool `json:"has_before,omitempty"`
+	HasAfter  bool `json:"has_after,omitempty"`
 }
 type Draft struct {
 	ID            string       `json:"id"`

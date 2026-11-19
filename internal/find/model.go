@@ -20,16 +20,25 @@ type Options struct {
 	Query   string          // start with this query
 	Screens func() []Screen // reads open terminals; nil: that source is off
 	Tickets func() []Ticket // lists external trackers' tickets; nil: none configured
-	Local   string          // this machine's collector id
-	Now     func() time.Time
+	// Messages searches the messaging gateway; nil: messaging is not set up.
+	Messages func(ctx context.Context, query string) ([]Result, error)
+	Local    string // this machine's collector id
+	Now      func() time.Time
 }
 
 // Choice is what the person picked: a pane to go to, a thing an agent made
 // to show, or a web address.
 type Choice struct {
-	Pane string
-	View *View
-	URL  string
+	Pane    string
+	View    *View
+	URL     string
+	Message *MessageRef
+}
+
+// MessageRef is a message to open in Messages.
+type MessageRef struct {
+	Conversation string
+	Message      string
 }
 
 // View names something an agent made, for the wall to show.
@@ -58,6 +67,7 @@ type model struct {
 	tickets []Ticket
 
 	agents, vault, ticket, screen []Result
+	messages                      []Result
 	rows                          []Result // what is listed, in order
 	heads                         map[int]string
 	cursor, top                   int
@@ -82,6 +92,11 @@ type (
 		err  error
 	}
 	vaultMsg struct {
+		seq  int
+		hits []Result
+		err  error
+	}
+	messagesMsg struct {
 		seq  int
 		hits []Result
 		err  error
@@ -179,13 +194,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		q := m.query()
 		if len([]rune(q)) < 2 {
-			m.agents, m.vault, m.asked = nil, nil, ""
+			m.agents, m.vault, m.messages, m.asked = nil, nil, nil, ""
 			m.arrange()
 			return m, nil
 		}
 		m.pending += 2
 		seq := msg.seq
-		return m, tea.Batch(func() tea.Msg {
+		var fromMessages tea.Cmd
+		if m.o.Messages != nil {
+			m.pending++
+			fromMessages = func() tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancel()
+				hits, err := m.o.Messages(ctx, q)
+				return messagesMsg{seq: seq, hits: hits, err: err}
+			}
+		}
+		return m, tea.Batch(fromMessages, func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			hits, err := m.api.WorkSearch(ctx, q, workLimit)
@@ -219,6 +244,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errs["vault"] = msg.err.Error()
 		}
 		m.vault = msg.hits
+		m.arrange()
+		return m, nil
+	case messagesMsg:
+		m.pending--
+		if msg.seq != m.seq {
+			return m, nil
+		}
+		delete(m.errs, "messages")
+		if msg.err != nil {
+			m.errs["messages"] = msg.err.Error()
+		}
+		m.messages = msg.hits
 		m.arrange()
 		return m, nil
 	case locatedMsg:
@@ -294,6 +331,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // whose session is not known yet is looked up first.
 func (m *model) choose(r Result, looked bool) (tea.Model, tea.Cmd) {
 	switch {
+	case r.Group == "messages":
+		m.choice = &Choice{Message: &MessageRef{Conversation: r.Conversation, Message: r.Message}}
+		return m, m.finish()
 	case r.Viewable():
 		m.choice = &Choice{View: &View{Project: r.Project, Kind: r.Kind, Title: r.Title, Ref: r.Ref}}
 		return m, m.finish()
@@ -313,6 +353,8 @@ func (m *model) choose(r Result, looked bool) (tea.Model, tea.Cmd) {
 // toPane goes to the pane a result came from, if it is still open here.
 func (m *model) toPane(r Result, looked bool) (tea.Model, tea.Cmd) {
 	switch {
+	case r.Group == "messages":
+		return m.choose(r, looked)
 	case r.Pane != "":
 		m.choice = &Choice{Pane: r.Pane}
 		return m, m.finish()
@@ -379,7 +421,7 @@ func (m *model) arrange() {
 	for _, g := range []struct {
 		name string
 		rows []Result
-	}{{"Agents and what they made", m.agents}, {"Notes, cards and tasks", m.vault}, {"Tickets", m.ticket}, {"On screen in open terminals", m.screen}} {
+	}{{"Agents and what they made", m.agents}, {"Notes, cards and tasks", m.vault}, {"Messages", m.messages}, {"Tickets", m.ticket}, {"On screen in open terminals", m.screen}} {
 		if len(g.rows) == 0 {
 			continue
 		}
@@ -388,7 +430,7 @@ func (m *model) arrange() {
 	}
 	m.cursor = min(m.cursor, max(0, len(m.rows)-1))
 	for i, r := range m.rows {
-		if keep.Title != "" && r.Title == keep.Title && r.Group == keep.Group && r.Run == keep.Run && r.Pane == keep.Pane {
+		if keep.Title != "" && r.Title == keep.Title && r.Group == keep.Group && r.Run == keep.Run && r.Pane == keep.Pane && r.Message == keep.Message {
 			m.cursor = i
 		}
 	}
@@ -517,6 +559,8 @@ func (m *model) View() string {
 		// Say what Enter does for this result.
 		goes := ""
 		switch {
+		case r.Group == "messages":
+			goes = dim.Render("enter: open in Messages")
 		case r.Viewable() && r.Pane != "":
 			goes = dim.Render("enter: view · tab: ") + here.Render("● its pane")
 		case r.Viewable():
@@ -534,6 +578,9 @@ func (m *model) View() string {
 	}
 	if len(m.rows) == 0 {
 		msg := "Type to search notes, cards, tasks, what agents made and open terminals."
+		if m.o.Messages != nil {
+			msg = "Type to search notes, cards, tasks, messages, what agents made and open terminals."
+		}
 		if m.query() != "" && m.pending == 0 && m.asked == m.query() {
 			msg = "Nothing found."
 		}
@@ -552,7 +599,7 @@ func (m *model) View() string {
 		foot = m.note
 	case len(m.errs) > 0:
 		parts := []string{}
-		for _, k := range []string{"agents", "vault"} {
+		for _, k := range []string{"agents", "vault", "messages"} {
 			if e, ok := m.errs[k]; ok {
 				parts = append(parts, k+": "+e)
 			}
