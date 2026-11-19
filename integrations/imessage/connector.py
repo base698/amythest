@@ -58,21 +58,76 @@ class Source:
         return bool(row and row['guid']==message['guid'] and bool(row['is_from_me'])==bool(message.get('is_from_me')) and not any(row[k] for k in ('is_expirable','associated_message_type','is_system_message','is_service_message','date_retracted')))
 
 
-def normalized(message,chat,account):
+MAX_FILE=5<<20
+ATTACHMENTS=Path('~/Library/Messages/Attachments').expanduser()
+
+
+def attachment_files(attachments,root=ATTACHMENTS):
+    """Files Messages saved for a message, under its Attachments folder only.
+    Stickers and files Messages has not downloaded are left out."""
+    files,left=[],0
+    for a in attachments or []:
+        if a.get('is_sticker'):
+            continue
+        raw=a.get('original_path') or a.get('filename') or ''
+        path=Path(os.path.expanduser(str(raw))) if raw else None
+        try:
+            ok=bool(path) and not a.get('missing') and path.resolve().is_relative_to(root.resolve())
+        except (OSError,ValueError):
+            ok=False
+        if not ok:
+            left+=1
+            continue
+        name=Path(str(a.get('transfer_name') or path.name)).name
+        name=''.join(c for c in name if c.isprintable())[:200] or path.name
+        files.append({'path':str(path),'name':name,'mime':str(a.get('mime_type') or '')})
+    return files,left
+
+
+def normalized(message,chat,account,root=None):
     if not chat or not valid_chat(chat['guid']):
         return None
     body=message.get('text') or ''
-    if message.get('attachments'):
+    files,left=attachment_files(message.get('attachments'),root) if root else ([],len(message.get('attachments') or []))
+    if left:
         body+='\n[iMessage attachment · open in Messages on the Mac]'
-    if not body:
+    if not body and not files:
         return None
     guid=chat['guid']
-    return {'conversation':{'id':'imessage/'+hashlib.sha256((account+'\0'+guid).encode()).hexdigest(),
+    event={'conversation':{'id':'imessage/'+hashlib.sha256((account+'\0'+guid).encode()).hexdigest(),
         'service':'Messages','account':account,'recipient':guid,'thread':'','demo':False,
         'name':clipped(chat.get('name') or chat.get('identifier') or 'iMessage',300),
         'route':{'provider':'imessage','account':account,'chat':guid,'thread':''}},
         'message':{'native_id':message['guid'],'sender':clipped(message.get('sender') or 'iMessage',200),
                    'body':clipped(body,20000),'at':message['created_at'],'outgoing':bool(message.get('is_from_me'))}}
+    if files:
+        event['files']=files
+    return event
+
+
+def convert(file,folder,runner=subprocess.run):
+    """Make a picture something every client can show: HEIC photos, and any
+    picture over 5 MB, become a JPEG at most 2048 pixels on a side (sips is
+    part of macOS). Other files, and failed conversions, pass unchanged."""
+    path=Path(file['path'])
+    heic=path.suffix.lower() in ('.heic','.heif') or file.get('mime') in ('image/heic','image/heif')
+    try:
+        big=path.stat().st_size>MAX_FILE
+    except OSError:
+        return file
+    picture=heic or (file.get('mime','').startswith('image/') or path.suffix.lower() in ('.jpg','.jpeg','.png'))
+    if not picture or not (heic or big):
+        return file
+    folder.mkdir(mode=0o700,parents=True,exist_ok=True)
+    out=folder/(hashlib.sha256(str(path).encode()).hexdigest()[:16]+'.jpg')
+    try:
+        result=runner(['sips','-s','format','jpeg','-s','formatOptions','80','-Z','2048',str(path),'--out',str(out)],
+                      capture_output=True,timeout=60,check=False)
+    except (OSError,subprocess.SubprocessError):
+        return file
+    if result.returncode or not out.is_file():
+        return file
+    return {'path':str(out),'name':Path(file['name']).stem+'.jpg','staged':True}
 
 
 class Connector:
@@ -81,6 +136,9 @@ class Connector:
         self.chats,self.all_chats,self.send=set(chats),all_chats,send
         self.worker=str(uuid.uuid4())
         self.staging=Path(journal.db.execute("PRAGMA database_list").fetchone()[2]).parent/"outgoing"
+        self.incoming=self.staging.parent/"incoming"
+        self.attachments_root=ATTACHMENTS
+        self.convert=convert
         journal.bind_account('imessage/'+account)
 
     def accepts(self,guid):
@@ -90,8 +148,10 @@ class Connector:
         if self.source.retainable(message):
             chat=self.source.chat(message['chat_id'])
             if chat and self.accepts(chat['guid']):
-                event=normalized(message,chat,self.account)
+                event=normalized(message,chat,self.account,self.attachments_root)
                 if event:
+                    if event.get('files'):
+                        event['files']=[self.convert(f,self.incoming) for f in event['files']]
                     self.journal.spool(event)
         # Spooling commits before advancing: a crash can replay, never skip.
         if advance:
@@ -125,7 +185,7 @@ class Connector:
             self.journal.receipt(receipt,done=True)
         for key,event in self.journal.pending_inbox()[:100]:
             if self.accepts(event['conversation']['route']['chat']):
-                await self.gateway.call('/connector/ingest',event)
+                await self.gateway.ingest_async(event)
                 self.journal.acknowledge(key)
 
     async def deliver(self,job):

@@ -254,8 +254,8 @@ You can also add an image or pasted text to the shared attachment picker:
 printf '%s\n' 'Notes from the review' | ./bin/amy messages attach -stdin -name review.txt
 ```
 
-Attachments are immutable snapshots, up to 5 MiB each, eight per reply, and
-64 MiB total for this POC. The API never accepts server filesystem paths. To
+Attachments are immutable snapshots, up to 5 MiB each, eight per message, and
+2 GiB in total, sent and received. The API never accepts server filesystem paths. To
 save a received/stored attachment locally (existing output files are preserved):
 
 ```sh
@@ -330,8 +330,17 @@ Authenticated owner-only `POST /ingest` accepts a normalized event. For example:
 Save this as a fixture and run `amy messages ingest -file fixture.json`.
 Conversation IDs must include the provider/account/conversation/thread scope.
 Replays of the same provider ID within that conversation are deduplicated;
-changing a stored conversation's destination is rejected. Incoming attachment
-collection and message edits/deletes are not implemented yet.
+changing a stored conversation's destination is rejected. Message edits and
+deletes are not implemented yet.
+
+Received files come in with their messages. A connector uploads each one to
+`POST /connector/attachments` (its own credential), then names the returned
+IDs in the message's `attachments`; the gateway describes each file from its
+own store, not from the connector. Signal, Telegram and iMessage do this. A
+file that cannot be read or stored becomes a note in the message instead, and
+the message is still delivered. Slack files are not imported: the Slack import
+reads through Claude, which cannot carry file bytes. The demo seeds two
+messages with pictures.
 
 A conversation with `demo: false` can be ingested and drafted against. Sending
 requires a registered live connector and an immutable native route. The personal

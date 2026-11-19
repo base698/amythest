@@ -116,14 +116,23 @@ func (s *Store) Ingest(in Ingress) (Message, error) {
 	if m.SenderID != "" && (c.Route.Provider != "slack" || !slackSenderRE.MatchString(m.SenderID)) {
 		return Message{}, fault(400, "invalid sender ID")
 	}
-	if len(m.Attachments) != 0 {
-		return Message{}, fault(400, "incoming attachments are not supported by the demo ingress")
+	if len(m.Attachments) > 8 {
+		return Message{}, fault(400, "a message can carry up to 8 attachments")
 	}
 	tx, e := s.db.Begin()
 	if e != nil {
 		return Message{}, e
 	}
 	defer tx.Rollback()
+	// Incoming files were uploaded first; the stored record, not the
+	// sender's description, says what each one is.
+	for i, a := range m.Attachments {
+		stored, err := getJSON[Attachment](tx, "SELECT payload FROM attachments WHERE id=?", a.ID)
+		if err != nil {
+			return Message{}, fault(400, "unknown attachment; upload it before the message")
+		}
+		m.Attachments[i] = stored
+	}
 	// A provider ID is only unique within this account/conversation. Replays do not
 	// reopen handled messages or overwrite a previously pinned destination.
 	if old, e := getJSON[Message](tx, "SELECT payload FROM messages WHERE conversation=? AND native_id=?", c.ID, m.NativeID); e == nil {
@@ -398,8 +407,8 @@ func (s *Store) AddAttachment(name string, data []byte) (Attachment, error) {
 	if e := s.db.QueryRow("SELECT coalesce(sum(length(data)),0) FROM attachments").Scan(&total); e != nil {
 		return a, e
 	}
-	if total+int64(len(data)) > 64<<20 {
-		return a, fault(409, "demo attachment storage is full (64 MiB)")
+	if total+int64(len(data)) > MaxAttachmentStore {
+		return a, fault(409, fmt.Sprintf("attachment storage is full (%d MiB)", MaxAttachmentStore>>20))
 	}
 	_, e := s.db.Exec("INSERT INTO attachments VALUES(?,?,?)", a.ID, encode(a), data)
 	return a, e
@@ -600,6 +609,26 @@ func (s *Store) Seed() error {
 	for i, x := range examples {
 		_, e := s.Ingest(Ingress{x.c, Message{NativeID: fmt.Sprintf("seed-%d", i), Sender: x.sender, Body: x.body, At: now.Add(-time.Duration(i+1) * 7 * time.Minute)}})
 		if e != nil {
+			return e
+		}
+	}
+	// Incoming pictures, so the clients have files to show.
+	pictures := []struct {
+		conv         int
+		name, sender string
+		body         string
+		data         []byte
+	}{
+		{0, "scope-trace.png", "Maya", "Here is the scope trace after the fix.", scopeTrace()},
+		{3, "error-rate.png", "Sam", "Error rate from this morning; the red bar is the bad deploy.", dashboard()},
+	}
+	for i, p := range pictures {
+		a, e := s.AddAttachment(p.name, p.data)
+		if e != nil {
+			return e
+		}
+		x := examples[p.conv]
+		if _, e = s.Ingest(Ingress{x.c, Message{NativeID: fmt.Sprintf("seed-picture-%d", i), Sender: p.sender, Body: p.body, Attachments: []Attachment{a}, At: now.Add(-time.Duration(i+1) * 3 * time.Minute)}}); e != nil {
 			return e
 		}
 	}

@@ -73,8 +73,11 @@ checks the configured services. It imports iMessage, SMS and RCS by default. Set
 - Incoming and outgoing messages update the conversation's latest activity.
   Outgoing messages appear in the thread without creating attention items.
   Reactions, service messages, retracted messages and expirable
-  content are skipped. Incoming file bytes are not imported; the inbox points
-  you back to Messages for those files.
+  content are skipped. Received files that Messages has downloaded come with
+  their message, read from `~/Library/Messages/Attachments` only. HEIC photos,
+  and pictures over 5 MiB, are converted to JPEG (at most 2048 pixels) with
+  macOS `sips`. Stickers, files not downloaded yet, and other files over 5 MiB
+  point you back to Messages instead.
 - Replies target the original native chat GUID. Installed imsg 0.4 supports
   conversation replies, not inline reply quotes. The composer explains this.
 - One outbound file per reply, up to 5 MiB, uses the captured bytes and filename.

@@ -106,7 +106,7 @@ func (g *Gateway) Handler() http.Handler {
 			return
 		}
 		if actor == "connector" {
-			allowed := r.Method == "POST" && (r.URL.Path == "/connector/heartbeat" || r.URL.Path == "/connector/conversations" || r.URL.Path == "/connector/ingest" || r.URL.Path == "/connector/claim" || r.URL.Path == "/connector/complete" || r.URL.Path == "/connector/authorize") || r.Method == "GET" && r.URL.Path == "/connector/attachment"
+			allowed := r.Method == "POST" && (r.URL.Path == "/connector/heartbeat" || r.URL.Path == "/connector/conversations" || r.URL.Path == "/connector/ingest" || r.URL.Path == "/connector/attachments" || r.URL.Path == "/connector/claim" || r.URL.Path == "/connector/complete" || r.URL.Path == "/connector/authorize") || r.Method == "GET" && r.URL.Path == "/connector/attachment"
 			if !allowed {
 				http.Error(w, "connector operation required", 403)
 				return
@@ -228,6 +228,16 @@ func (g *Gateway) route(w http.ResponseWriter, r *http.Request, actor, provider 
 			g.IRC.Broadcast("reply-" + d.ID)
 		}
 		return d, e
+	case "POST /connector/attachments":
+		// A file that came with an incoming message, uploaded before it.
+		var in struct {
+			Name string `json:"name"`
+			Data []byte `json:"data"`
+		}
+		if e := decode(r, &in); e != nil {
+			return nil, e
+		}
+		return s.AddAttachment(in.Name, in.Data)
 	case "GET /connector/attachment":
 		q := r.URL.Query()
 		a, b, e := s.DeliveryAttachment(q.Get("account"), q.Get("draft"), q.Get("attempt"), q.Get("id"), provider)

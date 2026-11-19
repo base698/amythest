@@ -1,11 +1,14 @@
 """Private HTTP transport and durable connector journal shared by providers."""
 import asyncio
+import base64
 import json
+import urllib.error
 from pathlib import Path
 import sqlite3
 import urllib.request
 import urllib.parse
 MAX_FILE = 5 << 20
+MAX_FILES = 8
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -36,6 +39,54 @@ class Gateway:
 
     async def call(self, path, data=None, binary=False):
         return await asyncio.to_thread(self.request, path, data, binary)
+
+    def ingest(self, event):
+        """Deliver one journaled message, uploading its files first.
+
+        An event may list local files as event['files']: [{'path', 'name',
+        'staged'}]. Each is uploaded and attached; one the gateway refuses or
+        that cannot be read becomes a note in the message instead. Files the
+        connector staged itself are removed once the message is delivered.
+        Gateway outages raise, so the event stays in the journal."""
+        event = json.loads(json.dumps(event))
+        files = event.pop('files', None) or []
+        message = event['message']
+        attached, missing = [], []
+        for f in files:
+            if len(attached) >= MAX_FILES:
+                missing.append(f.get('name') or 'file')
+                continue
+            try:
+                path = Path(f['path'])
+                if not path.is_file() or path.stat().st_size > MAX_FILE or path.stat().st_size == 0:
+                    raise ValueError('unreadable or oversized file')
+                data = path.read_bytes()
+                attached.append(self.request('/connector/attachments', {'name': f.get('name') or path.name,
+                                                                        'data': base64.b64encode(data).decode()}))
+            except urllib.error.HTTPError as error:
+                if error.code >= 500:
+                    raise
+                missing.append(f.get('name') or 'file')
+            except urllib.error.URLError:
+                raise  # the gateway is unreachable: retry the whole message later
+            except (OSError, ValueError, KeyError):
+                missing.append(f.get('name') or 'file')
+        if missing:
+            note = '\n[not shown here: ' + ', '.join(str(n) for n in missing)[:500] + ']'
+            message['body'] = (message.get('body', '') + note).encode()[:20000].decode('utf-8', 'ignore')
+        if attached:
+            message['attachments'] = attached
+        result = self.request('/connector/ingest', event)
+        for f in files:
+            if f.get('staged'):
+                try:
+                    Path(f['path']).unlink()
+                except OSError:
+                    pass
+        return result
+
+    async def ingest_async(self, event):
+        return await asyncio.to_thread(self.ingest, event)
 
 
 class Journal:

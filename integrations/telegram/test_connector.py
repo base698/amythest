@@ -48,6 +48,10 @@ class FakeGateway:
             self.receipts.append(dict(data))
         if path == '/connector/ingest':
             self.events.append(data)
+        return {}
+
+    async def ingest_async(self, event):
+        self.events.append(event)
         return {'ok': True}
 
 
@@ -163,6 +167,26 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
         await self.connector.capture(message)
         await self.connector.flush()
         self.assertTrue(self.gateway.events[0]['message']['outgoing'])
+
+    async def test_photos_download_for_delivery_and_large_files_keep_the_note(self):
+        async def entity():return SimpleNamespace(first_name='Test',last_name='Contact')
+        folder = Path(self.temp.name) / 'incoming'
+        self.connector.files_dir = folder
+        async def download_media(file):
+            Path(file).write_bytes(b'jpg'); return file
+        photo = SimpleNamespace(chat_id=-100456, id=70, raw_text='', media=True, photo=True,
+                                file=SimpleNamespace(size=3, ext='.jpg', name=None), download_media=download_media,
+                                date=dt.datetime.now(dt.timezone.utc), reply_to=None, out=False, get_chat=entity, get_sender=entity)
+        await self.connector.capture(photo)
+        await self.connector.flush()
+        event = self.gateway.events[-1]
+        self.assertEqual(event['message']['body'], '')
+        self.assertEqual(event['files'], [{'path': str(folder / '-100456-70.jpg'), 'name': 'photo.jpg', 'staged': True}])
+        big = SimpleNamespace(**{**photo.__dict__, 'id': 71, 'file': SimpleNamespace(size=6 << 20, ext='.mp4', name='talk.mp4')})
+        await self.connector.capture(big)
+        await self.connector.flush()
+        self.assertNotIn('files', self.gateway.events[-1])
+        self.assertIn('talk.mp4 · open in Telegram', self.gateway.events[-1]['message']['body'])
 
 
 if __name__ == '__main__':

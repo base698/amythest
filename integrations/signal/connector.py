@@ -41,7 +41,26 @@ def clipped(text, size):
     return str(text).encode()[:size].decode('utf-8', 'ignore')
 
 
-def normalized(envelope, account, names=None):
+EXTENSIONS = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp',
+              'image/heic': '.heic', 'video/mp4': '.mp4', 'audio/aac': '.aac', 'application/pdf': '.pdf'}
+
+
+def attachment_files(attachments, files_dir):
+    """The files signal-cli saved for a message: files_dir/<attachment id>."""
+    out = []
+    for a in attachments or []:
+        ident = str(a.get('id') or '')
+        if not ident or '/' in ident or ident.startswith('.'):
+            continue
+        name = Path(str(a.get('filename') or '')).name
+        name = ''.join(c for c in name if c.isprintable())[:200]
+        if not name:
+            name = 'signal-' + ident.split('.')[0][:8] + EXTENSIONS.get(str(a.get('contentType') or ''), '')
+        out.append({'path': str(Path(files_dir) / ident), 'name': name})
+    return out
+
+
+def normalized(envelope, account, names=None, files_dir=None):
     sent = (envelope.get('syncMessage') or {}).get('sentMessage')
     outgoing = bool(sent)
     message = sent or envelope.get('dataMessage') or {}
@@ -53,9 +72,10 @@ def normalized(envelope, account, names=None):
     if not author or not canonical_uuid(author) or (outgoing and author != account) or (not outgoing and author == account):
         return None
     body = message.get('message') or ''
-    if message.get('attachments'):
+    files = attachment_files(message.get('attachments'), files_dir) if files_dir else []
+    if message.get('attachments') and not files:
         body += '\n[Signal attachment · open in Signal]'
-    if not body:
+    if not body and not files:
         return None
     group = message.get('groupInfo') or {}
     destination = message.get('destinationUuid') if outgoing else author
@@ -68,7 +88,7 @@ def normalized(envelope, account, names=None):
     if timestamp <= 0:
         raise ValueError('Invalid Signal timestamp')
     name = (names or {}).get(chat) or group.get('groupName') or (None if outgoing else envelope.get('sourceName')) or chat
-    return {
+    event = {
         'conversation': {'id': 'signal/' + hashlib.sha256((account+'\0'+chat).encode()).hexdigest(),
                          'service': 'Signal', 'account': account, 'recipient': chat, 'thread': '',
                          'name': clipped(name, 300), 'demo': False,
@@ -79,6 +99,9 @@ def normalized(envelope, account, names=None):
                     'body': clipped(body, 20000),
                     'at': dt.datetime.fromtimestamp(timestamp/1000, dt.timezone.utc).isoformat().replace('+00:00','Z')}
     }
+    if files:
+        event['files'] = files
+    return event
 
 
 class RPC:
@@ -88,7 +111,7 @@ class RPC:
 
     async def start(self):
         self.proc = await asyncio.create_subprocess_exec(self.binary, '--data-dir', self.directory,
-            '-a', self.account, 'jsonRpc', '--receive-mode', 'manual', '--ignore-attachments',
+            '-a', self.account, 'jsonRpc', '--receive-mode', 'manual',
             '--ignore-stories', '--ignore-avatars', '--ignore-stickers',
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL, limit=8 << 20)
@@ -141,8 +164,9 @@ class RPC:
 
 
 class Connector:
-    def __init__(self, rpc, gateway, journal, account, chats=(), all_chats=False, send=False):
+    def __init__(self, rpc, gateway, journal, account, chats=(), all_chats=False, send=False, files_dir=None):
         self.rpc, self.gateway, self.journal, self.account = rpc, gateway, journal, account
+        self.files_dir = files_dir
         self.chats, self.all_chats, self.send = set(chats), all_chats, send
         self.worker, self.names = str(uuid.uuid4()), {}
         self.directory_at = 0
@@ -152,7 +176,7 @@ class Connector:
         return self.all_chats or chat in self.chats
 
     def capture(self, envelope):
-        event = normalized(envelope, self.account, self.names)
+        event = normalized(envelope, self.account, self.names, self.files_dir)
         if event and self.accepts(event['conversation']['route']['chat']):
             self.journal.spool(event)
 
@@ -189,7 +213,7 @@ class Connector:
             self.journal.receipt(receipt, done=True)
         for key, event in self.journal.pending_inbox()[:100]:
             if self.accepts(event['conversation']['route']['chat']):
-                await self.gateway.call('/connector/ingest', event)
+                await self.gateway.ingest_async(event)
                 self.journal.acknowledge(key)
 
     async def deliver(self, job):
@@ -333,7 +357,9 @@ async def main(args, config_path, whole, cfg):
     if not cfg['account'] or not canonical_uuid(cfg['account']):
         raise ValueError('Link Signal first with amy-signal login')
     journal = Journal(state/'bridge.db')
-    connector = Connector(None,Gateway(cfg['gateway'],cfg['token_file']),journal,cfg['account'],cfg['chats'],cfg['all_chats'],cfg['send'])
+    # signal-cli saves received files under its data directory.
+    connector = Connector(None,Gateway(cfg['gateway'],cfg['token_file']),journal,cfg['account'],cfg['chats'],cfg['all_chats'],cfg['send'],
+                          files_dir=str(state/'account'/'attachments'))
     rpc = RPC(cfg['binary'],str(state/'account'),cfg['account'],connector.capture)
     connector.rpc = rpc
     await rpc.start()

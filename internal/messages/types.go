@@ -13,6 +13,9 @@ import (
 
 const MaxAttachment = 5 << 20
 
+// MaxAttachmentStore bounds all stored files, sent and received.
+const MaxAttachmentStore = 2 << 30
+
 type Conversation struct {
 	ID        string `json:"id"`
 	Service   string `json:"service"`
