@@ -30,6 +30,7 @@ type API interface {
 	Download(context.Context, string) ([]byte, error)
 	Grant(context.Context, messages.Grant) error
 	Revoke(context.Context, string) error
+	Drafts(context.Context) ([]messages.Draft, error)
 }
 
 type Options struct {
@@ -79,7 +80,8 @@ type Model struct {
 	homeSel   int
 	previews  map[string]*preview
 	br        browser
-	pics      map[string]*pic // attachment ID -> picture
+	pics      map[string]*pic   // attachment ID -> picture
+	queued    map[string]string // queued draft ID -> conversation, until delivered
 	nextImage int
 }
 
@@ -150,7 +152,7 @@ func New(api API, o Options) *Model {
 	in.Focus()
 	m := &Model{api: api, o: o, input: in, seen: map[string]time.Time{}, known: map[string]messages.Item{}, eventSeq: -1,
 		previews: map[string]*preview{}, br: browser{collapsed: map[string]bool{}},
-		pics: map[string]*pic{}, nextImage: 1 + os.Getpid()%1000*1000}
+		pics: map[string]*pic{}, queued: map[string]string{}, nextImage: 1 + os.Getpid()%1000*1000}
 	m.wins = []*window{{kind: kindStatus, refs: map[string]string{}, byRef: map[string]string{}}}
 	if o.EventsAfter > 0 {
 		m.eventSeq = o.EventsAfter
@@ -278,7 +280,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.w, m.h = x.Width, x.Height
 		m.input.Width = max(10, m.w-len(m.prompt())-2)
 	case tickMsg:
-		return m, m.poll()
+		return m, tea.Batch(m.poll(), m.checkDrafts())
+	case draftsMsg:
+		return m, m.onDrafts(x)
 	case itemsMsg:
 		return m, tea.Batch(m.onItems(x), tea.Tick(pollEvery, func(time.Time) tea.Msg { return tickMsg{} }))
 	case pageMsg:
@@ -292,7 +296,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			w.note(m.o.Now(), "-!- Not sent: %v", x.err)
 			return m, nil
 		}
-		w.note(m.o.Now(), "-!- %s", messages.DeliveryStatus(x.draft))
+		if s := x.draft.State; s == "queued" || s == "sending" {
+			m.queued[x.draft.ID] = x.conv
+			w.note(m.o.Now(), "-!- Queued for %s; it will say here when it goes out.", x.draft.Target.Service)
+		} else {
+			w.note(m.o.Now(), "-!- %s", messages.DeliveryStatus(x.draft))
+		}
 		if x.thread && x.draft.Target.ID != x.conv {
 			// The reply went to the thread's own conversation; count it here.
 			r := w.replies[x.draft.ReplyTo]
@@ -931,4 +940,50 @@ func (m *Model) bodyHeight() int {
 		return max(1, m.h-4)
 	}
 	return max(1, m.h-3)
+}
+
+type draftsMsg struct {
+	drafts []messages.Draft
+	err    error
+}
+
+// checkDrafts asks how queued messages are doing, while any are.
+func (m *Model) checkDrafts() tea.Cmd {
+	if len(m.queued) == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		c, cancel := ctx()
+		defer cancel()
+		ds, e := m.api.Drafts(c)
+		return draftsMsg{ds, e}
+	}
+}
+
+// onDrafts reports each queued message once it is sent, handed over or fails.
+func (m *Model) onDrafts(x draftsMsg) tea.Cmd {
+	if x.err != nil {
+		return nil
+	}
+	var cmds []tea.Cmd
+	for _, d := range x.drafts {
+		conv, ok := m.queued[d.ID]
+		if !ok || d.State == "queued" || d.State == "sending" {
+			continue
+		}
+		delete(m.queued, d.ID)
+		_, w := m.window(conv)
+		if w == nil {
+			w = m.wins[0]
+		}
+		if d.State == "failed" || d.State == "uncertain" {
+			w.note(m.o.Now(), "-!- Not sent: %s", messages.DeliveryStatus(d))
+		} else {
+			w.note(m.o.Now(), "-!- %s", messages.DeliveryStatus(d))
+		}
+		if w.kind == kindConv {
+			cmds = append(cmds, m.load(w, false))
+		}
+	}
+	return tea.Batch(cmds...)
 }

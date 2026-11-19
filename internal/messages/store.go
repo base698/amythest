@@ -136,6 +136,25 @@ func (s *Store) Ingest(in Ingress) (Message, error) {
 	// A provider ID is only unique within this account/conversation. Replays do not
 	// reopen handled messages or overwrite a previously pinned destination.
 	if old, e := getJSON[Message](tx, "SELECT payload FROM messages WHERE conversation=? AND native_id=?", c.ID, m.NativeID); e == nil {
+		// A connector's correction replaces only the text of its own message,
+		// in the same conversation and direction; nothing else changes.
+		if in.Correct && c.Route.Provider != "" {
+			stored, err := getJSON[Conversation](tx, "SELECT payload FROM conversations WHERE id=?", c.ID)
+			if err != nil {
+				return Message{}, err
+			}
+			if stored.Route != c.Route || old.Outgoing != m.Outgoing {
+				return Message{}, fault(409, "a correction must match the stored message")
+			}
+			if old.Body == m.Body {
+				return old, nil
+			}
+			old.Body = m.Body
+			if _, err = tx.Exec("UPDATE messages SET payload=? WHERE id=?", encode(old), old.ID); err != nil {
+				return Message{}, err
+			}
+			return old, tx.Commit()
+		}
 		// Profile enrichment must not replace content, attention state or identity.
 		if c.Route.Provider == "slack" && m.SenderID != "" {
 			stored, err := getJSON[Conversation](tx, "SELECT payload FROM conversations WHERE id=?", c.ID)
@@ -156,6 +175,8 @@ func (s *Store) Ingest(in Ingress) (Message, error) {
 			return old, tx.Commit()
 		}
 		return old, nil
+	} else if in.Correct {
+		return Message{}, fault(404, "nothing to correct: the message was never imported")
 	}
 	h := sha256.Sum256([]byte(c.ID))
 	c.Channel = "#amy-" + hex.EncodeToString(h[:6])
@@ -607,7 +628,7 @@ func (s *Store) Seed() error {
 		{Conversation{ID: "demo-slack-release", Service: "Slack", Account: "work (demo)", Name: "#release", Recipient: "#release", Thread: "Deployment review", Demo: true}, "Sam", "Please review the deployment fix when you have a moment."},
 	}
 	for i, x := range examples {
-		_, e := s.Ingest(Ingress{x.c, Message{NativeID: fmt.Sprintf("seed-%d", i), Sender: x.sender, Body: x.body, At: now.Add(-time.Duration(i+1) * 7 * time.Minute)}})
+		_, e := s.Ingest(Ingress{Conversation: x.c, Message: Message{NativeID: fmt.Sprintf("seed-%d", i), Sender: x.sender, Body: x.body, At: now.Add(-time.Duration(i+1) * 7 * time.Minute)}})
 		if e != nil {
 			return e
 		}
@@ -628,7 +649,7 @@ func (s *Store) Seed() error {
 			return e
 		}
 		x := examples[p.conv]
-		if _, e = s.Ingest(Ingress{x.c, Message{NativeID: fmt.Sprintf("seed-picture-%d", i), Sender: p.sender, Body: p.body, Attachments: []Attachment{a}, At: now.Add(-time.Duration(i+1) * 3 * time.Minute)}}); e != nil {
+		if _, e = s.Ingest(Ingress{Conversation: x.c, Message: Message{NativeID: fmt.Sprintf("seed-picture-%d", i), Sender: p.sender, Body: p.body, Attachments: []Attachment{a}, At: now.Add(-time.Duration(i+1) * 3 * time.Minute)}}); e != nil {
 			return e
 		}
 	}

@@ -457,6 +457,9 @@ func DeliveryStatus(d Draft) string {
 		if d.Target.Route.Provider == "outlook" {
 			return "Outlook accepted the reply. Delivery is unconfirmed; check Sent Items."
 		}
+		if d.Target.Route.Provider == "slack" {
+			return "Slack accepted the file. Its message is not confirmed; check Slack."
+		}
 		return "Handed to Messages on your Mac. Delivery is unconfirmed; check Messages."
 	case "sent":
 		return "Reply sent through " + d.Target.Service + "."

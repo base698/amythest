@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/base698/amythest/internal/messages"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -180,5 +181,27 @@ func TestPastedFilesParsing(t *testing.T) {
 	}
 	if pastedFiles("relative.png") != nil || pastedFiles(a+" /no/such") != nil || pastedFiles("") != nil {
 		t.Fatal("non-files staged")
+	}
+}
+
+func TestQueuedMessagesReportWhenTheyGoOut(t *testing.T) {
+	m, _, _ := harness(t)
+	i, w := m.windowNamed(t, "demo-slack-release")
+	drain(t, m, m.show(i), 0)
+	m.queued["d1"], m.queued["d2"] = w.conv.ID, w.conv.ID
+	target := w.conv
+	m.onDrafts(draftsMsg{drafts: []messages.Draft{
+		{ID: "d1", State: "sent", Target: target},
+		{ID: "d2", State: "sending", Target: target},
+	}})
+	if _, still := m.queued["d1"]; still || len(m.queued) != 1 {
+		t.Fatalf("queued: %v", m.queued)
+	}
+	if !strings.Contains(screen(m), "Reply sent through Slack") {
+		t.Fatalf("no delivery note:\n%s", screen(m))
+	}
+	m.onDrafts(draftsMsg{drafts: []messages.Draft{{ID: "d2", State: "failed", DeliveryError: "no route", Target: target}}})
+	if len(m.queued) != 0 || !strings.Contains(screen(m), "Not sent: failed: no route") {
+		t.Fatalf("failure not reported:\n%s", screen(m))
 	}
 }

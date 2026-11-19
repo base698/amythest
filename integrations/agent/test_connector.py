@@ -102,3 +102,12 @@ class ChannelListTests(unittest.TestCase):
         self.assertEqual(c.sync_channels(self.config,gateway,lambda cfg,now:out),3)
         paths=[call.args[0] for call in gateway.request.call_args_list]
         self.assertEqual(paths,['/connector/heartbeat','/connector/conversations'])
+
+class RecentQueryTests(unittest.TestCase):
+    def test_recent_replaces_after_and_limits(self):
+        config = {'query': 'in:#eng after:2026-10-20', 'limit': 100}
+        out = c.recent_query(config, 2, 30, dt.date(2026, 11, 19))
+        self.assertEqual(out['query'], 'in:#eng after:2026-11-17'); self.assertEqual(out['limit'], 30)
+        self.assertEqual(config['query'], 'in:#eng after:2026-10-20')
+        self.assertEqual(c.recent_query({'query': 'mentions:me'}, 1, 0, dt.date(2026, 11, 19))['query'], 'mentions:me after:2026-11-18')
+        with self.assertRaises(ValueError): c.recent_query(config, 99, 0, dt.date(2026, 11, 19))

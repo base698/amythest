@@ -248,6 +248,21 @@ def sync_channels(config, gateway, fetch=read_channels):
         gateway.request('/connector/conversations', {'account': config['account'], 'conversations': entries[offset:offset + 1000]})
     return len(entries)
 
+def recent_query(config, days, limit, today):
+    """A copy of config narrowed for a frequent run: the last DAYS days (the
+    query's own after: replaced) and a smaller limit."""
+    config = dict(config)
+    if days:
+        if not 1 <= days <= 30:
+            raise ValueError('--recent must be 1 to 30 days')
+        since = (today - dt.timedelta(days=days)).isoformat()
+        query = re.sub(r'\bafter:\S+', '', config.get('query', '')).strip()
+        config['query'] = (query + ' after:' + since).strip()
+    if limit:
+        config['limit'] = limit
+    return config
+
+
 def sync(config, gateway, journal, fetch=read_claude):
     now = dt.datetime.now(dt.timezone.utc)
     # Validate the entire response before persisting anything from this batch.
@@ -274,6 +289,9 @@ def main():
     parser.add_argument('command', choices=('doctor', 'sync', 'channels', 'send-doctor', 'watch'))
     parser.add_argument('--name', required=True)
     parser.add_argument('--bind', action='store_true', help='send-doctor: save the observed current-profile binding privately')
+    parser.add_argument('--recent', type=int, default=0, metavar='DAYS',
+                        help='sync: only messages from the last DAYS days (replaces after: in the query); for frequent scheduled runs')
+    parser.add_argument('--limit', type=int, default=0, help='sync: at most this many messages (1-100), overriding the configured limit')
     args = parser.parse_args()
     settings = json.loads(Path(expand(args.settings)).read_text())
     accounts = settings.get('connectors', {}).get('agent', {}).get('accounts', [])
@@ -283,6 +301,10 @@ def main():
     config = matches[0]
     if args.bind and args.command != 'send-doctor':
         raise ValueError('--bind is only for send-doctor')
+    if args.recent or args.limit:
+        if args.command != 'sync':
+            raise ValueError('--recent and --limit apply to sync')
+        config = recent_query(config, args.recent, args.limit, dt.date.today())
     validate_config(config)
     import shutil
     if not shutil.which('claude'):

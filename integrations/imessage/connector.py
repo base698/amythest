@@ -51,11 +51,48 @@ class Source:
         row=self.db.execute('SELECT ROWID AS id,guid,display_name AS name,chat_identifier AS identifier,service_name AS service FROM chat WHERE ROWID=? AND service_name IN ('+placeholders+')',(chat_id,*self.services)).fetchone()
         return dict(row) if row else None
 
+    def text(self,message):
+        """The message's text from Messages itself. Newer messages keep it only
+        in attributedBody, which imsg decodes with the string's length bytes
+        left in front (a stray "4", or unreadable characters) when it is long."""
+        row=self.db.execute('SELECT guid,text,attributedBody FROM message WHERE ROWID=?',(message['id'],)).fetchone()
+        if not row or row['guid']!=message['guid']:
+            return None
+        if row['text'] is not None:
+            return row['text']
+        return attributed_text(row['attributedBody'])
+
     def retainable(self,message):
         # Do not turn expiring audio, tapbacks, deleted or service events into
         # permanently retained messages. SQL is read-only and identifiers bound.
         row=self.db.execute('SELECT guid,is_from_me,is_expirable,associated_message_type,is_system_message,is_service_message,date_retracted FROM message WHERE ROWID=?',(message['id'],)).fetchone()
         return bool(row and row['guid']==message['guid'] and bool(row['is_from_me'])==bool(message.get('is_from_me')) and not any(row[k] for k in ('is_expirable','associated_message_type','is_system_message','is_service_message','date_retracted')))
+
+
+def attributed_text(blob):
+    """The plain string inside an NSAttributedString typedstream: after the
+    NSString class comes '+', a length (one byte, or 0x81/0x82 then two or
+    four little-endian bytes) and that many UTF-8 bytes."""
+    if not blob:
+        return None
+    blob=bytes(blob)
+    i=blob.find(b'NSString')
+    j=blob.find(b'+',i+8) if i>=0 else -1
+    if j<0 or j+1>=len(blob):
+        return None
+    n,k=blob[j+1],j+2
+    if n==0x81:
+        n,k=int.from_bytes(blob[k:k+2],'little'),k+2
+    elif n==0x82:
+        n,k=int.from_bytes(blob[k:k+4],'little'),k+4
+    elif n>=0x80:
+        return None
+    if k+n>len(blob):
+        return None
+    try:
+        return blob[k:k+n].decode('utf-8')
+    except UnicodeDecodeError:
+        return None
 
 
 MAX_FILE=5<<20
@@ -89,7 +126,8 @@ def attachment_files(attachments,root=ATTACHMENTS):
 def normalized(message,chat,account,root=None):
     if not chat or not valid_chat(chat['guid']):
         return None
-    body=message.get('text') or ''
+    # U+FFFC marks where an attachment sits in the text.
+    body=(message.get('text') or '').replace('\ufffc','').strip()
     files,left=attachment_files(message.get('attachments'),root) if root else attachment_files(message.get('attachments'),Path('/nonexistent'))
     if left:
         body+='\n[iMessage attachment · open in Messages on the Mac]'
@@ -148,6 +186,9 @@ class Connector:
 
     def capture(self,message,advance=False):
         if self.source.retainable(message):
+            text=self.source.text(message) if hasattr(self.source,'text') else None
+            if text is not None:
+                message=dict(message,text=text)
             chat=self.source.chat(message['chat_id'])
             if chat and self.accepts(chat['guid']):
                 event=normalized(message,chat,self.account,self.attachments_root)

@@ -107,6 +107,9 @@ type Grant struct {
 type Ingress struct {
 	Conversation Conversation `json:"conversation"`
 	Message      Message      `json:"message"`
+	// Correct replaces the text of a message this connector already
+	// imported, when it was decoded wrongly. Nothing else changes.
+	Correct bool `json:"correct,omitempty"`
 }
 type Fault struct {
 	Status int

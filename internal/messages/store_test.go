@@ -187,7 +187,7 @@ func TestIngressCannotChangeAnExistingDestination(t *testing.T) {
 	}
 	c := th.Conversation
 	c.Account = "other account"
-	_, e = s.Ingest(Ingress{c, Message{NativeID: "native-2", Sender: "Colleague", Body: "New message"}})
+	_, e = s.Ingest(Ingress{Conversation: c, Message: Message{NativeID: "native-2", Sender: "Colleague", Body: "New message"}})
 	status(t, e, 409)
 }
 func TestPlainStripsTerminalControlPayloads(t *testing.T) {
@@ -206,7 +206,7 @@ func TestProviderTimesOrderMessagesAndReplyFocus(t *testing.T) {
 	times := []time.Time{base.Add(500 * time.Millisecond), base, base.Add(100 * time.Millisecond), base.Add(500 * time.Millisecond)}
 	var ingested []Message
 	for i, at := range times {
-		m, e := s.Ingest(Ingress{c, Message{NativeID: ID(), Sender: "Colleague", Body: "Please review", At: at}})
+		m, e := s.Ingest(Ingress{Conversation: c, Message: Message{NativeID: ID(), Sender: "Colleague", Body: "Please review", At: at}})
 		if e != nil {
 			t.Fatalf("message %d: %v", i, e)
 		}

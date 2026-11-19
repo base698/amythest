@@ -182,6 +182,12 @@ func (c *Client) Download(ctx context.Context, id string) ([]byte, error) {
 	return b, e
 }
 
+// Drafts lists drafts and their delivery state, newest first.
+func (c *Client) Drafts(ctx context.Context) ([]Draft, error) {
+	var out []Draft
+	return out, c.Do(ctx, "GET", "/drafts", nil, &out)
+}
+
 // Grant lets agents use one conversation until the grant expires.
 func (c *Client) Grant(ctx context.Context, g Grant) error {
 	return c.Do(ctx, "POST", "/grants", g, nil)

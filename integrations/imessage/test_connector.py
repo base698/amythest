@@ -15,7 +15,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from connector import main
-from connector import Connector,Gateway,Journal,Source,normalized,attachment_files,convert
+from connector import Connector,Gateway,Journal,Source,normalized,attachment_files,convert,attributed_text
 
 ACCOUNT='00000000-0000-4000-8000-000000000001'
 CHAT={'id':1,'guid':'any;+;chat-test','name':'Test group','identifier':'chat-test','service':'iMessage'}
@@ -189,3 +189,20 @@ class IncomingFileTests(unittest.TestCase):
             self.skipTest('this Mac cannot write HEIC')
         out=convert({'path':str(heic),'name':'p.heic','mime':'image/heic'},self.root/'in')
         self.assertEqual(Path(out['path']).read_bytes()[:3],b'\xff\xd8\xff')
+
+
+class AttributedTextTests(unittest.TestCase):
+    def blob(self, text):
+        data = text.encode()
+        n = len(data)
+        size = bytes([n]) if n < 0x80 else b'\x81' + n.to_bytes(2, 'little') if n < 0x10000 else b'\x82' + n.to_bytes(4, 'little')
+        return b'\x04\x0bstreamtyped\x81\xe8\x03\x84\x01@\x84\x84\x84\x12NSAttributedString\x00\x84\x84\x08NSObject\x00\x85\x92\x84\x84\x84\x08NSString\x01\x94\x84\x01+' + size + data + b'\x86\x84\x02iI\x01'
+    def test_lengths_short_long_and_unicode(self):
+        for text in ('look', 'x' * 52, 'Long message ' * 13, 'Emoji 🕷️ and accents é' * 10, 'y' * 70000):
+            self.assertEqual(attributed_text(self.blob(text)), text)
+        self.assertIsNone(attributed_text(b'not a typedstream'))
+        self.assertIsNone(attributed_text(self.blob('abc')[:-12]))
+    def test_attachment_marker_is_dropped(self):
+        event = normalized(dict(MESSAGE, text='\ufffc', attachments=[{'missing': True}]), CHAT, ACCOUNT)
+        self.assertIn('open in Messages', event['message']['body'])
+        self.assertFalse(event['message']['body'].startswith('\ufffc'))

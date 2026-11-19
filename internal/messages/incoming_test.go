@@ -77,3 +77,39 @@ func TestSeedHasPictures(t *testing.T) {
 		t.Fatal("seeding twice:", e)
 	}
 }
+
+func TestConnectorCorrectsOnlyTheTextOfItsOwnMessage(t *testing.T) {
+	s := testStore(t)
+	acct := "00000000-0000-4000-8000-000000000001"
+	r := Route{Provider: "signal", Account: acct, Chat: "user/00000000-0000-4000-8000-000000000002"}
+	if e := s.Heartbeat(Connector{Provider: "signal", Account: acct, Worker: "w", AllChats: true}); e != nil {
+		t.Fatal(e)
+	}
+	conv := Conversation{ID: SignalConversationID(r), Service: "Signal", Account: acct, Recipient: r.Chat, Route: r, Name: "Pat"}
+	in := Ingress{Conversation: conv, Message: Message{NativeID: "1700000000000/00000000-0000-4000-8000-000000000002", Sender: "Pat", Body: "4Hello there"}}
+	first, e := s.Ingest(in)
+	if e != nil {
+		t.Fatal(e)
+	}
+	// A plain replay never changes the text.
+	in.Message.Body = "Hello there"
+	if m, _ := s.Ingest(in); m.Body != "4Hello there" {
+		t.Fatal("replay changed content")
+	}
+	in.Correct = true
+	m, e := s.Ingest(in)
+	if e != nil || m.Body != "Hello there" || m.ID != first.ID {
+		t.Fatalf("correction: %+v %v", m, e)
+	}
+	if hits, _ := s.Search("owner", "Hello", "", 5); len(hits) != 1 || hits[0].Message.Body != "Hello there" {
+		t.Fatalf("search not updated: %+v", hits)
+	}
+	in.Message.Outgoing = true
+	if _, e = s.Ingest(in); e == nil {
+		t.Fatal("a correction changed direction")
+	}
+	in.Message.Outgoing, in.Message.NativeID = false, "1700000000009/00000000-0000-4000-8000-000000000002"
+	if _, e = s.Ingest(in); e == nil {
+		t.Fatal("a correction imported a new message")
+	}
+}
