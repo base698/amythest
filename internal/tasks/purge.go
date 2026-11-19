@@ -12,7 +12,8 @@ import (
 
 // purgeCancelledBody removes whole lines holding cancelled tasks. Only
 // cancelled tasks may be purged — deletion stays a two-step, recoverable
-// flow (cancel first, purge later). Indented child lines are left in place.
+// flow (cancel first, purge later). Owned context blocks are removed with the
+// task; ordinary child notes are left in place.
 func purgeCancelledBody(body []byte, lineNos []int) ([]byte, error) {
 	sorted := append([]int(nil), lineNos...)
 	sort.Sort(sort.Reverse(sort.IntSlice(sorted)))
@@ -48,6 +49,16 @@ func purgeCancelledBody(body []byte, lineNos []int) ([]byte, error) {
 		if cut < len(out) {
 			cut++ // consume the line's LF
 		}
+		// Remove only complete generated context blocks directly under this
+		// task. Never consume user-authored children or incomplete blocks.
+		for cut < len(out) {
+			n := ownedContextEnd(string(out[cut:]))
+			if n == 0 {
+				break
+			}
+			cut += n
+		}
+
 		out = append(out[:start], out[cut:]...)
 	}
 	return out, nil

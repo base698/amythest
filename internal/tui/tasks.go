@@ -27,6 +27,7 @@ type taskRow struct {
 }
 
 type tasksView struct {
+	marked map[string]bool
 	client *apiclient.Client
 	rows   []taskRow
 	cursor int
@@ -44,11 +45,19 @@ type tasksView struct {
 }
 
 func newTasksView(client *apiclient.Client) *tasksView {
-	return &tasksView{client: client, find: newFinder(), prompt: newDuePrompt(), now: time.Now}
+	return &tasksView{client: client, marked: map[string]bool{}, find: newFinder(), prompt: newDuePrompt(), now: time.Now}
 }
 
-func (v *tasksView) Title() string { return "tasks (" + taskPresets[v.preset] + ")" }
-func (v *tasksView) Busy() bool    { return v.busy }
+func (v *tasksView) Title() string {
+	n := 0
+	for _, row := range v.rows {
+		if row.task != nil && v.marked[taskMarkKey(*row.task)] {
+			n++
+		}
+	}
+	return fmt.Sprintf("tasks (%s) · %d marked", taskPresets[v.preset], n)
+}
+func (v *tasksView) Busy() bool { return v.busy }
 func (v *tasksView) Capturing() bool {
 	return v.find.active() || v.prompt.active() || v.del.active || v.hide.active
 }
@@ -142,6 +151,32 @@ func findTask(groups []apiclient.TaskGroup, slug, text, status string) (tasks.Ta
 
 func (v *tasksView) Update(msg tea.Msg) (view, tea.Cmd) {
 	switch msg := msg.(type) {
+	case taskNoteOpened:
+		note := newNoteView(v.client, msg.note)
+		matches := []int{}
+		for i, t := range note.tasks {
+			if t.Text == msg.target.Text {
+				matches = append(matches, i)
+			}
+		}
+		if len(matches) == 1 {
+			note.offset = max(0, note.tasks[matches[0]].Line-3)
+		} else {
+			for _, i := range matches {
+				if note.tasks[i].Line == msg.target.Line {
+					note.offset = max(0, msg.target.Line-3)
+					break
+				}
+			}
+		}
+		return v, pushView(note)
+	case openNoteMsg:
+		return v, pushView(newNoteView(v.client, msg.note))
+	case taskReviewDone:
+		v.marked = map[string]bool{}
+		v.busy = true
+		return v, v.loadCmd()
+
 	case tasksLoadedMsg:
 		v.busy = false
 		v.loaded = true
@@ -231,6 +266,46 @@ func (v *tasksView) Update(msg tea.Msg) (view, tea.Cmd) {
 			return v, cmd
 		}
 		switch msg.String() {
+		case "m":
+			if t := v.current(); t != nil && !strings.HasPrefix(t.Path, "kanban/") {
+				key := taskMarkKey(*t)
+				v.marked[key] = !v.marked[key]
+			}
+		case "M":
+			all := true
+			for _, row := range v.rows {
+				if row.task != nil && !strings.HasPrefix(row.task.Path, "kanban/") && !v.marked[taskMarkKey(*row.task)] {
+					all = false
+				}
+			}
+			for _, row := range v.rows {
+				if row.task != nil && !strings.HasPrefix(row.task.Path, "kanban/") {
+					v.marked[taskMarkKey(*row.task)] = !all
+				}
+			}
+		case "a":
+			var selected []tasks.Task
+			for _, row := range v.rows {
+				if row.task != nil && v.marked[taskMarkKey(*row.task)] {
+					selected = append(selected, *row.task)
+				}
+			}
+			if len(selected) == 0 {
+				return v, flash("m marks a task · M marks all visible tasks · a reviews marked tasks")
+			}
+			return v, pushView(newTaskReviewView(v.client, selected))
+		case "enter":
+			if t := v.current(); t != nil {
+				target := *t
+				client := v.client
+				return v, func() tea.Msg {
+					note, err := client.GetNote(context.Background(), target.Slug)
+					if err != nil {
+						return fail(err)
+					}
+					return taskNoteOpened{note, target}
+				}
+			}
 		case "j", "down":
 			v.move(1)
 		case "k", "up":
@@ -383,23 +458,55 @@ func (v *tasksView) View(width, height int) string {
 	if v.del.active || v.hide.active {
 		reserved++
 	}
-	avail := max(3, height-1-reserved)
+	avail := max(3, height-2-reserved)
 	if v.cursor < v.offset {
 		v.offset = v.cursor
 	}
-	if v.cursor >= v.offset+avail {
-		v.offset = v.cursor - avail + 1
-	}
-	var b strings.Builder
-	end := min(len(v.rows), v.offset+avail)
-	for i := v.offset; i < end; i++ {
+	rowLines := func(i int) []string {
 		row := v.rows[i]
 		if row.task == nil {
-			b.WriteString(groupHeaderStyle.Render(" "+row.header) + "\n")
-			continue
+			return []string{groupHeaderStyle.Render(" " + row.header)}
 		}
-		b.WriteString(renderTaskLine(row.task, i == v.cursor, width) + "\n")
+		prefix := "  "
+		if v.marked[taskMarkKey(*row.task)] {
+			prefix = "◆ "
+		}
+		lines := []string{prefix + renderTaskLine(row.task, i == v.cursor, max(10, width-2))}
+		var context []string
+		for _, text := range row.task.Context {
+			context = append(context, wrapLine(text, max(15, width-8))...)
+		}
+		for _, text := range context[:min(len(context), 4)] {
+			lines = append(lines, dimStyle.Render("      "+text))
+		}
+		if len(context) > 4 {
+			lines = append(lines, dimStyle.Render("      … Enter opens all context"))
+		}
+		return lines
 	}
+	for v.offset < v.cursor {
+		n := 0
+		for i := v.offset; i <= v.cursor; i++ {
+			n += len(rowLines(i))
+		}
+		if n <= avail {
+			break
+		}
+		v.offset++
+	}
+	var b strings.Builder
+	used := 0
+	for i := v.offset; i < len(v.rows) && used < avail; i++ {
+		lines := rowLines(i)
+		for _, line := range lines {
+			if used >= avail {
+				break
+			}
+			b.WriteString(line + "\n")
+			used++
+		}
+	}
+	b.WriteString(dimStyle.Render(" m mark · M mark all · a review · Enter note · D cancel/delete") + "\n")
 	if bar := v.find.bar(); bar != "" {
 		b.WriteString(" " + bar + "\n")
 	}
@@ -464,4 +571,11 @@ func taskPriorityBadge(p int) string {
 	default:
 		return ""
 	}
+}
+
+func taskMarkKey(t tasks.Task) string { return fmt.Sprintf("%s:%d:%s", t.Slug, t.Line, t.Text) }
+
+type taskNoteOpened struct {
+	note   *apiclient.Note
+	target tasks.Task
 }

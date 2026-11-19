@@ -144,6 +144,9 @@ func renderTask(b *strings.Builder, t Task, base string, opts RenderOptions) {
 		template.HTMLEscapeString(t.Slug) + `" data-line="` + strconv.Itoa(t.Line) + `" data-version="` +
 		template.HTMLEscapeString(t.Version) + `"` + checked + `> `)
 	b.WriteString(`<span class="task-text">` + renderTaskText(t.Text) + `</span>`)
+	for _, context := range t.Context {
+		b.WriteString(`<div class="task-context" style="margin:.35em 0 .5em 1.6em">` + renderTaskText(context) + `</div>`)
+	}
 	renderTrailingTags(b, t)
 	if opts.Selectable {
 		renderPriorityEditor(b, t)

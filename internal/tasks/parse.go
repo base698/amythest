@@ -94,6 +94,12 @@ func ParseFile(slug, path string, body []byte) ([]Task, []InlineField, []ListIte
 			items = append(items, ListItem{Line: lineNo, Text: text, Status: status})
 		}
 		if m == nil {
+			if len(out) > 0 && itemLine == out[len(out)-1].Line && strings.HasPrefix(line, " ") && strings.HasPrefix(strings.TrimSpace(line), ">") {
+				context := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), ">"))
+				if context != "<!-- amy-context -->" && context != "<!-- /amy-context -->" {
+					out[len(out)-1].Context = append(out[len(out)-1].Context, ContextText(context))
+				}
+			}
 			continue
 		}
 		t := parseTask(m[1][0], m[2])

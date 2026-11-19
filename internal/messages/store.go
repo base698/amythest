@@ -50,6 +50,7 @@ func Open(dir string) (*Store, error) {
  CREATE TABLE IF NOT EXISTS drafts(id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL, fingerprint TEXT NOT NULL, payload TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS grants(conversation TEXT PRIMARY KEY,payload TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS connectors(account TEXT PRIMARY KEY,payload TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS contact_names(conversation TEXT PRIMARY KEY,name TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS conversation_trash(conversation TEXT PRIMARY KEY);`)
 	if err != nil {
 		db.Close()
@@ -100,6 +101,9 @@ func (s *Store) Ingest(in Ingress) (Message, error) {
 	c, m := in.Conversation, in.Message
 	if !validID(c.ID) || !validID(m.NativeID) || len(c.Service) > 40 || len(c.Account) > 200 || len(c.Name) > 300 || len(c.Recipient) > 300 || len(c.Thread) > 300 || c.Service == "" || c.Account == "" || c.Recipient == "" || len(m.Body) > 20000 || len(m.Sender) > 200 {
 		return Message{}, fault(400, "invalid message or destination")
+	}
+	if !validSourceURL(m.SourceURL) {
+		return Message{}, fault(400, "invalid source URL")
 	}
 	if len(m.Attachments) != 0 {
 		return Message{}, fault(400, "incoming attachments are not supported by the demo ingress")
@@ -266,6 +270,9 @@ func (s *Store) Items(actor string, all bool, trashMode ...bool) ([]Item, error)
 			}
 		}
 	}
+	for i := range out {
+		out[i].Conversation = s.named(out[i].Conversation)
+	}
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i].Message, out[j].Message
 		if out[i].LastActivity.Equal(out[j].LastActivity) {
@@ -296,7 +303,7 @@ func (s *Store) thread(actor, conversation string) (Thread, error) {
 	if e != nil {
 		return out, e
 	}
-	out.Conversation = c
+	out.Conversation = s.named(c)
 	out.Messages = []Message{}
 	rows, e := s.db.Query("SELECT payload FROM messages WHERE conversation=? ORDER BY rowid", conversation)
 	if e != nil {

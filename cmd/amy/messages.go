@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/find"
 	"github.com/base698/amythest/internal/messageconfig"
 	"github.com/base698/amythest/internal/messages"
@@ -151,7 +152,7 @@ func messageCommand(args []string) error {
 			return e
 		}
 		g.ConnectorTokens = map[string]string{"signal": signalToken, "imessage": imessageToken}
-		for _, provider := range []string{"gmail", "outlook"} {
+		for _, provider := range []string{"gmail", "outlook", "slack", "outlook-web", "outlook-calendar"} {
 			token, err := messages.Token(*state, provider)
 			if err != nil {
 				return err
@@ -234,6 +235,12 @@ func messageCommand(args []string) error {
 		} else {
 			result, e = client.Items(ctx, *all)
 		}
+	case "contact":
+		if *conversation == "" || !set["name"] {
+			return fmt.Errorf("use -conversation ID -name NAME (empty clears the name)")
+		}
+		e = client.Do(ctx, "PUT", "/contacts", map[string]string{"conversation": *conversation, "name": *name}, nil)
+		result = map[string]bool{"ok": e == nil}
 	case "trash", "restore":
 		if *conversation == "" {
 			return fmt.Errorf("use -conversation CONVERSATION_ID")
@@ -409,6 +416,13 @@ func messageListen(addr string) (net.Listener, error) {
 	return l, nil
 }
 func showMessages(client *messages.Client, opts messageui.Options, pane string) error {
+	if opts.Notes == nil {
+		cfg, err := apiclient.LoadConfig(nil)
+		if err != nil {
+			return err
+		}
+		opts.Notes = apiclient.New(cfg)
+	}
 	_, e := tea.NewProgram(messageui.New(client, opts), tea.WithAltScreen()).Run()
 	if e == nil && pane != "" {
 		return wall.ClosePane(pane, nil)

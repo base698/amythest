@@ -159,3 +159,52 @@ func TestTasksViewHideRefusesBoardCards(t *testing.T) {
 		t.Fatalf("flash = %#v", cmd())
 	}
 }
+
+func TestMarkedTaskReviewDoesNotCompleteAndCapturesPrompt(t *testing.T) {
+	v := newTasksView(nil)
+	v.Update(loadedTasks())
+	v.Update(keyMsg("m"))
+	_, cmd := v.Update(keyMsg("a"))
+	if cmd == nil {
+		t.Fatal("missing review")
+	}
+	review := cmd().(pushMsg).v.(*taskReviewView)
+	if len(review.selected) != 1 || review.selected[0].Status != tasks.StatusOpen || v.current().Status != tasks.StatusOpen {
+		t.Fatal("mark changed completion")
+	}
+	review.Init()
+	review.Update(keyMsg("look for evidence"))
+	if review.input.Value() != "look for evidence" || !review.Capturing() {
+		t.Fatal("prompt not captured")
+	}
+	review.Update(enterMsg())
+	review.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if review.provider != "codex" {
+		t.Fatal("provider choice")
+	}
+	v.Update(keyMsg("M"))
+	_, cmd = v.Update(keyMsg("a"))
+	review = cmd().(pushMsg).v.(*taskReviewView)
+	if len(review.selected) != 2 {
+		t.Fatal("mark all should exclude board-managed tasks")
+	}
+}
+
+func TestTaskEnterLandsNearTaskAndEscapeReturnsToSameList(t *testing.T) {
+	v := newTasksView(nil)
+	v.Update(loadedTasks())
+	v.move(1)
+	selected := *v.current()
+	note := &apiclient.Note{Slug: selected.Slug, Markdown: strings.Repeat("earlier note line\n", 40) + "- [x] " + selected.Text + "\n", Version: selected.Version}
+	_, cmd := v.Update(taskNoteOpened{note, selected})
+	reader := cmd().(pushMsg).v.(*noteView)
+	if reader.offset < 35 {
+		t.Fatal("note opened at top", reader.offset)
+	}
+	app := NewApp(nil, nil)
+	app.stack = []view{v, reader}
+	app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if len(app.stack) != 1 || app.top() != v || v.current().Text != selected.Text {
+		t.Fatal("escape lost task selection")
+	}
+}

@@ -214,7 +214,7 @@ func (d *DB) TasksWithLists(withLists bool) ([]tasks.Task, error) {
 		where = ``
 	}
 	rows, err := d.r.Query(`SELECT t.slug, n.path, t.line, t.text, t.status,
-		t.due, t.scheduled, t.start, t.recurrence, t.priority, t.done_date, t.tags, t.version
+		t.due, t.scheduled, t.start, t.recurrence, t.priority, t.done_date, t.tags, t.version, t.context
 		FROM tasks t JOIN notes n ON n.slug = t.slug` + where)
 	if err != nil {
 		return nil, err
@@ -223,15 +223,16 @@ func (d *DB) TasksWithLists(withLists bool) ([]tasks.Task, error) {
 	var out []tasks.Task
 	for rows.Next() {
 		var t tasks.Task
-		var tagsJSON string
+		var tagsJSON, contextJSON string
 		var due, sched, start, rec, done sql.NullString
 		if err := rows.Scan(&t.Slug, &t.Path, &t.Line, &t.Text, &t.Status,
-			&due, &sched, &start, &rec, &t.Priority, &done, &tagsJSON, &t.Version); err != nil {
+			&due, &sched, &start, &rec, &t.Priority, &done, &tagsJSON, &t.Version, &contextJSON); err != nil {
 			return nil, err
 		}
 		t.Due, t.Scheduled, t.Start, t.Recurrence, t.DoneDate =
 			due.String, sched.String, start.String, rec.String, done.String
 		_ = json.Unmarshal([]byte(tagsJSON), &t.Tags)
+		_ = json.Unmarshal([]byte(contextJSON), &t.Context)
 		out = append(out, t)
 	}
 	return out, rows.Err()

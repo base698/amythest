@@ -15,13 +15,14 @@ import (
 )
 
 type Connector struct {
-	Provider string    `json:"provider,omitempty"`
-	Account  string    `json:"account"`
-	Worker   string    `json:"worker"`
-	Chats    []string  `json:"chats"`
-	AllChats bool      `json:"all_chats"`
-	Send     bool      `json:"send"`
-	Seen     time.Time `json:"seen"`
+	Transport string    `json:"transport,omitempty"`
+	Provider  string    `json:"provider,omitempty"`
+	Account   string    `json:"account"`
+	Worker    string    `json:"worker"`
+	Chats     []string  `json:"chats"`
+	AllChats  bool      `json:"all_chats"`
+	Send      bool      `json:"send"`
+	Seen      time.Time `json:"seen"`
 }
 type Delivery struct {
 	Draft  Draft   `json:"draft"`
@@ -95,13 +96,16 @@ func (s *Store) Heartbeat(c Connector) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c.Provider = providerName([]string{c.Provider})
+	if (c.Provider == "slack" || browserProvider(c.Provider) || c.Transport == "agent" || c.Transport == "chrome") && c.Send {
+		return fault(400, "Agent imports are read-only")
+	}
 	validAccount := c.Provider == "telegram" && decimal(c.Account, true) || (c.Provider == "signal" || c.Provider == "imessage") && canonicalUUID(c.Account)
-	validAccount = validAccount || mailProvider(c.Provider) && mailAccount(c.Account)
+	validAccount = validAccount || (mailProvider(c.Provider) || browserProvider(c.Provider)) && mailAccount(c.Account) || c.Provider == "slack" && slackAccountRE.MatchString(c.Account)
 	if !validAccount || !validID(c.Worker) || len(c.Chats) > 2000 {
 		return fault(400, "invalid connector registration")
 	}
 	for _, id := range c.Chats {
-		if c.Provider == "telegram" && !decimal(id, false) || c.Provider == "signal" && !signalChat(id) || c.Provider == "imessage" && !imessageChat(id) || mailProvider(c.Provider) && !mailID(c.Provider, id) {
+		if browserProvider(c.Provider) && !mailID("outlook", id) || c.Provider == "slack" && !slackChatRE.MatchString(id) || c.Provider == "telegram" && !decimal(id, false) || c.Provider == "signal" && !signalChat(id) || c.Provider == "imessage" && !imessageChat(id) || mailProvider(c.Provider) && !mailID(c.Provider, id) {
 			return fault(400, "invalid native chat ID")
 		}
 	}
@@ -140,6 +144,12 @@ func validateNativeConversation(c Conversation) error {
 	if r.Provider == "imessage" {
 		valid = (c.Service == "iMessage" || c.Service == "Messages") && canonicalUUID(r.Account) && imessageChat(r.Chat) && r.Thread == "" && c.ID == IMessageConversationID(r)
 	}
+	if r.Provider == "slack" {
+		valid = c.Service == "Slack" && slackAccountRE.MatchString(r.Account) && slackChatRE.MatchString(r.Chat) && (r.Thread == "" || slackTimestampRE.MatchString(r.Thread)) && c.ID == SlackConversationID(r)
+	}
+	if browserProvider(r.Provider) {
+		valid = c.Service == browserServices[r.Provider] && mailAccount(r.Account) && mailID("outlook", r.Chat) && r.Thread == "" && c.ID == MailConversationID(r)
+	}
 	if mailProvider(r.Provider) {
 		service := map[string]string{"gmail": "Gmail", "outlook": "Outlook"}[r.Provider]
 		valid = c.Service == service && mailAccount(r.Account) && mailID(r.Provider, r.Chat) && r.Thread == "" && c.ID == MailConversationID(r)
@@ -157,6 +167,8 @@ func (s *Store) ValidateIngress(in Ingress) error {
 	}
 	r := in.Conversation.Route
 	valid := r.Provider == "telegram" && decimal(in.Message.NativeID, true) || r.Provider == "signal" && signalParent(in.Message.NativeID) || r.Provider == "imessage" && validID(in.Message.NativeID)
+	valid = valid || r.Provider == "slack" && slackTimestampRE.MatchString(in.Message.NativeID)
+	valid = valid || browserProvider(r.Provider) && mailID("outlook", in.Message.NativeID)
 	valid = valid || mailProvider(r.Provider) && mailID(r.Provider, in.Message.NativeID)
 	if !valid {
 		return fault(400, "invalid native message ID")

@@ -147,6 +147,17 @@ func decode(r *http.Request, v any) error {
 func (g *Gateway) route(w http.ResponseWriter, r *http.Request, actor, provider string) (any, error) {
 	s := g.Store
 	switch r.Method + " " + r.URL.Path {
+	case "GET /contacts":
+		return s.ContactNames()
+	case "PUT /contacts":
+		var in struct {
+			Conversation string `json:"conversation"`
+			Name         string `json:"name"`
+		}
+		if e := decode(r, &in); e != nil {
+			return nil, e
+		}
+		return map[string]bool{"ok": true}, s.NameContact(in.Conversation, in.Name)
 	case "POST /connector/authorize":
 		var in struct {
 			Account string `json:"account"`

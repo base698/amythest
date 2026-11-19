@@ -258,8 +258,8 @@ Telegram connector supplies that route through its own authenticated ingress.
 No provider token, existing Hermes session, or mailbox is automatically reused.
 The [Signal adapter](signal.md) uses the same queue, grants and attachment flow.
 The [local iMessage feeder](imessage.md) sends Mac messages to the central
-gateway. Gmail and Microsoft Graph/Outlook are next. Slack and Google
-Chat adapters remain future work; Discord personal-inbox coverage remains unresolved.
+gateway. Direct Gmail and Outlook connectors and read-only Claude Slack/Outlook imports
+are available. Google Chat adapters remain future work; Discord personal-inbox coverage remains unresolved.
 
 ## Private host deployment
 
@@ -286,3 +286,30 @@ The focus composer and Irssi 1.4.5 were also exercised in real pseudoterminals:
 connection, selected-message jumps between conversations sharing a window,
 attachment selection, and the simulated reply round trip passed. Both macOS
 and Linux ARM64 binaries build successfully.
+
+## Link messages and name contacts
+
+Press **l** on a message to attach its text snapshot to a note or task. Type to
+search, Tab switches between all destinations, tasks, and notes, and arrows
+choose a result. Enter attaches it. The source stays pinned while new messages
+arrive. Task attachments appear beneath the chosen checkbox; note attachments
+append a quoted excerpt. Repeating the same message in the same note is rejected.
+Changed destination tasks must be selected again. These actions do not send a
+reply or change message handling state.
+
+Press **/** to find messages by conversation, sender or latest message text;
+submit an empty search to clear it. **f** opens a service picker without switching
+Focus to All. **p** retains the older service cycle and includes Slack.
+
+Press **C** to name the selected conversation/contact. Tab completes a known name;
+Enter saves it centrally, and an empty name clears the override. Name the same
+person consistently across services. Provider refreshes preserve the override,
+and names never affect native reply destinations. The names live in the private
+messaging database. The CLI equivalent is:
+
+```sh
+amy messages contact -conversation CONVERSATION_ID -name 'Morgan Example'
+```
+
+For Claude-based Slack/Outlook imports, see [Agent connections](agent-messages.md).
+For evidence added to selected tasks, see [Task review](task-review.md).

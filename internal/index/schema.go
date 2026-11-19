@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS tasks(
   done_date  TEXT,
   tags       TEXT NOT NULL DEFAULT '[]',
   version    TEXT NOT NULL,
+  context    TEXT NOT NULL DEFAULT '[]',
   list       INTEGER NOT NULL DEFAULT 0   -- 1 when the note is a list (frontmatter tasks: list)
 );
 CREATE INDEX IF NOT EXISTS tasks_due ON tasks(status, due);
@@ -95,7 +96,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS retrieval_fts USING fts5(
 `
 
 // schemaVersion invalidates the whole database when the DDL changes.
-const schemaVersion = 7
+const schemaVersion = 8
 
 const dsnOpts = "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=mmap_size(268435456)"
 

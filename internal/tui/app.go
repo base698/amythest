@@ -178,7 +178,7 @@ func isAmythestLoadSuccess(msg tea.Msg) bool {
 	switch msg.(type) {
 	case todayLoadedMsg, tasksLoadedMsg, boardsLoadedMsg, boardLoadedMsg,
 		archiveLoadedMsg, browseLoadedMsg, basesListMsg, baseDataMsg,
-		openNoteMsg, noteReloadedMsg:
+		openNoteMsg, taskNoteOpened, noteReloadedMsg:
 		return true
 	default:
 		return false
@@ -281,6 +281,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "ctrl+c", "q":
+			for _, v := range a.stack {
+				if c, ok := v.(interface{ Cancel() }); ok {
+					c.Cancel()
+				}
+			}
 			return a, tea.Quit
 		case "?":
 			a.help = !a.help
@@ -337,7 +342,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// A resolved note is a navigation event for whichever view asked for
 	// it; delivering it to the whole stack would push duplicates.
-	if _, ok := msg.(openNoteMsg); ok {
+	_, noteOpen := msg.(openNoteMsg)
+	_, taskOpen := msg.(taskNoteOpened)
+	if noteOpen || taskOpen {
 		next, cmd := a.top().Update(msg)
 		a.stack[len(a.stack)-1] = next
 		return a, cmd
@@ -471,6 +478,8 @@ const helpText = `
   /               search lists; on boards: fuzzy filter
                   (enter keeps it, / then esc clears)
   n / N           next / previous match
+  m / M           mark task / all tasks for review
+  a               review marked tasks: prompt → Claude/Codex
   p               cycle task query preset (tasks view)
   r               refresh current view
   1 / 2 / 3 / 4   today / tasks / boards / notes

@@ -39,6 +39,7 @@ type Attachment struct {
 	Size int    `json:"size"`
 }
 type Message struct {
+	SourceURL    string       `json:"source_url,omitempty"`
 	ID           string       `json:"id"`
 	NativeID     string       `json:"native_id"`
 	Conversation string       `json:"conversation"`
@@ -177,7 +178,7 @@ func DisplayService(c Conversation) string {
 }
 func AccountDisplay(c Conversation) string {
 	switch c.Route.Provider {
-	case "telegram", "signal", "imessage":
+	case "telegram", "signal", "imessage", "slack", "outlook-web", "outlook-calendar":
 		return DisplayService(c)
 	}
 	return Plain(c.Service + " / " + c.Account)

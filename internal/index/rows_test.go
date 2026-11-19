@@ -153,3 +153,21 @@ views:
 		t.Error("expected error for unknown source")
 	}
 }
+
+func TestTaskContextRoundTripsThroughIndex(t *testing.T) {
+	root := t.TempDir()
+	writeNote(t, root, "Review.md", "- [ ] Check release\n  > <!-- amy-context -->\n  > Review (codex): completed in PR 123\n  > Source: https://example.test/123\n  > <!-- /amy-context -->\n- [ ] Other\n")
+	db := openReconciled(t, root)
+	ts, e := db.AllTasks()
+	if e != nil || len(ts) != 2 {
+		t.Fatal(e, ts)
+	}
+	for _, task := range ts {
+		if task.Text == "Check release" && len(task.Context) != 2 {
+			t.Fatalf("lost context: %+v", task)
+		}
+		if task.Text == "Other" && len(task.Context) != 0 {
+			t.Fatal("context moved to other task")
+		}
+	}
+}

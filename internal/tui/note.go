@@ -800,7 +800,11 @@ func (v *noteView) View(width, height int) string {
 		if v.insideBlock(i) {
 			continue // offset landed mid-block; its start already rendered
 		}
-		for _, row := range wrapLine(v.lines[i], bodyWidth) {
+		line := tasks.ContextText(v.lines[i])
+		if strings.TrimSpace(line) == ">" && strings.Contains(v.lines[i], "<!--") {
+			continue
+		}
+		for _, row := range wrapLine(line, bodyWidth) {
 			if rendered >= bodyHeight {
 				break
 			}

@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/base698/amythest/internal/apiclient"
 	"github.com/base698/amythest/internal/messages"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -26,6 +28,7 @@ type API interface {
 	Do(context.Context, string, string, any, any) error
 }
 type Options struct {
+	Notes       *apiclient.Client
 	Trash       bool
 	All         bool
 	Service     string
@@ -34,6 +37,9 @@ type Options struct {
 	FocusPane   func() error
 }
 type Model struct {
+	link                      linkState
+	query                     string
+	serviceCursor             int
 	trash                     bool
 	provider                  string
 	api                       API
@@ -233,6 +239,31 @@ func (m *Model) send(save bool) tea.Cmd {
 }
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch x := msg.(type) {
+	case linkTargetsMsg:
+		if m.mode != "link" {
+			return m, nil
+		}
+		if x.err != nil {
+			m.status = x.err.Error()
+		} else {
+			m.link.targets = x.targets
+			m.status = ""
+		}
+		return m, nil
+	case contactsMsg:
+		if m.mode == "contact" {
+			m.link.names = x.names
+		}
+		return m, nil
+	case linkedMsg:
+		m.busy = false
+		if x.err != nil {
+			m.status = x.err.Error()
+			return m, nil
+		}
+		m.mode = "focus"
+		m.status = "Message attached to note"
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.w, m.h = x.Width, x.Height
 		m.input.SetWidth(max(20, m.rightWidth()-4))
@@ -262,6 +293,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			filtered := []messages.Item{}
 			for _, it := range x.items {
 				if strings.EqualFold(it.Conversation.Service, m.provider) || ((strings.EqualFold(m.provider, "Messages") || strings.EqualFold(m.provider, "iMessage")) && it.Conversation.Route.Provider == "imessage") {
+					filtered = append(filtered, it)
+				}
+			}
+			x.items = filtered
+		}
+		if m.query != "" {
+			filtered := []messages.Item{}
+			for _, it := range x.items {
+				hay := strings.ToLower(it.Conversation.Name + " " + it.Message.Sender + " " + it.Message.Body + " " + it.Conversation.Service)
+				ok := true
+				for _, word := range strings.Fields(strings.ToLower(m.query)) {
+					if !strings.Contains(hay, word) {
+						ok = false
+					}
+				}
+				if ok {
 					filtered = append(filtered, it)
 				}
 			}
@@ -356,6 +403,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.busy {
 			return m, nil
 		}
+		if m.mode == "link" {
+			return m, m.linkKey(x)
+		}
+		if m.mode == "contact" || m.mode == "search" || m.mode == "service" {
+			return m, m.utilityKey(x)
+		}
 		if m.mode == "compose" {
 			switch x.String() {
 			case "esc":
@@ -408,7 +461,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			case "p":
-				providers := []string{"", "Signal", "Telegram", "Messages", "Gmail", "Outlook"}
+				providers := []string{"", "Signal", "Telegram", "Messages", "Gmail", "Outlook", "Slack", "Outlook (Chrome)", "Calendar (Chrome)"}
 				next := 0
 				for i, p := range providers {
 					if p == m.provider {
@@ -468,6 +521,37 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch x.String() {
+		case "l":
+			return m, m.startLink()
+		case "C", "/":
+			it := m.current()
+			if x.String() == "C" && it == nil {
+				return m, nil
+			}
+			i := textinput.New()
+			i.CharLimit = 200
+			i.Focus()
+			m.link = linkState{input: i}
+			if x.String() == "/" {
+				m.mode = "search"
+				m.link.input.Prompt = "Find messages: "
+				m.link.input.SetValue(m.query)
+				return m, textinput.Blink
+			}
+			m.mode = "contact"
+			m.link.message = *it
+			m.link.input.Prompt = "Contact name: "
+			return m, func() tea.Msg {
+				c, cancel := ctx()
+				defer cancel()
+				var names []string
+				e := m.api.Do(c, "GET", "/contacts", nil, &names)
+				return contactsMsg{names, e}
+			}
+		case "f":
+			m.mode = "service"
+			m.serviceCursor = 0
+			return m, nil
 		case "q", "esc":
 			return m, tea.Quit
 		case "j", "down":
@@ -503,7 +587,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "p":
-			providers := []string{"", "Signal", "Telegram", "Messages", "Gmail", "Outlook"}
+			providers := []string{"", "Signal", "Telegram", "Messages", "Gmail", "Outlook", "Slack", "Outlook (Chrome)", "Calendar (Chrome)"}
 			next := 0
 			for i, p := range providers {
 				if p == m.provider {
@@ -624,7 +708,11 @@ func (m *Model) View() string {
 	header += "  " + amber.Render(label)
 	height := m.h - 5
 	var body string
-	if m.mode == "drafts" || m.mode == "review" {
+	if m.mode == "link" {
+		body = m.linkView(height)
+	} else if m.mode == "contact" || m.mode == "search" || m.mode == "service" {
+		body = m.utilityView(height)
+	} else if m.mode == "drafts" || m.mode == "review" {
 		body = m.draftView(height)
 	} else if m.mode == "attach" {
 		body = m.attachmentView(height)
@@ -645,7 +733,7 @@ func (m *Model) View() string {
 			body = lipgloss.JoinHorizontal(lipgloss.Top, left, "  "+quiet.Render("│")+" ", right)
 		}
 	}
-	help := "r reply · p service · Tab all · x trash · T trash · d handled · D drafts · q close"
+	help := "r reply · l link note/task · C contact · / find · f service · Tab all · x trash · T view trash · D drafts · q close"
 	if m.trash {
 		help = "↑↓ choose  u restore  T back  p service  q close"
 	}

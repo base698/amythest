@@ -4,6 +4,7 @@
 package tasks
 
 type Task struct {
+	Context    []string `json:"context,omitempty"`
 	Slug       string   `json:"slug"`
 	Path       string   `json:"path"`
 	Line       int      `json:"line"`          // 1-based line in the source file
