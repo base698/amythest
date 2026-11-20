@@ -1,6 +1,7 @@
 package chatui
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -8,17 +9,20 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// /tag [REF] [PROJECT] puts a message on a project's wall: by default the
-// newest message here, on this workspace's wall. /untag takes it off.
+// /tag [REF] [PROJECT] [-milestone NAME] puts a message on a project's
+// wall: by default the newest message here, on this workspace's wall. With
+// -milestone it is also filed under that milestone of the project, so the
+// milestone collects it whenever it was sent. /untag takes it off the wall.
 
 type (
 	workspaceMsg struct{ project string }
 	tagMsg       struct {
-		win     *window
-		message string
-		project string
-		on      bool
-		err     error
+		win       *window
+		message   string
+		project   string
+		milestone string
+		on        bool
+		err       error
 	}
 )
 
@@ -40,6 +44,21 @@ func (m *Model) tag(w *window, rest string, on bool) tea.Cmd {
 		return nil
 	}
 	args := strings.Fields(rest)
+	milestone := ""
+	for i, a := range args {
+		if a == "-milestone" || a == "--milestone" {
+			milestone, args = strings.Join(args[i+1:], " "), args[:i]
+			if !on || milestone == "" {
+				w.note(m.o.Now(), "-!- /tag [REF] [PROJECT] -milestone NAME files a message under a milestone.")
+				return nil
+			}
+			if m.o.Milestones == nil {
+				w.note(m.o.Now(), "-!- Milestones need the work server; set it up for amy first.")
+				return nil
+			}
+			break
+		}
+	}
 	var msg messages.Message
 	ok := false
 	if len(args) > 0 {
@@ -66,12 +85,28 @@ func (m *Model) tag(w *window, rest string, on bool) tea.Cmd {
 		c, cancel := ctx()
 		defer cancel()
 		var e error
+		named := ""
+		if milestone != "" {
+			// Find the milestone first, so a wrong name changes nothing.
+			list, err := m.o.Milestones.List(c, project)
+			if err != nil {
+				return tagMsg{win: w, err: err}
+			}
+			found, ok := messages.FindMilestone(list, milestone)
+			if !ok {
+				return tagMsg{win: w, err: fmt.Errorf("%s has no milestone %q (amy milestone list)", project, milestone)}
+			}
+			named = found.Name
+			if e = m.o.Milestones.Link(c, found.ID, msg.ID); e != nil {
+				return tagMsg{win: w, err: e}
+			}
+		}
 		if on {
 			_, e = m.api.Tag(c, msg.ID, project)
 		} else {
 			e = m.api.Untag(c, msg.ID, project)
 		}
-		return tagMsg{win: w, message: msg.ID, project: project, on: on, err: e}
+		return tagMsg{win: w, message: msg.ID, project: project, milestone: named, on: on, err: e}
 	}
 }
 
@@ -88,6 +123,10 @@ func (m *Model) onTag(x tagMsg) {
 	if x.on {
 		if !slices.Contains(w.tags[x.message], x.project) {
 			w.tags[x.message] = append(w.tags[x.message], x.project)
+		}
+		if x.milestone != "" {
+			w.note(m.o.Now(), "-!- [%s] is on the %s wall, in %s.", ref, x.project, x.milestone)
+			return
 		}
 		w.note(m.o.Now(), "-!- [%s] is on the %s wall.", ref, x.project)
 		return

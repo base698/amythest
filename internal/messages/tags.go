@@ -1,6 +1,7 @@
 package messages
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"strings"
@@ -147,4 +148,33 @@ func (s *Store) tagThread(actor string, t *Thread) error {
 		t.Tags[id] = append(t.Tags[id], p)
 	}
 	return rows.Err()
+}
+
+// Milestone is a Work milestone a message can be filed under.
+type Milestone struct {
+	ID   string
+	Name string
+	Open bool
+}
+
+// Milestones lets a Messages view file a message under one of a project's
+// milestones as well as putting it on the project's wall. The views take it
+// from their caller, since milestones live on the work server.
+type Milestones struct {
+	// List is a project's milestones, open ones first, newest first.
+	List func(ctx context.Context, project string) ([]Milestone, error)
+	// Link files a message under a milestone.
+	Link func(ctx context.Context, milestone, message string) error
+}
+
+// FindMilestone picks a milestone by name (any case), preferring an open one.
+func FindMilestone(list []Milestone, name string) (Milestone, bool) {
+	var found Milestone
+	ok := false
+	for _, m := range list {
+		if strings.EqualFold(m.Name, name) && (!ok || m.Open && !found.Open) {
+			found, ok = m, true
+		}
+	}
+	return found, ok
 }

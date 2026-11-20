@@ -239,3 +239,47 @@ func TestWKeyTogglesTheWorkspaceWall(t *testing.T) {
 		t.Fatalf("second w did not untag: %q", m.status)
 	}
 }
+
+func TestWOffersTheProjectsMilestones(t *testing.T) {
+	m, s, _ := harness(t)
+	it := *m.current()
+	linked := map[string]string{}
+	m.opts.Milestones = &messages.Milestones{
+		List: func(context.Context, string) ([]messages.Milestone, error) {
+			return []messages.Milestone{{ID: "ms-prod", Name: "production", Open: true}, {ID: "ms-janus", Name: "janus integration"}}, nil
+		},
+		Link: func(_ context.Context, milestone, message string) error { linked[message] = milestone; return nil },
+	}
+	m.Update(workspaceMsg{"robot"})
+	run := func(cmd tea.Cmd) {
+		for cmd != nil {
+			_, cmd = m.Update(cmd())
+		}
+	}
+	key := func(k tea.KeyMsg) { _, cmd := m.Update(k); run(cmd) }
+	key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	if m.mode != "milestone" || !strings.Contains(m.View(), "Wall only") || !strings.Contains(m.View(), "◆ production") {
+		t.Fatalf("no milestone picker:\n%s", m.View())
+	}
+	key(tea.KeyMsg{Type: tea.KeyEsc})
+	if tagged, _ := s.Tagged("owner", "robot", 0); len(tagged) != 0 || m.mode != "focus" {
+		t.Fatal("Esc tagged the message")
+	}
+	// The default stays "the wall only".
+	key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	key(tea.KeyMsg{Type: tea.KeyEnter})
+	if tagged, _ := s.Tagged("owner", "robot", 0); len(tagged) != 1 || len(linked) != 0 {
+		t.Fatalf("wall only: %+v %v", tagged, linked)
+	}
+	key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}}) // off the wall again
+	key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	key(tea.KeyMsg{Type: tea.KeyDown})
+	key(tea.KeyMsg{Type: tea.KeyDown})
+	key(tea.KeyMsg{Type: tea.KeyEnter})
+	if linked[it.Message.ID] != "ms-janus" || !strings.Contains(m.status, "in janus integration") {
+		t.Fatalf("milestone not chosen: %v %q", linked, m.status)
+	}
+	if tagged, _ := s.Tagged("owner", "robot", 0); len(tagged) != 1 {
+		t.Fatal("not on the wall")
+	}
+}

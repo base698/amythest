@@ -46,6 +46,8 @@ type Options struct {
 	// Workspace names the project this workspace's wall shows ("" outside
 	// one). It may be slow, so it runs once in the background.
 	Workspace func() string
+	// Milestones, when set, offers the project's milestones after w.
+	Milestones *messages.Milestones
 }
 type Model struct {
 	people                    []slackPerson
@@ -75,7 +77,8 @@ type Model struct {
 	jump                      *messages.Jump // waiting for its conversation to load
 	highlight                 string         // the message a jump landed on
 	project                   string         // this workspace's wall, for w
-	inThread                  bool           // the reply goes in a Slack thread under target
+	pickMilestone             milestonePick
+	inThread                  bool // the reply goes in a Slack thread under target
 	eventSeq                  int64
 }
 type itemsMsg struct {
@@ -372,6 +375,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case taggedMsg:
 		return m, m.onTagged(x)
+	case milestonesMsg:
+		return m, m.onMilestones(x)
 	case threadMsg:
 		if it := m.current(); it != nil && it.Conversation.ID == x.id {
 			if x.err != nil {
@@ -458,6 +463,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == "link" {
 			return m, m.linkKey(x)
+		}
+		if m.mode == "milestone" {
+			return m, m.milestoneKey(x)
 		}
 		if m.mode == "people" {
 			return m, m.peopleKey(x)
@@ -781,6 +789,8 @@ func (m *Model) View() string {
 	var body string
 	if m.mode == "link" {
 		body = m.linkView(height)
+	} else if m.mode == "milestone" {
+		body = m.milestoneView(height)
 	} else if m.mode == "people" {
 		body = m.peopleView(height)
 	} else if m.mode == "contact" || m.mode == "search" || m.mode == "service" {

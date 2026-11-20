@@ -2,6 +2,7 @@ package chatui
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"image/color"
 	"image/png"
@@ -236,5 +237,38 @@ func TestTagPutsAMessageOnTheWorkspaceWall(t *testing.T) {
 	_, w = m.windowNamed(t, "demo-slack-release")
 	if len(w.tags) == 0 {
 		t.Fatal("tags not loaded with the page")
+	}
+}
+
+func TestTagFilesAMessageUnderAMilestone(t *testing.T) {
+	m, s, _ := harness(t)
+	linked := map[string]string{}
+	m.o.Milestones = &messages.Milestones{
+		List: func(context.Context, string) ([]messages.Milestone, error) {
+			return []messages.Milestone{{ID: "ms-new", Name: "Production", Open: true}, {ID: "ms-old", Name: "janus integration"}}, nil
+		},
+		Link: func(_ context.Context, milestone, message string) error { linked[message] = milestone; return nil },
+	}
+	i, w := m.windowNamed(t, "demo-slack-release")
+	drain(t, m, m.show(i), 0)
+	m.workspace = "robot"
+	first := w.msgs[0]
+	typeLine(t, m, "/tag "+w.refFor(first.ID)+" -milestone nothing here")
+	if len(linked) != 0 || !strings.Contains(screen(m), `no milestone "nothing here"`) {
+		t.Fatalf("unknown milestone not refused:\n%s", screen(m))
+	}
+	if tagged, _ := s.Tagged("owner", "robot", 0); len(tagged) != 0 {
+		t.Fatal("tagged despite the unknown milestone")
+	}
+	typeLine(t, m, "/tag "+w.refFor(first.ID)+" -milestone Janus Integration")
+	if linked[first.ID] != "ms-old" || !strings.Contains(screen(m), "in janus integration") {
+		t.Fatalf("not filed: %v\n%s", linked, screen(m))
+	}
+	if tagged, _ := s.Tagged("owner", "robot", 0); len(tagged) != 1 {
+		t.Fatal("not on the wall")
+	}
+	typeLine(t, m, "/untag -milestone Production")
+	if linked[w.msgs[len(w.msgs)-1].ID] != "" {
+		t.Fatal("/untag filed a message")
 	}
 }

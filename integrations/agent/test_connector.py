@@ -160,3 +160,55 @@ class SlackFileImportTests(unittest.TestCase):
         no_reader = dict(self.config, read_tools=['mcp__s__slack_search_public_and_private'])
         c.read_claude(no_reader, dt.datetime(2026, 11, 19, tzinfo=dt.timezone.utc), runner)
         self.assertEqual(seen['settings'], {'disableAllHooks': True})
+
+class BackfillTests(unittest.TestCase):
+    def setUp(self):
+        self.config={'provider':'slack','account':'T123:U456','read_tools':['mcp__slack__slack_read_channel','mcp__slack__slack_read_thread','mcp__slack__slack_read_user_profile','mcp__slack__slack_list_user_channels'],
+                     'query':'is:dm','state_dir':'unused','token_file':'unused'}
+        self.now=dt.datetime(2026,11,20,tzinfo=dt.timezone.utc)
+    def row(self,ts,thread=''):
+        return {'id':ts,'conversation_id':'C789','thread_id':thread,'name':'janus','sender':'Morgan','sender_id':'U111','body':'m '+ts,
+                'at':ts,'outgoing':False,'url':'','files':[]}
+    def payload(self,rows,more=True,truncated=False,chat='C789'):
+        return {'available':True,'account':'T123:U456','user_id':'','workspace':'','channel_id':chat,'has_more':more,'truncated':truncated,'messages':rows}
+    def test_page_prompt_tools_and_range_checks(self):
+        seen={}
+        def runner(args,**kwargs):
+            seen['tools']=args[args.index('--allowedTools')+1];seen['prompt']=kwargs['input']
+            kwargs['stdout'].write(json.dumps({'structured_output':self.payload([self.row('1790000100.000000'),self.row('1790000150.000000','1790000100.000000')])}));return Mock(returncode=0)
+        chat,events,more,_=c.read_backfill_page(self.config,'#janus','1790000000.000000','1790000200.000000',self.now,runner)
+        self.assertEqual((chat,len(events),more),('C789',2,True))
+        self.assertEqual(seen['tools'],'ToolSearch,mcp__slack__slack_read_channel,mcp__slack__slack_read_thread,mcp__slack__slack_read_user_profile,mcp__slack__slack_list_user_channels')
+        self.assertIn('oldest="1790000000.000000", latest="1790000200.000000"',seen['prompt'])
+        self.assertIn('"janus"',seen['prompt'])
+        self.assertEqual(events[1]['conversation']['thread'],'1790000100.000000')
+        for bad in (self.payload([self.row('1789999999.000000')]),self.payload([self.row('1790000300.000000')]),self.payload([],chat='C000')):
+            def runner(args,bad=bad,**kwargs):
+                kwargs['stdout'].write(json.dumps({'structured_output':bad}));return Mock(returncode=0)
+            with self.assertRaises(ValueError):c.read_backfill_page(self.config,'C789','1790000000.000000','1790000200.000000',self.now,runner)
+        with self.assertRaises(ValueError):c.backfill_tools(dict(self.config,read_tools=['mcp__slack__slack_read_thread']))
+    def test_pages_back_in_time_until_done_and_replays_harmlessly(self):
+        pages={'':[self.row('1790000300.000000'),self.row('1790000310.000000','1790000300.000000'),self.row('1790000200.000000')],
+               '1790000200.000000':[self.row('1790000100.000000')]}
+        calls=[]
+        def fetch(cfg,channel,oldest,latest,now):
+            calls.append((channel,latest))
+            rows=pages[latest]
+            return 'C789',c.normalize(dict(cfg,limit=100),self.payload(rows),self.now),latest=='',False
+        with tempfile.TemporaryDirectory() as tmp:
+            j=c.Journal(Path(tmp)/'state.db');gateway=Mock();gateway.request.return_value={}
+            total,n=c.backfill(self.config,gateway,j,'#janus','1790000000.000000','',fetch=fetch,log=lambda *_:None)
+            self.assertEqual((total,n),(4,2))
+            self.assertEqual(calls,[('#janus',''),('C789','1790000200.000000')])
+            ids=[call.args[0]['message']['native_id'] for call in gateway.ingest.call_args_list]
+            self.assertEqual(ids,['1790000300.000000','1790000310.000000','1790000200.000000','1790000100.000000'])
+            j.db.close()
+        stuck=lambda cfg,channel,oldest,latest,now:('C789',c.normalize(dict(cfg,limit=100),self.payload([self.row('1790000200.000000')]),self.now),True,False)
+        with tempfile.TemporaryDirectory() as tmp:
+            j=c.Journal(Path(tmp)/'state.db')
+            with self.assertRaises(RuntimeError):c.backfill(self.config,Mock(),j,'C789','1790000000.000000','1790000200.000000',fetch=stuck,log=lambda *_:None)
+            j.db.close()
+    def test_dates_become_slack_ts(self):
+        self.assertEqual(c.slack_ts('2026-10-01T00:00:00Z'),'1790812800.000000')
+        day=float(c.slack_ts('2026-10-01'));end=float(c.slack_ts('2026-10-01',end=True))
+        self.assertEqual(end-day,86400)

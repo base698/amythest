@@ -284,9 +284,58 @@ func (c *Client) Milestones(ctx context.Context, project string, open bool) ([]M
 }
 
 // StartMilestone opens a milestone on a project (or returns the open one).
-func (c *Client) StartMilestone(ctx context.Context, project, name string) (Milestone, error) {
+// started and ended (RFC 3339) backdate it; both empty means from now.
+func (c *Client) StartMilestone(ctx context.Context, project, name, started, ended string) (Milestone, error) {
 	var out Milestone
-	return out, c.do(ctx, http.MethodPost, "/api/work/milestones", map[string]string{"project": project, "name": name}, &out)
+	return out, c.do(ctx, http.MethodPost, "/api/work/milestones", map[string]string{"project": project, "name": name, "started_at": started, "ended_at": ended}, &out)
+}
+
+// MilestoneChange edits a milestone; nil fields stay as they are, and an
+// empty Ended reopens it.
+type MilestoneChange struct {
+	Name    *string `json:"name,omitempty"`
+	Started *string `json:"started_at,omitempty"`
+	Ended   *string `json:"ended_at,omitempty"`
+}
+
+// UpdateMilestone renames a milestone or moves its dates.
+func (c *Client) UpdateMilestone(ctx context.Context, id string, ch MilestoneChange) (Milestone, error) {
+	var out Milestone
+	in := struct {
+		ID string `json:"id"`
+		MilestoneChange
+	}{id, ch}
+	return out, c.do(ctx, http.MethodPost, "/api/work/milestones/update", in, &out)
+}
+
+// MilestoneLink is a message (kind "message", its Messages ID) or pull
+// request (kind "pr", owner/repo#N) linked to a milestone. Artifact is the
+// pull request as the collector recorded it, when it did.
+type MilestoneLink struct {
+	Milestone string        `json:"milestone_id"`
+	Kind      string        `json:"kind"`
+	Ref       string        `json:"ref"`
+	Added     string        `json:"added_at"`
+	AddedBy   string        `json:"added_by"`
+	Artifact  *WorkArtifact `json:"artifact,omitempty"`
+}
+
+// LinkMilestone links a message or pull request to a milestone; linking
+// twice is harmless.
+func (c *Client) LinkMilestone(ctx context.Context, id, kind, ref string) (MilestoneLink, error) {
+	var out MilestoneLink
+	return out, c.do(ctx, http.MethodPost, "/api/work/milestones/links", map[string]string{"id": id, "kind": kind, "ref": ref}, &out)
+}
+
+// UnlinkMilestone removes a link.
+func (c *Client) UnlinkMilestone(ctx context.Context, id, kind, ref string) error {
+	return c.do(ctx, http.MethodDelete, "/api/work/milestones/links", map[string]string{"id": id, "kind": kind, "ref": ref}, nil)
+}
+
+// MilestoneLinks lists a milestone's links.
+func (c *Client) MilestoneLinks(ctx context.Context, id string) ([]MilestoneLink, error) {
+	var out []MilestoneLink
+	return out, c.do(ctx, http.MethodGet, "/api/work/milestones/links?id="+url.QueryEscape(id), nil, &out)
 }
 
 // EndMilestone closes a milestone.
@@ -295,12 +344,14 @@ func (c *Client) EndMilestone(ctx context.Context, id string) (Milestone, error)
 	return out, c.do(ctx, http.MethodPost, "/api/work/milestones/end", map[string]string{"id": id}, &out)
 }
 
-// CollectMilestone is the project's work within a milestone's window.
-func (c *Client) CollectMilestone(ctx context.Context, id string) (Milestone, *WorkSnapshot, error) {
+// CollectMilestone is the project's work within a milestone's window, and
+// the milestone's links.
+func (c *Client) CollectMilestone(ctx context.Context, id string) (Milestone, *WorkSnapshot, []MilestoneLink, error) {
 	var out struct {
-		Milestone Milestone    `json:"milestone"`
-		Snapshot  WorkSnapshot `json:"snapshot"`
+		Milestone Milestone       `json:"milestone"`
+		Snapshot  WorkSnapshot    `json:"snapshot"`
+		Links     []MilestoneLink `json:"links"`
 	}
 	err := c.do(ctx, http.MethodGet, "/api/work/milestones/collect?id="+url.QueryEscape(id), nil, &out)
-	return out.Milestone, &out.Snapshot, err
+	return out.Milestone, &out.Snapshot, out.Links, err
 }

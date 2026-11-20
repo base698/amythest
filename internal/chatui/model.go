@@ -55,6 +55,9 @@ type Options struct {
 	// Workspace names this workspace\'s wall (project), "" outside one; it
 	// runs once in the background.
 	Workspace func() string
+	// Milestones, when set, lets /tag -milestone NAME file the message
+	// under one of the project's milestones.
+	Milestones *messages.Milestones
 }
 
 const (
@@ -831,6 +834,7 @@ func (m *Model) help() {
 		"/attach [REF] PATH... [text]  send files (Tab completes paths; up to 8, 5 MB each)",
 		"/open TAG  /save TAG [PATH]   open or save a file; TAG is its [file abc] label",
 		"/tag [REF] [PROJECT]  put a message on this workspace's wall (newest by default); /untag",
+		"/tag ... -milestone NAME  also file it under that milestone of the project",
 		"/grant [30m] [files]  let agents read and send here for a while; /revoke ends it",
 		"/search WORDS       search all messages (/s); /lastlog WORDS this one (/ll)",
 		"/go N               open search result N (or type N in a search window)",

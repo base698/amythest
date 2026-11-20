@@ -106,6 +106,9 @@ func showChat(client *messages.Client, opts chatui.Options, pane string) error {
 	if opts.Workspace == nil {
 		opts.Workspace = currentProject
 	}
+	if opts.Milestones == nil {
+		opts.Milestones = workMilestones()
+	}
 	// Pictures are drawn as the wall draws them; AMY_WALL_IMAGES overrides.
 	out := &serialOut{File: os.Stdout}
 	var w wall.Options

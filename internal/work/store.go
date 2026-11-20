@@ -90,7 +90,7 @@ func Open(cfg Config) (*Store, error) {
 	if e = db.QueryRow(`PRAGMA user_version`).Scan(&version); e != nil {
 		return fail(e)
 	}
-	if version > 3 {
+	if version > 4 {
 		return fail(errors.New("work database newer than this binary"))
 	}
 	if version == 0 {
@@ -113,6 +113,11 @@ func Open(cfg Config) (*Store, error) {
 	}
 	if version < 3 {
 		if _, e = db.Exec(milestoneSchema); e != nil {
+			return fail(e)
+		}
+	}
+	if version < 4 {
+		if _, e = db.Exec(milestoneLinkSchema); e != nil {
 			return fail(e)
 		}
 	}

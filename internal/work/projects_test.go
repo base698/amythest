@@ -111,7 +111,7 @@ func TestProjectMigrationFromVersionOne(t *testing.T) {
 		t.Fatal(e)
 	}
 	var v int
-	if e = s.db.QueryRow(`PRAGMA user_version`).Scan(&v); e != nil || v != 3 {
+	if e = s.db.QueryRow(`PRAGMA user_version`).Scan(&v); e != nil || v != 4 {
 		t.Fatal(v, e)
 	}
 }

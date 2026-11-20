@@ -70,6 +70,27 @@ through the model, so missing, altered or
 incomplete model output remains a limitation of the agent route. Source links
 and original IDs are retained for checking against the provider.
 
+### Backfilling a channel's history
+
+`sync` reads recent search results only. To import a channel's full history, for
+example to link older messages to a milestone, backfill it once:
+
+```sh
+amy-agent-messages backfill --name work-slack --channel '#janus-rollout' --since 2026-10-01
+# --until DATE (default now), --max-pages N (default 100)
+```
+
+Backfill needs `slack_read_channel` in `read_tools`. Add `slack_read_thread` to
+include thread replies, and `slack_list_user_channels` or
+`slack_search_channels` to find a channel by `#name` (or pass its ID). Each
+Claude call reads one page of 25 messages with their thread replies (at most 100
+records), from newest to oldest, until it reaches `--since`.
+
+Every message keeps its Slack timestamp as its ID, so re-running a backfill, or
+overlapping it with `sync`, changes nothing. Threads started before `--since` are
+not read. If a run stops at `--max-pages`, it prints the `--until` to continue
+from. Files come along as they do with `sync`.
+
 The bridge serializes Claude startup across accounts, disables hooks and shell
 execution for that import, limits the permitted tools to explicit read tools,
 checks account/channel scope and validates the entire response before import.

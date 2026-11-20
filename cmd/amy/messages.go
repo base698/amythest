@@ -457,6 +457,9 @@ func showMessages(client *messages.Client, opts messageui.Options, pane string) 
 	if opts.Workspace == nil {
 		opts.Workspace = currentProject
 	}
+	if opts.Milestones == nil {
+		opts.Milestones = workMilestones()
+	}
 	opts.Open = func(raw string) error {
 		if strings.HasPrefix(raw, "slack://user?") {
 			u, err := url.Parse(raw)

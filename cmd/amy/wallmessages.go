@@ -111,3 +111,35 @@ func openMessageFromWall(conversation, message string) error {
 	}
 	return nil
 }
+
+// workMilestones lets Messages file messages under the work server's
+// milestones; nil when the work server isn't configured.
+func workMilestones() *messages.Milestones {
+	cfg, err := apiclient.LoadConfig(nil)
+	if err != nil {
+		return nil
+	}
+	client := apiclient.New(cfg)
+	return &messages.Milestones{
+		List: func(ctx context.Context, project string) ([]messages.Milestone, error) {
+			list, err := client.Milestones(ctx, project, false)
+			if err != nil {
+				return nil, err
+			}
+			var open, closed []messages.Milestone
+			for _, m := range list {
+				x := messages.Milestone{ID: m.ID, Name: m.Name, Open: m.Ended == ""}
+				if x.Open {
+					open = append(open, x)
+				} else {
+					closed = append(closed, x)
+				}
+			}
+			return append(open, closed...), nil
+		},
+		Link: func(ctx context.Context, milestone, message string) error {
+			_, err := client.LinkMilestone(ctx, milestone, "message", message)
+			return err
+		},
+	}
+}

@@ -82,14 +82,55 @@ amy milestone end                       # the only open one, or end NAME
 amy milestone collect "production deploy" -json -o deploy.json
 ```
 
-`collect` gathers the milestone's window: sessions and runs that overlap it,
-artifacts and agent notes created in it, and messages put on the project's wall
-during it (from Messages, when set up here). Without `-json` it prints a
-readable report. Nothing is stamped as it arrives, so late events still land in
-the right milestone. The wall's header shows open milestones (`◆ NAME`).
+Past work can be recorded afterwards. `-from` backdates the start, and with
+`-to` the milestone is already finished. Milestones on one project may overlap.
+A bare date is local midnight; as `-to` it means the end of that day.
 
-Milestones are kept by the work server (`/api/work/milestones`): reader tokens
-can list and collect them, starting and ending need the owner.
+```sh
+amy milestone start janus integration -from 2026-10-01 -to 2026-10-31
+amy milestone start production -from 2026-10-30      # open since Oct 30
+amy milestone edit production -to 2026-11-20         # or -from, -name NEW, -to open
+```
+
+Starting a milestone that is already open returns it, unless `-to` is given.
+
+Messages and pull requests can be linked to a milestone whatever their time.
+Links are kept as references, and linking twice is harmless:
+
+```sh
+amy milestone link "janus integration" msg:MESSAGE_ID pr:acme/janus#42
+amy milestone link production https://github.com/acme/janus/pull/57
+amy milestone links production
+amy milestone unlink production pr:acme/janus#57
+```
+
+In Messages, `/tag [REF] [PROJECT] -milestone NAME` (chat client) puts a message
+on the project's wall and links it to the milestone. In the queue view, **w**
+offers the project's milestones; Enter on *Wall only*, the default, just puts it
+on the wall.
+
+`collect` gathers the milestone's window:
+
+- sessions and runs that overlap it
+- artifacts and agent notes created in it
+- messages on the project's wall that were *sent* during it (from Messages, when
+  set up here), so a message put on the wall later still counts
+- everything linked
+
+Each message and pull request records `via` (`window`, `linked`, or both), so you
+can tell which is which. A linked pull request shows its title, state and merge
+time from `gh`, plus the collector's artifact for it if an agent session
+produced one. Without `-json`, `collect` prints a readable report. Nothing is
+stamped as it arrives, so late events still land in the right milestone. The
+wall's header shows open milestones (`◆ NAME`).
+
+These milestones are separate from a kanban card's `milestone` field, which
+names a release.
+
+Milestones are kept by the work server (`/api/work/milestones`, `/update`,
+`/links`, `/collect`). Reader tokens can list, read links and collect.
+Starting, ending, editing and linking need the owner. Links need Work schema 4,
+which the server adds on start.
 
 ## HTTP and MCP
 

@@ -31,7 +31,7 @@ func workReadRoute(r *http.Request) bool {
 		return false
 	}
 	switch r.URL.Path {
-	case "/api/work/snapshot", "/api/work/search", "/api/work/inbox", "/api/work/milestones", "/api/work/milestones/collect":
+	case "/api/work/snapshot", "/api/work/search", "/api/work/inbox", "/api/work/milestones", "/api/work/milestones/collect", "/api/work/milestones/links":
 		return true
 	}
 	return len(r.URL.Path) == len("/api/work/media/")+64 && r.URL.Path[:len("/api/work/media/")] == "/api/work/media/"
@@ -57,7 +57,8 @@ func (s *Server) mountWork() error {
 	}
 	s.ready.register("work", s.work.Ping)
 	for _, pattern := range []string{"POST /api/work/streams", "POST /api/work/events", "POST /api/work/heartbeat", "GET /api/work/bindings", "POST /api/work/bindings/ack", "POST /api/work/bindings", "GET /api/work/snapshot", "GET /api/work/inbox", "GET /api/work/search", "POST /api/work/project", "POST /api/work/file", "POST /api/work/review", "POST /api/work/snooze", "POST /api/work/dismiss", "POST /api/work/reset", "POST /api/work/quarantine", "PUT /api/work/media/{hash}", "GET /api/work/media/{hash}",
-		"GET /api/work/milestones", "POST /api/work/milestones", "POST /api/work/milestones/end", "GET /api/work/milestones/collect"} {
+		"GET /api/work/milestones", "POST /api/work/milestones", "POST /api/work/milestones/end", "GET /api/work/milestones/collect",
+		"POST /api/work/milestones/update", "GET /api/work/milestones/links", "POST /api/work/milestones/links", "DELETE /api/work/milestones/links"} {
 		s.mux.HandleFunc(pattern, s.handleWork)
 	}
 	return nil
@@ -160,11 +161,38 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Project string `json:"project"`
 			Name    string `json:"name"`
+			Started string `json:"started_at"`
+			Ended   string `json:"ended_at"`
 		}
 		if !decode(&in) {
 			return
 		}
-		result, e = s.work.StartMilestone(in.Project, in.Name)
+		result, e = s.work.StartMilestone(in.Project, in.Name, in.Started, in.Ended)
+	case "POST /api/work/milestones/update":
+		var in struct {
+			ID string `json:"id"`
+			work.MilestoneChange
+		}
+		if !decode(&in) {
+			return
+		}
+		result, e = s.work.UpdateMilestone(in.ID, in.MilestoneChange)
+	case "GET /api/work/milestones/links":
+		result, e = s.work.MilestoneLinks(r.URL.Query().Get("id"))
+	case "POST /api/work/milestones/links", "DELETE /api/work/milestones/links":
+		var in struct {
+			ID   string `json:"id"`
+			Kind string `json:"kind"`
+			Ref  string `json:"ref"`
+		}
+		if !decode(&in) {
+			return
+		}
+		if r.Method == "POST" {
+			result, e = s.work.LinkMilestone(in.ID, in.Kind, in.Ref, "owner")
+		} else {
+			result, e = map[string]bool{"ok": true}, s.work.UnlinkMilestone(in.ID, in.Kind, in.Ref)
+		}
 	case "POST /api/work/milestones/end":
 		var in struct {
 			ID string `json:"id"`
@@ -174,8 +202,8 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 		}
 		result, e = s.work.EndMilestone(in.ID)
 	case "GET /api/work/milestones/collect":
-		m, d, err := s.work.Collect(r.URL.Query().Get("id"))
-		result, e = map[string]any{"milestone": m, "snapshot": d}, err
+		m, d, links, err := s.work.Collect(r.URL.Query().Get("id"))
+		result, e = map[string]any{"milestone": m, "snapshot": d, "links": links}, err
 	case "GET /api/work/search":
 		q := r.URL.Query()
 		limit, _ := strconv.Atoi(q.Get("limit"))
