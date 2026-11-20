@@ -30,16 +30,20 @@ type Options struct {
 	// Share opens the message reply picker with a snapshot of the selected item.
 	Share func(Item) tea.Cmd
 
-	Project         string        // show this project; empty: the current herdr workspace
-	Graphics        string        // "kitty", "blocks" or "off"
-	Refresh         time.Duration // how often to look for new items
-	Out             io.Writer     // where image uploads go; must be serialized with the screen
-	CellW           int           // a cell's width in pixels, 0 if unknown
-	CellAspect      float64       // a cell's width / height
-	Locate          func() Place
-	Open            func(url string) error
-	OpenFile        func(FileTarget) tea.Cmd
-	OpenCanvas      func(id string) error
+	Project    string        // show this project; empty: the current herdr workspace
+	Graphics   string        // "kitty", "blocks" or "off"
+	Refresh    time.Duration // how often to look for new items
+	Out        io.Writer     // where image uploads go; must be serialized with the screen
+	CellW      int           // a cell's width in pixels, 0 if unknown
+	CellAspect float64       // a cell's width / height
+	Locate     func() Place
+	Open       func(url string) error
+	OpenFile   func(FileTarget) tea.Cmd
+	OpenCanvas func(id string) error
+	// Messages lists the messages tagged to a project in Messages; nil when
+	// messaging is not set up. OpenMessage shows one in Messages.
+	Messages        func(ctx context.Context, project string) ([]MessageItem, error)
+	OpenMessage     func(conversation, message string) error
 	CanvasWorkspace string // current Herdr workspace when it differs from the Work project
 	Now             func() time.Time
 	// Show opens the wall on one item, enlarged (an image) or as its diff (a
@@ -154,9 +158,11 @@ type (
 		err       error
 		canvases  []apiclient.CanvasMeta
 		canvasErr error
+		messages  []MessageItem
 	}
-	canvasOpenedMsg struct{ err error }
-	picMsg          struct {
+	canvasOpenedMsg  struct{ err error }
+	messageOpenedMsg struct{ err error }
+	picMsg           struct {
 		hash string
 		img  image.Image
 		err  error
@@ -217,7 +223,20 @@ func (m *model) feedCmd(project string) tea.Cmd {
 		defer cancel()
 		s, err := m.api.WorkProject(ctx, project)
 		canvases, canvasErr := m.api.CanvasList(ctx, workspace)
-		return feedMsg{project: project, snap: s, err: err, canvases: canvases, canvasErr: canvasErr}
+		var msgs []MessageItem
+		if m.o.Messages != nil {
+			// Tagged under the project, or under the workspace's own name.
+			seen := map[string]bool{}
+			for _, name := range []string{project, workspace} {
+				if seen[name] {
+					continue
+				}
+				seen[name] = true
+				got, _ := m.o.Messages(ctx, name) // Messages being away never blocks the wall
+				msgs = append(msgs, got...)
+			}
+		}
+		return feedMsg{project: project, snap: s, err: err, canvases: canvases, canvasErr: canvasErr, messages: msgs}
 	}
 }
 
@@ -304,6 +323,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.say("share: " + msg.Err.Error())
 		}
 		return m, m.relayout()
+	case messageOpenedMsg:
+		if msg.err != nil {
+			return m, m.say("Messages: " + msg.err.Error())
+		}
+		return m, m.say("opened in Messages")
 	case canvasOpenedMsg:
 		if msg.err != nil {
 			return m, m.say("canvas: " + msg.err.Error())
@@ -349,7 +373,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			keep = m.items[m.cursor].Art.ID
 		}
 		m.canvasErr = msg.canvasErr
-		m.all, m.snap = withCanvases(buildFeed(msg.snap), msg.canvases), msg.snap
+		m.all, m.snap = withMessages(withCanvases(buildFeed(msg.snap), msg.canvases), msg.messages), msg.snap
 		m.prunePictures()
 		m.applyFilter(keep)
 		titles := m.cardsCmd()
@@ -534,13 +558,16 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = max(0, len(m.items)-1)
 		return m, m.reveal()
 	case "f", "c":
-		next := map[string]string{"all": "media", "media": "code", "code": "canvas", "canvas": "all"}
+		next := map[string]string{"all": "media", "media": "code", "code": "canvas", "canvas": "messages", "messages": "all"}
 		wasCanvas := m.filter == "canvas"
 		keep := ""
 		if m.cursor < len(m.items) {
 			keep = m.items[m.cursor].Art.ID
 		}
 		m.filter = next[m.filter]
+		if m.filter == "messages" && m.o.Messages == nil {
+			m.filter = "all" // no Messages here, so nothing to filter for
+		}
 		if s == "c" {
 			m.filter = "canvas"
 			if wasCanvas {
@@ -568,6 +595,11 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		it := m.items[m.cursor]
 		switch {
+		case it.Msg != nil:
+			if m.o.OpenMessage == nil {
+				return m, m.say("Messages is not set up here")
+			}
+			return m, func() tea.Msg { return messageOpenedMsg{m.o.OpenMessage(it.Msg.Conversation, it.Msg.ID)} }
 		case it.Canvas != nil:
 			if m.o.OpenCanvas == nil {
 				return m, m.say("press o to open this canvas in the browser")
@@ -1024,9 +1056,12 @@ func (m *model) build() {
 			m.lines = append(m.lines, "  "+dim.Render(clip(strings.TrimPrefix(githubOrRepo(it.Art.Repo)+" · "+metaText, " · "), width)), "")
 			continue
 		}
-		icon := map[string]string{"image": "▣", "video": "▶", "pr": "⇄", "file": "□", "canvas": "◇"}[it.Kind]
+		icon := map[string]string{"image": "▣", "video": "▶", "pr": "⇄", "file": "□", "canvas": "◇", "message": "✉"}[it.Kind]
 		if it.Kind == "canvas" {
 			metaText = "canvas · " + metaText + " · enter draw"
+		}
+		if it.Kind == "message" {
+			metaText = "message · " + metaText + " · enter opens in Messages"
 		}
 		m.lines = append(m.lines, mark+accent.Render(icon)+" "+strong.Render(clip(it.Title, width-2)))
 		m.lines = append(m.lines, "  "+dim.Render(clip(metaText, width)))
@@ -1140,7 +1175,7 @@ func (m *model) View() string {
 	case m.view == "diff":
 		right = dim.Render(fmt.Sprintf("%d–%d / %d", m.diffTop+1, min(len(m.diff), m.diffTop+m.body()), len(m.diff)))
 	case m.view == "feed":
-		right = dim.Render(fmt.Sprintf("%d %s · %s", len(m.items), map[string]string{"all": "items", "media": "media", "code": "commits", "canvas": "canvases"}[m.filter], ago(m.synced, m.o.Now())))
+		right = dim.Render(fmt.Sprintf("%d %s · %s", len(m.items), map[string]string{"all": "items", "media": "media", "code": "commits", "canvas": "canvases", "messages": "messages"}[m.filter], ago(m.synced, m.o.Now())))
 	}
 	title = clip(title, max(0, m.w-lipgloss.Width(right)-3))
 	gap := max(1, m.w-lipgloss.Width(title)-lipgloss.Width(right)-2)

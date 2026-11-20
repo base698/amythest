@@ -151,6 +151,9 @@ func (m *Model) lines(w *window, width int) []line {
 		out = append(out, indented(head, body, width, msg.ID)...)
 		pad := strings.Repeat(" ", lipgloss.Width(head))
 		out = append(out, m.attachmentLines(w, msg, pad, width)...)
+		for _, p := range w.tags[msg.ID] {
+			out = append(out, line{pad + dim.Render("⌂ on the "+p+" wall"), msg.ID})
+		}
 		if r, ok := w.replies[msg.ID]; ok {
 			label := "1 reply"
 			if r.Count != 1 {

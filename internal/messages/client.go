@@ -182,6 +182,27 @@ func (c *Client) Download(ctx context.Context, id string) ([]byte, error) {
 	return b, e
 }
 
+// Tag puts a message on a project's wall.
+func (c *Client) Tag(ctx context.Context, message, project string) (Tag, error) {
+	var out Tag
+	return out, c.Do(ctx, "POST", "/tags", map[string]string{"message": message, "project": project}, &out)
+}
+
+// Untag takes a message off a project's wall.
+func (c *Client) Untag(ctx context.Context, message, project string) error {
+	return c.Do(ctx, "DELETE", "/tags?"+url.Values{"message": {message}, "project": {project}}.Encode(), nil, nil)
+}
+
+// Tagged lists a project's tagged messages, most recently tagged first.
+func (c *Client) Tagged(ctx context.Context, project string, limit int) ([]Tagged, error) {
+	var out []Tagged
+	q := url.Values{"project": {project}}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	return out, c.Do(ctx, "GET", "/tags?"+q.Encode(), nil, &out)
+}
+
 // Drafts lists drafts and their delivery state, newest first.
 func (c *Client) Drafts(ctx context.Context) ([]Draft, error) {
 	var out []Draft

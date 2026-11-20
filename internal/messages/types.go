@@ -73,6 +73,8 @@ type Thread struct {
 	// (keyed by message ID), or the message this thread hangs from.
 	Replies map[string]ReplySummary `json:"replies,omitempty"`
 	Parent  *ThreadParent           `json:"parent,omitempty"`
+	// For the owner: the walls (projects) each shown message is tagged to.
+	Tags map[string][]string `json:"tags,omitempty"`
 }
 type Draft struct {
 	ID            string       `json:"id"`

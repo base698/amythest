@@ -934,3 +934,42 @@ func TestMediaFilterIsAGalleryOfTiles(t *testing.T) {
 		t.Errorf("narrow pane columns: %d", m.columns())
 	}
 }
+
+func TestWallShowsMessagesTaggedToTheProject(t *testing.T) {
+	api := &fakeAPI{overview: snapshot(), project: snapshot()}
+	asked := map[string]bool{}
+	opened := ""
+	when := time.Now()
+	m, _ := newWall(t, api, Options{Project: "Robot", Graphics: "off", CanvasWorkspace: "robot-ws",
+		Messages: func(ctx context.Context, project string) ([]MessageItem, error) {
+			asked[project] = true
+			if project != "Robot" {
+				return nil, nil
+			}
+			return []MessageItem{{ID: "m1", Conversation: "c1", Sender: "Sam", Body: "Ship the\nmotor fix", Where: "#release · Slack", At: when}}, nil
+		},
+		OpenMessage: func(conv, msg string) error { opened = conv + "/" + msg; return nil },
+	})
+	if !asked["Robot"] || !asked["robot-ws"] {
+		t.Fatalf("asked for %v", asked)
+	}
+	if len(m.items) != 5 || m.items[0].Kind != "message" {
+		t.Fatalf("items: %d, first %q", len(m.items), m.items[0].Kind)
+	}
+	view := m.View()
+	for _, want := range []string{"✉", "Sam: Ship the motor fix", "#release · Slack", "enter opens in Messages"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("wall lacks %q:\n%s", want, view)
+		}
+	}
+	for m.filter != "messages" {
+		drive(t, m, keys("f")[0])
+	}
+	if len(m.items) != 1 {
+		t.Fatalf("messages filter: %d", len(m.items))
+	}
+	drive(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if opened != "c1/m1" {
+		t.Fatalf("opened %q", opened)
+	}
+}

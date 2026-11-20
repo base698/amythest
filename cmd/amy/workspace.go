@@ -58,6 +58,7 @@ func runWorkspace(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 	}
 	options := tui.WorkspaceOptions{Scope: scope, AllSources: configuredSources(client, cfg), Wall: wall.Options{Open: openURL, OpenCanvas: openCanvasPane, Share: func(it wall.Item) tea.Cmd { return shareWallItem(client, it) }}}
+	withWallMessages(&options.Wall)
 	options.Wall.OpenFile = openWallFile
 	out := &serialOut{File: os.Stdout}
 	if err := configureWallGraphics(*images, &options.Wall, out); err != nil {

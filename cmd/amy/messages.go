@@ -454,6 +454,9 @@ func messageListen(addr string) (net.Listener, error) {
 	return l, nil
 }
 func showMessages(client *messages.Client, opts messageui.Options, pane string) error {
+	if opts.Workspace == nil {
+		opts.Workspace = currentProject
+	}
 	opts.Open = func(raw string) error {
 		if strings.HasPrefix(raw, "slack://user?") {
 			u, err := url.Parse(raw)

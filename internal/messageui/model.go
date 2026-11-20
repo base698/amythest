@@ -43,6 +43,9 @@ type Options struct {
 	// EventsAfter skips events up to this number: the jump that opened
 	// this view is already in Goto.
 	EventsAfter int64
+	// Workspace names the project this workspace's wall shows ("" outside
+	// one). It may be slow, so it runs once in the background.
+	Workspace func() string
 }
 type Model struct {
 	people                    []slackPerson
@@ -71,6 +74,7 @@ type Model struct {
 	review                    *messages.Draft
 	jump                      *messages.Jump // waiting for its conversation to load
 	highlight                 string         // the message a jump landed on
+	project                   string         // this workspace's wall, for w
 	inThread                  bool           // the reply goes in a Slack thread under target
 	eventSeq                  int64
 }
@@ -132,7 +136,7 @@ func New(api API, o Options) *Model {
 	return m
 }
 func (m *Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{tick(), m.listen()}
+	cmds := []tea.Cmd{tick(), m.listen(), m.resolveWorkspace()}
 	if m.opts.Goto != nil {
 		cmds = append(cmds, m.startJump(*m.opts.Goto))
 	} else {
@@ -363,6 +367,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.arrive()
 		return m, m.loadThread()
+	case workspaceMsg:
+		m.project = x.project
+		return m, nil
+	case taggedMsg:
+		return m, m.onTagged(x)
 	case threadMsg:
 		if it := m.current(); it != nil && it.Conversation.ID == x.id {
 			if x.err != nil {
@@ -577,6 +586,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "l":
 			return m, m.startLink()
+		case "w":
+			return m, m.toggleWall()
 		case "C", "/":
 			it := m.current()
 			if x.String() == "C" && it == nil {
@@ -795,9 +806,9 @@ func (m *Model) View() string {
 			body = lipgloss.JoinHorizontal(lipgloss.Top, left, "  "+quiet.Render("│")+" ", right)
 		}
 	}
-	help := "r reply · l link note/task · C contact · / find · f service · Tab all · x trash · T view trash · D drafts · q close"
+	help := "r reply · w wall · l link note/task · C contact · / find · f service · Tab all · x trash · T view trash · D drafts · q close"
 	if it := m.current(); it != nil && it.Conversation.Service == "Slack" && !it.Conversation.Demo {
-		help = "r reply · t reply in thread · > open thread · m people · o open in Slack · l link · / find · Tab all · D drafts · q close"
+		help = "r reply · w wall · t reply in thread · > open thread · m people · o open in Slack · l link · / find · Tab all · D drafts · q close"
 		if m.thread.Parent != nil && m.thread.Conversation.ID == it.Conversation.ID {
 			help = "r reply in thread · < channel · m people · o open in Slack · l link · / find · Tab all · D drafts · q close"
 		}
@@ -948,6 +959,9 @@ func (m *Model) threadLines(w int, find string) ([]string, int) {
 		lines = append(lines, wrap(msg.Body, w)...)
 		for _, a := range msg.Attachments {
 			lines = append(lines, quiet.Render(cut("↳ "+a.Name+fmt.Sprintf(" (%d bytes)", a.Size), w)))
+		}
+		for _, p := range m.thread.Tags[msg.ID] {
+			lines = append(lines, quiet.Render(cut("⌂ on the "+p+" wall", w)))
 		}
 		if r, ok := m.thread.Replies[msg.ID]; ok {
 			lines = append(lines, accent.Render(cut(fmt.Sprintf("  ↳ %s in thread", plural(r.Count, "reply", "replies")), w)))

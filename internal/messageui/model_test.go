@@ -210,3 +210,32 @@ func TestMailComposerRejectsMissingOrStaleIncomingParent(t *testing.T) {
 		}
 	}
 }
+
+func TestWKeyTogglesTheWorkspaceWall(t *testing.T) {
+	m, s, _ := harness(t)
+	it := *m.current()
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	if !strings.Contains(m.status, "workspace") {
+		t.Fatalf("no workspace not explained: %q", m.status)
+	}
+	m.Update(workspaceMsg{"robot"})
+	run := func(cmd tea.Cmd) {
+		for cmd != nil {
+			msg := cmd()
+			_, cmd = m.Update(msg)
+		}
+	}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	run(cmd)
+	if tagged, _ := s.Tagged("owner", "robot", 0); len(tagged) != 1 || tagged[0].Message.ID != it.Message.ID {
+		t.Fatalf("tagged: %+v (%s)", tagged, m.status)
+	}
+	if !strings.Contains(strings.Join(func() []string { l, _ := m.threadLines(80, ""); return l }(), "\n"), "on the robot wall") {
+		t.Fatal("tag not shown in the conversation")
+	}
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	run(cmd)
+	if tagged, _ := s.Tagged("owner", "robot", 0); len(tagged) != 0 || !strings.Contains(m.status, "off the robot wall") {
+		t.Fatalf("second w did not untag: %q", m.status)
+	}
+}

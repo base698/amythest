@@ -60,6 +60,10 @@ func Open(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = openTags(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err = openSearch(db); err != nil {
 		db.Close()
 		return nil, err
@@ -362,6 +366,9 @@ func (s *Store) Thread(actor, conversation string) (Thread, error) {
 	defer s.mu.Unlock()
 	t, e := s.thread(actor, conversation)
 	if e != nil {
+		return t, e
+	}
+	if e := s.tagThread(actor, &t); e != nil {
 		return t, e
 	}
 	return t, s.annotate(actor, &t)

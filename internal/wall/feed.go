@@ -12,6 +12,7 @@ import (
 
 // Item is one entry of the feed.
 type Item struct {
+	Msg    *MessageItem // a message tagged to this project, from Messages
 	Art    apiclient.WorkArtifact
 	Kind   string // commit, pr, image, video, file or canvas
 	Title  string
@@ -34,6 +35,33 @@ func (it Item) pictureKey() string {
 		return it.Art.MediaHash
 	}
 	return ""
+}
+
+// MessageItem is a message someone put on this project's wall in Messages.
+type MessageItem struct {
+	ID, Conversation string
+	Sender, Body     string
+	Where            string    // the conversation and service
+	At               time.Time // when it was put on the wall
+}
+
+func withMessages(items []Item, msgs []MessageItem) []Item {
+	for _, x := range msgs {
+		x := x
+		title := strings.Join(strings.Fields(x.Body), " ")
+		if title == "" {
+			title = "(a file)"
+		}
+		if x.Sender != "" {
+			title = x.Sender + ": " + title
+		}
+		items = append(items, Item{
+			Art:  apiclient.WorkArtifact{ID: "message:" + x.ID, Kind: "message", Ref: x.ID, Title: title},
+			Kind: "message", Title: title, Tab: x.Where, When: x.At, Msg: &x,
+		})
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].When.After(items[j].When) })
+	return items
 }
 
 func withCanvases(items []Item, canvases []apiclient.CanvasMeta) []Item {
@@ -136,6 +164,8 @@ func (it Item) matches(filter string) bool {
 		return it.Kind == "commit" || it.Kind == "pr"
 	case "canvas":
 		return it.Kind == "canvas"
+	case "messages":
+		return it.Kind == "message"
 	}
 	return true
 }

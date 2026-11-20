@@ -205,3 +205,36 @@ func TestQueuedMessagesReportWhenTheyGoOut(t *testing.T) {
 		t.Fatalf("failure not reported:\n%s", screen(m))
 	}
 }
+
+func TestTagPutsAMessageOnTheWorkspaceWall(t *testing.T) {
+	m, s, _ := harness(t)
+	i, w := m.windowNamed(t, "demo-slack-release")
+	drain(t, m, m.show(i), 0)
+	typeLine(t, m, "/tag")
+	if !strings.Contains(screen(m), "name the wall") {
+		t.Fatalf("no workspace and no project not explained:\n%s", screen(m))
+	}
+	m.workspace = "robot"
+	first := w.msgs[0]
+	typeLine(t, m, "/tag "+w.refFor(first.ID))
+	if tagged, _ := s.Tagged("owner", "robot", 0); len(tagged) != 1 || tagged[0].Message.ID != first.ID {
+		t.Fatalf("tagged: %+v", tagged)
+	}
+	if !strings.Contains(screen(m), "⌂ on the robot wall") {
+		t.Fatalf("tag not shown:\n%s", screen(m))
+	}
+	typeLine(t, m, "/tag other project")
+	if tagged, _ := s.Tagged("owner", "other project", 0); len(tagged) != 1 {
+		t.Fatal("named project not tagged")
+	}
+	typeLine(t, m, "/untag "+w.refFor(first.ID))
+	if tagged, _ := s.Tagged("owner", "robot", 0); len(tagged) != 0 || strings.Contains(screen(m), "⌂ on the robot wall") {
+		t.Fatal("untag kept it")
+	}
+	// A reopened window shows tags from the gateway.
+	typeLine(t, m, "/close")
+	_, w = m.windowNamed(t, "demo-slack-release")
+	if len(w.tags) == 0 {
+		t.Fatal("tags not loaded with the page")
+	}
+}

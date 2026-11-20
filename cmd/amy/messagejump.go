@@ -103,6 +103,9 @@ func openMessagesAt(ref *find.MessageRef, pane string) error {
 
 // showChat runs the irssi-style client, closing its own pane on exit.
 func showChat(client *messages.Client, opts chatui.Options, pane string) error {
+	if opts.Workspace == nil {
+		opts.Workspace = currentProject
+	}
 	// Pictures are drawn as the wall draws them; AMY_WALL_IMAGES overrides.
 	out := &serialOut{File: os.Stdout}
 	var w wall.Options

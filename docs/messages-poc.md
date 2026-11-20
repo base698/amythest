@@ -241,6 +241,26 @@ amy messages trash -conversation CONVERSATION_ID
 amy messages restore -conversation CONVERSATION_ID
 ```
 
+## Messages on a project's wall
+
+A message can be put on the wall of the workspace you are in, so it shows
+among that project's commits, images and canvases:
+
+- In the chat client, `/tag [REF] [PROJECT]` tags the message (the newest here
+  unless REF is given) to this workspace's wall; `/untag` takes it off.
+- In the focus view, **w** tags the selected message (the one a jump landed
+  on, else the conversation's latest), and pressing it again takes it off.
+
+"This workspace" is the project the wall shows in this herdr workspace (its
+panes matched to Work projects, as the wall matches them); outside herdr, name
+the project. Tagged messages show `⌂ on the PROJECT wall` in both views.
+
+On the wall they are **✉** items, newest tag first; `f` cycles to a messages
+filter. **Enter** opens the message in an open Messages view, or opens Messages
+beside the wall in the Herdr App, which lands on it. Tags are kept by the
+messaging gateway (`GET/POST/DELETE /tags`), owner only; agents can neither read
+nor set them, and the work server never stores message content.
+
 ## Wall items and pasted text
 
 In `amy wall`, select a commit/image/file and press **Shift+S**. Its captured bytes

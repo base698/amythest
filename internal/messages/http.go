@@ -247,6 +247,24 @@ func (g *Gateway) route(w http.ResponseWriter, r *http.Request, actor, provider 
 		w.Header().Set("Content-Type", a.MIME)
 		_, e = w.Write(b)
 		return nil, e
+	case "GET /tags":
+		limit, e := queryLimit(r.URL.Query().Get("limit"))
+		if e != nil {
+			return nil, e
+		}
+		return s.Tagged(actor, r.URL.Query().Get("project"), limit)
+	case "POST /tags":
+		var in struct {
+			Message string `json:"message"`
+			Project string `json:"project"`
+		}
+		if e := decode(r, &in); e != nil {
+			return nil, e
+		}
+		return s.TagMessage(actor, in.Message, in.Project)
+	case "DELETE /tags":
+		q := r.URL.Query()
+		return map[string]bool{"ok": true}, s.Untag(actor, q.Get("message"), q.Get("project"))
 	case "GET /conversations":
 		return s.Conversations(actor)
 	case "GET /items":

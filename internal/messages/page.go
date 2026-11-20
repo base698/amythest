@@ -89,6 +89,9 @@ func (s *Store) ThreadPage(actor, conversation string, p Page) (Thread, error) {
 	if e != nil {
 		return t, e
 	}
+	if e := s.tagThread(actor, &t); e != nil {
+		return t, e
+	}
 	return t, s.annotate(actor, &t)
 }
 

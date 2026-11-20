@@ -49,7 +49,8 @@ type window struct {
 	scroll    int            // lines up from the bottom
 	level     int
 	highlight string
-	staged    []string // files to send with the next message (paste, Ctrl+V)
+	staged    []string            // files to send with the next message (paste, Ctrl+V)
+	tags      map[string][]string // message ID -> walls it is on
 }
 
 func newConvWindow(c messages.Conversation) *window {

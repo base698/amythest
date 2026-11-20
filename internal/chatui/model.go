@@ -31,6 +31,8 @@ type API interface {
 	Grant(context.Context, messages.Grant) error
 	Revoke(context.Context, string) error
 	Drafts(context.Context) ([]messages.Draft, error)
+	Tag(context.Context, string, string) (messages.Tag, error)
+	Untag(context.Context, string, string) error
 }
 
 type Options struct {
@@ -50,6 +52,9 @@ type Options struct {
 	DownloadDir string             // where /open and /save put files (~/Downloads)
 	Open        func(string) error // opens a saved file (the system's open)
 	PasteDir    string             // where Ctrl+V saves clipboard pictures
+	// Workspace names this workspace\'s wall (project), "" outside one; it
+	// runs once in the background.
+	Workspace func() string
 }
 
 const (
@@ -83,6 +88,7 @@ type Model struct {
 	pics      map[string]*pic   // attachment ID -> picture
 	queued    map[string]string // queued draft ID -> conversation, until delivered
 	nextImage int
+	workspace string // this workspace\'s wall, for /tag
 }
 
 type (
@@ -162,7 +168,7 @@ func New(api API, o Options) *Model {
 }
 
 func (m *Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{textinput.Blink, m.poll(), m.listen()}
+	cmds := []tea.Cmd{textinput.Blink, m.poll(), m.listen(), m.resolveWorkspace()}
 	if m.o.Goto != nil {
 		cmds = append(cmds, m.jump(*m.o.Goto))
 	}
@@ -336,6 +342,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			w.note(m.o.Now(), "-!- %s", x.text)
 		}
 		return m, m.poll()
+	case workspaceMsg:
+		m.workspace = x.project
+	case tagMsg:
+		m.onTag(x)
 	case clipMsg:
 		m.onClip(x)
 	case picMsg:
@@ -449,6 +459,12 @@ func (m *Model) onPage(x pageMsg) tea.Cmd {
 	}
 	for k, v := range x.page.Replies {
 		w.replies[k] = v
+	}
+	if w.tags == nil {
+		w.tags = map[string][]string{}
+	}
+	for k, v := range x.page.Tags {
+		w.tags[k] = v
 	}
 	w.parent = x.page.Parent
 	w.loaded = true
@@ -655,7 +671,7 @@ func (m *Model) nextActive() tea.Cmd {
 	return m.show(at)
 }
 
-var commands = []string{"/attach", "/close", "/done", "/go", "/grant", "/help", "/lastlog", "/open", "/query", "/quit", "/reply", "/revoke", "/save", "/search", "/snooze", "/thread", "/win"}
+var commands = []string{"/tag", "/untag", "/attach", "/close", "/done", "/go", "/grant", "/help", "/lastlog", "/open", "/query", "/quit", "/reply", "/revoke", "/save", "/search", "/snooze", "/thread", "/win"}
 
 // complete fills in a command, a window name after /query, or a ref.
 func (m *Model) complete() {
@@ -758,6 +774,10 @@ func (m *Model) submit(line string) tea.Cmd {
 			return m.jump(messages.Jump{Conversation: r.Conversation})
 		}
 		w.note(m.o.Now(), "-!- No thread under [%s] yet: /thread %s text starts one.", ref, ref)
+	case "tag":
+		return m.tag(w, rest, true)
+	case "untag":
+		return m.tag(w, rest, false)
 	case "attach", "file":
 		return m.attach(w, rest)
 	case "open":
@@ -810,6 +830,7 @@ func (m *Model) help() {
 		"Enter sends them with what you typed; Ctrl+X clears them.",
 		"/attach [REF] PATH... [text]  send files (Tab completes paths; up to 8, 5 MB each)",
 		"/open TAG  /save TAG [PATH]   open or save a file; TAG is its [file abc] label",
+		"/tag [REF] [PROJECT]  put a message on this workspace's wall (newest by default); /untag",
 		"/grant [30m] [files]  let agents read and send here for a while; /revoke ends it",
 		"/search WORDS       search all messages (/s); /lastlog WORDS this one (/ll)",
 		"/go N               open search result N (or type N in a search window)",

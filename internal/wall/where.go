@@ -159,6 +159,10 @@ func locateHerdr(ctx context.Context, bin, ws string, run Runner) Place {
 // another project in Amythest, so the projects of the workspace's own live
 // sessions decide; the workspace name is the fallback, matched without regard
 // to case against the projects that exist.
+// ProjectFor is the project a wall opened in place p shows, given the work
+// overview: Messages tags messages to the same name.
+func ProjectFor(p Place, o *apiclient.WorkSnapshot) string { return projectFor(p, o) }
+
 func projectFor(p Place, o *apiclient.WorkSnapshot) string {
 	if o != nil && len(p.Panes) > 0 {
 		in := map[string]bool{}
