@@ -85,7 +85,7 @@ func TestCollectCountsMessagesBySendTimeAndMarksLinks(t *testing.T) {
 	if err := c.report(&out); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"## Pull requests (3)", "acme/janus#42 Add flags [merged] merged", "## Messages (3)", "flags are live (linked)", "msg:gone ("} {
+	for _, want := range []string{"## Pull requests (3)", "acme/janus#42 Add flags [merged] merged", "## Messages (3)", "flags are live (linked)", "msg:gone (", "acme/janus#99 (gh could not read it)"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("report lacks %q:\n%s", want, out.String())
 		}
@@ -120,6 +120,14 @@ func TestMilestoneDatesAndLinkRefs(t *testing.T) {
 		k, r, _ := linkRef(in)
 		if k+" "+r != want {
 			t.Fatalf("%q: %q %q", in, k, r)
+		}
+	}
+}
+
+func TestDurationReadsInDays(t *testing.T) {
+	for d, want := range map[time.Duration]string{744 * time.Hour: "31d", 514*time.Hour + 49*time.Minute: "21d 10h", 3*time.Hour + 5*time.Minute: "3h 5m", 90 * time.Second: "2m"} {
+		if got := duration(d); got != want {
+			t.Fatalf("%v: %q, want %q", d, got, want)
 		}
 	}
 }

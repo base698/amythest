@@ -667,6 +667,9 @@ func (c Collection) report(w io.Writer) error {
 		if p.MergedAt != "" {
 			line += " merged " + clockOf(p.MergedAt)
 		}
+		if p.Error != "" && p.State == "" {
+			line += " (gh could not read it)"
+		}
 		fmt.Fprintf(w, "%s%s\n", line, viaNote(p.Via))
 	}
 	fmt.Fprintf(w, "\n## Messages (%d)\n", len(c.Messages))
@@ -725,7 +728,7 @@ func since(stamp string) string {
 	if err != nil {
 		return ""
 	}
-	return "for " + time.Since(t).Round(time.Minute).String()
+	return "for " + duration(time.Since(t))
 }
 
 func span(m apiclient.Milestone) string {
@@ -739,5 +742,20 @@ func span(m apiclient.Milestone) string {
 			end = e
 		}
 	}
-	return end.Sub(start).Round(time.Minute).String()
+	return duration(end.Sub(start))
+}
+
+// duration reads like "21d 10h" or "3h 5m".
+func duration(d time.Duration) string {
+	d = d.Round(time.Minute)
+	days, hours, mins := int(d/(24*time.Hour)), int(d%(24*time.Hour)/time.Hour), int(d%time.Hour/time.Minute)
+	switch {
+	case days > 0 && hours > 0:
+		return fmt.Sprintf("%dd %dh", days, hours)
+	case days > 0:
+		return fmt.Sprintf("%dd", days)
+	case hours > 0:
+		return fmt.Sprintf("%dh %dm", hours, mins)
+	}
+	return fmt.Sprintf("%dm", mins)
 }
