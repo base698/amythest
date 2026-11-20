@@ -25,6 +25,12 @@ type API interface {
 	Endpoint() string
 }
 
+// milestoneAPI is the part of the work API that lists milestones; walls on
+// older servers or in tests may lack it.
+type milestoneAPI interface {
+	Milestones(ctx context.Context, project string, open bool) ([]apiclient.Milestone, error)
+}
+
 // Options configure a wall.
 type Options struct {
 	// Share opens the message reply picker with a snapshot of the selected item.
@@ -128,22 +134,23 @@ type model struct {
 	pics  map[string]*pic
 	next  int // next Kitty image id
 
-	view      string // "feed", "pick", "zoom" or "diff"
-	help      bool
-	zoom      []string
-	pick      int
-	diff      []string
-	patch     []diffLine
-	diffItem  Item
-	diffTop   int
-	diffLeft  int
-	loading   bool
-	synced    time.Time
-	showing   string // media hash of an image to enlarge once it has loaded
-	flash     string
-	err       error
-	canvasErr error
-	fetching  int
+	view       string // "feed", "pick", "zoom" or "diff"
+	help       bool
+	zoom       []string
+	pick       int
+	diff       []string
+	patch      []diffLine
+	diffItem   Item
+	diffTop    int
+	diffLeft   int
+	loading    bool
+	synced     time.Time
+	showing    string // media hash of an image to enlarge once it has loaded
+	flash      string
+	err        error
+	canvasErr  error
+	milestones []apiclient.Milestone // open on this project, shown in the header
+	fetching   int
 }
 
 type (
@@ -159,6 +166,7 @@ type (
 		canvases  []apiclient.CanvasMeta
 		canvasErr error
 		messages  []MessageItem
+		open      []apiclient.Milestone
 	}
 	canvasOpenedMsg  struct{ err error }
 	messageOpenedMsg struct{ err error }
@@ -236,7 +244,11 @@ func (m *model) feedCmd(project string) tea.Cmd {
 				msgs = append(msgs, got...)
 			}
 		}
-		return feedMsg{project: project, snap: s, err: err, canvases: canvases, canvasErr: canvasErr, messages: msgs}
+		var open []apiclient.Milestone
+		if ma, ok := m.api.(milestoneAPI); ok {
+			open, _ = ma.Milestones(ctx, project, true) // a server without milestones just shows none
+		}
+		return feedMsg{project: project, snap: s, err: err, canvases: canvases, canvasErr: canvasErr, messages: msgs, open: open}
 	}
 }
 
@@ -373,6 +385,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			keep = m.items[m.cursor].Art.ID
 		}
 		m.canvasErr = msg.canvasErr
+		m.milestones = msg.open
 		m.all, m.snap = withMessages(withCanvases(buildFeed(msg.snap), msg.canvases), msg.messages), msg.snap
 		m.prunePictures()
 		m.applyFilter(keep)
@@ -1165,6 +1178,9 @@ func (m *model) View() string {
 	}
 	if m.project != "" && m.view != "diff" {
 		title += " · " + m.project
+		for _, ms := range m.milestones {
+			title += " · ◆ " + ms.Name
+		}
 	}
 	right := ""
 	switch {

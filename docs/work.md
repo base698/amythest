@@ -69,6 +69,28 @@ messages. Review is disabled for a run whose retained output does not all fit in
 view. Attention includes up to 1,000 newest unmuted pending reviews; it is not limited to the
 recent-run overview. Larger-history navigation is a remaining task.
 
+## Milestones
+
+A milestone marks a stretch of work on a project, such as getting production
+deployed. Start it when the work begins and end it when it is done; while it is
+open, everything the project produces belongs to it:
+
+```sh
+amy milestone start production deploy   # in the workspace (or -project NAME)
+amy milestone                           # what is open here
+amy milestone end                       # the only open one, or end NAME
+amy milestone collect "production deploy" -json -o deploy.json
+```
+
+`collect` gathers the milestone's window: sessions and runs that overlap it,
+artifacts and agent notes created in it, and messages put on the project's wall
+during it (from Messages, when set up here). Without `-json` it prints a
+readable report. Nothing is stamped as it arrives, so late events still land in
+the right milestone. The wall's header shows open milestones (`◆ NAME`).
+
+Milestones are kept by the work server (`/api/work/milestones`): reader tokens
+can list and collect them, starting and ending need the owner.
+
 ## HTTP and MCP
 
 Every collector request uses its bearer token; the server derives the immutable

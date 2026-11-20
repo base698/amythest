@@ -343,6 +343,7 @@ func TestAppPaneFindsOtherWallsInTheSameTab(t *testing.T) {
 }
 
 type fakeAPI struct {
+	milestones        []apiclient.Milestone
 	overview, project *apiclient.WorkSnapshot
 	media             map[string][]byte
 	asked             []string
@@ -972,4 +973,16 @@ func TestWallShowsMessagesTaggedToTheProject(t *testing.T) {
 	if opened != "c1/m1" {
 		t.Fatalf("opened %q", opened)
 	}
+}
+
+func TestWallHeaderShowsOpenMilestones(t *testing.T) {
+	api := &fakeAPI{overview: snapshot(), project: snapshot(), milestones: []apiclient.Milestone{{ID: "m1", Project: "Robot", Name: "production deploy"}}}
+	m, _ := newWall(t, api, Options{Project: "Robot", Graphics: "off"})
+	if head := strings.SplitN(m.View(), "\n", 2)[0]; !strings.Contains(head, "Robot · ◆ production deploy") {
+		t.Fatalf("header: %q", head)
+	}
+}
+
+func (f *fakeAPI) Milestones(ctx context.Context, project string, open bool) ([]apiclient.Milestone, error) {
+	return f.milestones, nil
 }

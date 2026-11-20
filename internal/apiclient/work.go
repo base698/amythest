@@ -84,6 +84,7 @@ type WorkSnapshot struct {
 	Sessions  []WorkSession  `json:"sessions"`
 	Runs      []WorkRun      `json:"runs"`
 	Artifacts []WorkArtifact `json:"artifacts"`
+	Documents []WorkDocument `json:"documents,omitempty"`
 	Slots     []WorkSlot     `json:"slots"`
 	Machines  []WorkMachine  `json:"machines"`
 }
@@ -249,4 +250,57 @@ func (c *Client) CardTitles(ctx context.Context, ids []string) (map[string]strin
 		}
 	}
 	return out, nil
+}
+
+// WorkDocument is an agent's chat summary or observation from a run.
+type WorkDocument struct {
+	Key     string `json:"key"`
+	Kind    string `json:"kind"`
+	Title   string `json:"title"`
+	Body    string `json:"body"`
+	RunID   string `json:"run_id"`
+	Created string `json:"created_at"`
+}
+
+// Milestone is a named stretch of work on a project ("production deploy"),
+// open until it is ended.
+type Milestone struct {
+	ID      string `json:"id"`
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	Started string `json:"started_at"`
+	Ended   string `json:"ended_at,omitempty"`
+}
+
+// Milestones lists milestones newest first: one project's ("" for all),
+// only open ones when open is set.
+func (c *Client) Milestones(ctx context.Context, project string, open bool) ([]Milestone, error) {
+	q := url.Values{"project": {project}}
+	if open {
+		q.Set("open", "1")
+	}
+	var out []Milestone
+	return out, c.do(ctx, http.MethodGet, "/api/work/milestones?"+q.Encode(), nil, &out)
+}
+
+// StartMilestone opens a milestone on a project (or returns the open one).
+func (c *Client) StartMilestone(ctx context.Context, project, name string) (Milestone, error) {
+	var out Milestone
+	return out, c.do(ctx, http.MethodPost, "/api/work/milestones", map[string]string{"project": project, "name": name}, &out)
+}
+
+// EndMilestone closes a milestone.
+func (c *Client) EndMilestone(ctx context.Context, id string) (Milestone, error) {
+	var out Milestone
+	return out, c.do(ctx, http.MethodPost, "/api/work/milestones/end", map[string]string{"id": id}, &out)
+}
+
+// CollectMilestone is the project's work within a milestone's window.
+func (c *Client) CollectMilestone(ctx context.Context, id string) (Milestone, *WorkSnapshot, error) {
+	var out struct {
+		Milestone Milestone    `json:"milestone"`
+		Snapshot  WorkSnapshot `json:"snapshot"`
+	}
+	err := c.do(ctx, http.MethodGet, "/api/work/milestones/collect?id="+url.QueryEscape(id), nil, &out)
+	return out.Milestone, &out.Snapshot, err
 }

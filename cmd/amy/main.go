@@ -46,6 +46,9 @@ func main() {
 		case "wall":
 			runWall(args[1:])
 			return
+		case "milestone", "milestones":
+			runMilestone(args[1:])
+			return
 		case "workspace", "board":
 			runWorkspace(args[1:])
 			return
